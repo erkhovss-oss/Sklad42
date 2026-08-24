@@ -501,6 +501,1826 @@
             <h1>Хранение</h1>
             <p>Стоимость хранения по дням, в рублях</p>
           </div>
+          <div style="display:flex;gap:8px">
+            <select class="search" id="storageClientFilter" style="width:220px">
+              <option value="">Все клиенты</option>
+            </select>
+            <button class="btn btn-ghost" onclick="recordAllStorageSnapshots().then(renderStorage)">↻ Пересчитать сейчас</button>
+          </div>
+        </div>
+        <div class="stat-row" id="storageStats"></div>
+        <div class="panel" style="padding:22px" id="storageChartWrap"></div>
+      </section>
+
+      <!-- SUPPLIES (+ receiving inside) -->
+      <section class="section" id="tab-supplies">
+        <div class="page-head">
+          <div>
+            <h1>Плановые поставки</h1>
+            <p>Плановые поступления от клиентов и приёмка товара на склад</p>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost" id="viewPlannedBtn" onclick="setSuppliesView('planned')">Плановые</button>
+            <button class="btn btn-ghost" id="viewReceivingBtn" onclick="setSuppliesView('receiving')">Приёмка</button>
+          </div>
+        </div>
+        <div id="suppliesBody">
+          <div id="supplyCreatePanel"></div>
+          <div class="panel" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+            <input class="search" id="supplySearch" placeholder="Поиск по ID, клиенту, статусу…" style="flex:1">
+            <span class="mono" id="supplyCount" style="font-size:12px;color:var(--ink-soft);white-space:nowrap"></span>
+          </div>
+          <div id="suppliesTableWrap"></div>
+        </div>
+        <div id="receivingBody"></div>
+      </section>
+
+      <!-- EMPLOYEES -->
+      <section class="section" id="tab-employees">
+        <div class="page-head">
+          <div>
+            <h1>Сотрудники</h1>
+            <p>Доступ в личный кабинет и права по разделам</p>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost" id="viewEmployeesBtn" onclick="setEmployeesView('list')">Сотрудники</button>
+            <button class="btn btn-ghost" id="viewRolesBtn" onclick="setEmployeesView('roles')">Роли и доступы</button>
+            <button class="btn btn-accent" id="newEmployeeBtn" onclick="openNewEmployeeForm()">+ Новый сотрудник</button>
+          </div>
+        </div>
+        <div id="employeesBody"></div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script>
+// ---------- SUPABASE ----------
+const SUPABASE_URL = 'https://mixsvqjlrifkcoeuuydc.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1peHN2cWpscmlma2NvZXV1eWRjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MTYyNzEsImV4cCI6MjEwMzA5MjI3MX0.qIdelCgVkSDMc20f5X1parpfx2njHB5Pe3xk3ogbCr4';
+let sb = null;
+try{
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+}catch(e){
+  console.error('Supabase init failed', e);
+}
+
+// ---------- STATE ----------
+let inventory = []; // загружается из базы (loadInventory)
+
+let clients = []; // загружается из базы (loadClients)
+let storageHistoryRows = []; // загружается из базы (loadStorageHistory)
+let clientCounter = 3;
+let activeClientId = null;
+let showingNewClientForm = false;
+
+let receivingLog = []; // загружается из базы (loadReceivingLog)
+let currentReceivingMode = 'scan';
+let editingSku = null;
+let writeOffSku = null;
+let writeOffLog = []; // загружается из базы (loadWriteOffLog)
+let historySku = null;
+let movementLog = []; // загружается из базы (loadMovementLog)
+let deletingSku = null;
+
+let supplies = [];
+let supplyCounter = 0;
+let draftSupplyItems = [];
+let draftSupplyClientId = '';
+let draftSupplyFileName = '';
+let currentSuppliesView = 'planned';
+let activeSupplyId = null;
+
+let roles = []; // загружается из базы (loadRoles)
+let employees = []; // загружается из базы (loadEmployees)
+let employeeCounter = 3;
+let currentEmployeesView = 'list';
+let showingNewEmployeeForm = false;
+let editingRoleId = null;
+
+// ---------- HELPERS ----------
+function toast(msg){
+  const wrap = document.getElementById('toastWrap');
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  wrap.appendChild(el);
+  setTimeout(()=>{ el.style.transition='opacity .3s'; el.style.opacity='0'; setTimeout(()=>el.remove(),300); }, 2600);
+}
+
+function switchTab(tab){
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.tab===tab));
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  if(tab==='inventory') renderInventory();
+  if(tab==='clients') renderClients();
+  if(tab==='storage') renderStorage();
+  if(tab==='supplies') renderSuppliesTab();
+  if(tab==='employees') renderEmployeesTab();
+  try{ localStorage.setItem('sklad42_active_tab', tab); }catch(e){}
+}
+document.querySelectorAll('.nav-item').forEach(n=>{
+  n.addEventListener('click', ()=>switchTab(n.dataset.tab));
+});
+
+// ---------- INVENTORY ----------
+function renderInventory(){
+  const q = (document.getElementById('invSearch').value || '').toLowerCase();
+  const clientFilter = document.getElementById('invClientFilter').value;
+  const body = document.getElementById('invBody');
+
+  const clients = [...new Set(inventory.map(i=>i.client).filter(Boolean))].sort();
+  const filterSelect = document.getElementById('invClientFilter');
+  const prevValue = filterSelect.value;
+  filterSelect.innerHTML = `<option value="">Все клиенты</option>` + clients.map(c=>`<option value="${c}">${c}</option>`).join('');
+  filterSelect.value = clients.includes(prevValue) ? prevValue : '';
+
+  const rows = inventory.filter(i =>
+    (i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q)) &&
+    (!clientFilter || i.client === clientFilter)
+  );
+
+  body.innerHTML = rows.map(i => {
+    if(editingSku === i.sku){
+      return `<tr>
+        <td class="mono" style="vertical-align:top;padding-top:14px">${i.sku}</td>
+        <td colspan="5">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input class="search" style="flex:1;min-width:160px" id="editName-${i.sku}" value="${i.name}" placeholder="Название">
+            <input class="search mono" style="width:150px" id="editBarcode-${i.sku}" value="${i.barcode||''}" placeholder="Штрихкод">
+            <input class="search" style="width:170px" id="editClient-${i.sku}" value="${i.client||''}" placeholder="Клиент">
+            <input class="search" type="number" min="0" style="width:80px" id="editQty-${i.sku}" value="${i.qty}" placeholder="Кол-во">
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+            <span style="font-size:12px;color:var(--ink-soft);white-space:nowrap">Габариты, см:</span>
+            <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsL-${i.sku}" value="${i.dims&&i.dims.l||''}" placeholder="Д">
+            <span style="color:var(--ink-faint)">×</span>
+            <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsW-${i.sku}" value="${i.dims&&i.dims.w||''}" placeholder="Ш">
+            <span style="color:var(--ink-faint)">×</span>
+            <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsH-${i.sku}" value="${i.dims&&i.dims.h||''}" placeholder="В">
+            <span style="font-size:11px;color:var(--ink-faint)">нужно для расчёта хранения</span>
+            <button class="btn btn-primary" style="margin-left:auto;padding:5px 10px" onclick="saveEdit('${i.sku}')">Сохранить</button>
+            <button class="btn btn-ghost" style="padding:5px 10px" onclick="cancelEdit()">Отмена</button>
+          </div>
+        </td>
+      </tr>`;
+    }
+    if(writeOffSku === i.sku){
+      return `<tr>
+        <td class="mono">${i.sku}</td>
+        <td colspan="4">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <span style="font-size:13px;color:var(--ink-soft)">Списать</span>
+            <input class="search" type="number" min="1" max="${i.qty}" value="1" id="woQty-${i.sku}" style="width:70px;padding:6px 10px">
+            <span style="font-size:13px;color:var(--ink-soft)">шт из ${i.qty}, причина:</span>
+            <select class="search" id="woReason-${i.sku}" style="width:170px;padding:6px 10px">
+              <option>Брак</option>
+              <option>Порча при хранении</option>
+              <option>Утеря</option>
+              <option>Пересортица</option>
+              <option>Другое</option>
+            </select>
+          </div>
+        </td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn btn-accent" style="padding:5px 10px" onclick="confirmWriteOff('${i.sku}')">Списать</button>
+          <button class="btn btn-ghost" style="padding:5px 10px" onclick="cancelWriteOff()">Отмена</button>
+        </td>
+      </tr>`;
+    }
+    if(deletingSku === i.sku){
+      return `<tr>
+        <td class="mono">${i.sku}</td>
+        <td colspan="5">
+          <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+            <span style="font-size:13px;color:var(--warn)">Удалить «${i.name}» из остатков без возможности восстановить?</span>
+            <div style="white-space:nowrap">
+              <button class="btn btn-accent" style="padding:5px 10px" onclick="confirmDelete('${i.sku}')">Да, удалить</button>
+              <button class="btn btn-ghost" style="padding:5px 10px" onclick="cancelDelete()">Отмена</button>
+            </div>
+          </div>
+        </td>
+      </tr>`;
+    }
+    let rowsHtml = `<tr>
+      <td class="mono">${i.sku}</td>
+      <td>${i.name}</td>
+      <td class="mono">${i.barcode||'—'}</td>
+      <td>${i.client||'—'}</td>
+      <td class="${i.qty<=3?'qty-low':''}">${i.qty} шт${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn btn-ghost" style="padding:5px 10px" onclick="adjustQty('${i.sku}',-1)">−</button>
+        <button class="btn btn-ghost" style="padding:5px 10px" onclick="adjustQty('${i.sku}',1)">+</button>
+        <button class="btn btn-ghost" style="padding:5px 10px" onclick="startEdit('${i.sku}')">Изменить</button>
+        <button class="btn btn-ghost" style="padding:5px 10px" onclick="openHistory('${i.sku}')">История</button>
+        <button class="btn btn-ghost" style="padding:5px 10px;color:var(--warn)" onclick="openWriteOff('${i.sku}')">Списать</button>
+        <button class="btn btn-ghost" style="padding:5px 10px;color:var(--warn)" onclick="openDelete('${i.sku}')">Удалить</button>
+      </td>
+    </tr>`;
+    if(historySku === i.sku){
+      const moves = movementLog.filter(m=>m.sku===i.sku).slice().reverse().slice(0,20);
+      rowsHtml += `<tr>
+        <td colspan="6" style="padding:0">
+          <div style="padding:14px 18px;background:var(--bg);border-top:1px solid var(--line)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <div class="eyebrow">История движения — ${i.sku}</div>
+              <button class="btn btn-ghost" style="padding:4px 10px" onclick="closeHistory()">Свернуть ▲</button>
+            </div>
+            ${moves.length ? moves.map(m=>`
+              <div class="pick-row" style="background:transparent">
+                <div><div class="sku-name" style="font-size:13px">${m.type}</div><div class="sku-code mono">${m.time}</div></div>
+                <div class="qty-need" style="color:${m.delta>=0?'var(--ok)':'var(--warn)'};font-weight:600">${m.delta>=0?'+':''}${m.delta} шт</div>
+              </div>
+            `).join('') : `<p style="font-size:13px;color:var(--ink-faint);margin:0">Движений пока не было</p>`}
+          </div>
+        </td>
+      </tr>`;
+    }
+    return rowsHtml;
+  }).join('') || `<tr><td colspan="6" class="empty">Ничего не найдено</td></tr>`;
+
+  const statSource = clientFilter ? rows : inventory;
+  const total = statSource.reduce((s,i)=>s+i.qty,0);
+  const low = statSource.filter(i=>i.qty<=3).length;
+  document.getElementById('invStats').innerHTML = `
+    <div class="stat"><div class="val">${statSource.length}</div><div class="lbl">Позиций на складе</div></div>
+    <div class="stat"><div class="val">${total}</div><div class="lbl">Единиц товара всего</div></div>
+    <div class="stat"><div class="val" style="color:${low?'var(--warn)':'var(--ink)'}">${low}</div><div class="lbl">Позиций заканчивается</div></div>
+  `;
+
+  document.getElementById('writeoffLogWrap').innerHTML = writeOffLog.length ? `
+    <div class="panel">
+      <div style="padding:14px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center">
+        <h3 style="font-size:14px;color:var(--ink-soft)">Списания за смену</h3>
+        <div class="mono" style="font-size:12px;color:var(--ink-soft)">−${writeOffLog.reduce((s,r)=>s+r.qty,0)} шт · ${writeOffLog.length} операций</div>
+      </div>
+      ${writeOffLog.slice().reverse().map(r=>`
+        <div class="pick-row">
+          <div>
+            <div class="sku-name">${r.name}</div>
+            <div class="sku-code mono">${r.sku} · ${r.time} · ${r.reason}</div>
+          </div>
+          <div class="qty-need" style="color:var(--warn);font-weight:600">−${r.qty} шт</div>
+        </div>
+      `).join('')}
+    </div>
+  ` : '';
+}
+function adjustQty(sku, delta){
+  const item = inventory.find(i=>i.sku===sku);
+  if(!item) return;
+  const actualDelta = Math.max(0, item.qty + delta) - item.qty;
+  item.qty = Math.max(0, item.qty + delta);
+  if(actualDelta!==0) logMovement(sku, item.name, actualDelta, 'Ручная корректировка');
+  renderInventory();
+  const cl = clients.find(c=>c.name===item.client);
+  if(cl && actualDelta!==0) recordStorageSnapshot(cl);
+}
+function startEdit(sku){ editingSku = sku; writeOffSku = null; deletingSku = null; historySku = null; renderInventory(); }
+function cancelEdit(){ editingSku = null; renderInventory(); }
+function saveEdit(sku){
+  const item = inventory.find(i=>i.sku===sku);
+  const name = document.getElementById('editName-'+sku).value.trim();
+  const barcode = document.getElementById('editBarcode-'+sku).value.trim();
+  const client = document.getElementById('editClient-'+sku).value.trim();
+  const qty = Math.max(0, parseInt(document.getElementById('editQty-'+sku).value) || 0);
+  const l = parseFloat(document.getElementById('editDimsL-'+sku).value) || 0;
+  const w = parseFloat(document.getElementById('editDimsW-'+sku).value) || 0;
+  const h = parseFloat(document.getElementById('editDimsH-'+sku).value) || 0;
+  if(!name){ toast('Название не может быть пустым'); return; }
+  const qtyDelta = qty - item.qty;
+  item.name = name;
+  item.barcode = barcode || '';
+  item.client = client || '—';
+  item.qty = qty;
+  item.dims = (l>0 && w>0 && h>0) ? {l, w, h, weight:(item.dims&&item.dims.weight)||0} : null;
+  syncInventoryRow(sku);
+  if(qtyDelta!==0) logMovement(sku, name, qtyDelta, 'Изменение карточки');
+  editingSku = null;
+  toast('Изменения сохранены');
+  renderInventory();
+  const cl = clients.find(c=>c.name===item.client);
+  if(cl) recordStorageSnapshot(cl);
+}
+function openWriteOff(sku){ writeOffSku = sku; editingSku = null; deletingSku = null; historySku = null; renderInventory(); }
+function cancelWriteOff(){ writeOffSku = null; renderInventory(); }
+function confirmWriteOff(sku){
+  const item = inventory.find(i=>i.sku===sku);
+  const qty = Math.max(1, parseInt(document.getElementById('woQty-'+sku).value) || 1);
+  const reason = document.getElementById('woReason-'+sku).value;
+  if(qty > item.qty){ toast('Нельзя списать больше, чем есть на складе'); return; }
+  item.qty -= qty;
+  logWriteOff(item.sku, item.name, qty, reason);
+  toast(`Списано: ${item.name} −${qty} шт (${reason})`);
+  writeOffSku = null;
+  renderInventory();
+  const cl = clients.find(c=>c.name===item.client);
+  if(cl) recordStorageSnapshot(cl);
+}
+function logWriteOff(sku, name, qty, reason){
+  const now = new Date();
+  const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  writeOffLog.push({sku, name, qty, reason, time});
+  sb.from('write_off_log').insert({sku, name, qty, reason}).then(({error})=>{ if(error) console.error(error); });
+  logMovement(sku, name, -qty, 'Списание: '+reason);
+}
+function openDelete(sku){ deletingSku = sku; editingSku = null; writeOffSku = null; historySku = null; renderInventory(); }
+function cancelDelete(){ deletingSku = null; renderInventory(); }
+function confirmDelete(sku){
+  const item = inventory.find(i=>i.sku===sku);
+  inventory = inventory.filter(i=>i.sku!==sku);
+  deletingSku = null;
+  if(item){
+    sb.from('movement_log').insert({sku, name:item.name, delta:-item.qty, type:'Удаление карточки'}).then(({error})=>{ if(error) console.error(error); });
+  }
+  sb.from('inventory').delete().eq('sku', sku).then(({error})=>{ if(error){ console.error(error); toast('Не удалось удалить в базе'); } });
+  toast(`Карточка «${item ? item.name : sku}» удалена`);
+  renderInventory();
+  const cl = item && clients.find(c=>c.name===item.client);
+  if(cl) recordStorageSnapshot(cl);
+}
+function openHistory(sku){ historySku = historySku===sku ? null : sku; editingSku=null; writeOffSku=null; deletingSku=null; renderInventory(); }
+function closeHistory(){ historySku = null; renderInventory(); }
+function logMovement(sku, name, delta, type){
+  const now = new Date();
+  const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  movementLog.push({sku, name, delta, type, time});
+  sb.from('movement_log').insert({sku, name, delta, type}).then(({error})=>{ if(error) console.error(error); });
+  syncInventoryRow(sku);
+}
+async function syncInventoryRow(sku){
+  const item = inventory.find(i=>i.sku===sku);
+  if(!item) return;
+  const { error } = await sb.from('inventory').upsert({
+    sku: item.sku, name: item.name, qty: item.qty,
+    client_name: item.client || null,
+    vendor_code: item.vendorCode || null,
+    barcode: item.barcode || null,
+    dims: item.dims || null
+  });
+  if(error){ console.error(error); toast('Не удалось сохранить изменения в базе'); }
+}
+document.getElementById('invSearch').addEventListener('input', renderInventory);
+document.getElementById('invClientFilter').addEventListener('change', renderInventory);
+
+// ---------- RECEIVING ----------
+function renderReceiving(mode){
+  currentReceivingMode = mode || currentReceivingMode || 'scan';
+  const body = document.getElementById('receivingBody');
+  const totalQty = receivingLog.reduce((s,r)=>s+r.qty,0);
+
+  body.innerHTML = `
+    <div class="assembly-layout">
+      <div class="scan-box">
+        <div class="eyebrow">Режим приёмки</div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn ${currentReceivingMode==='scan'?'btn-accent':'btn-ghost'}" style="flex:1;justify-content:center;${currentReceivingMode!=='scan'?'color:#fff;border-color:#3A362D':''}" onclick="renderReceiving('scan')">Сканером</button>
+          <button class="btn ${currentReceivingMode==='manual'?'btn-accent':'btn-ghost'}" style="flex:1;justify-content:center;${currentReceivingMode!=='manual'?'color:#fff;border-color:#3A362D':''}" onclick="renderReceiving('manual')">Вручную</button>
+        </div>
+
+        ${currentReceivingMode==='scan' ? `
+          <div class="eyebrow" style="margin-top:16px">Штрихкод</div>
+          <input class="scan-input" id="receiveScanInput" placeholder="Артикул… (напр. TK-1001)" style="margin-top:6px">
+          <div class="scan-hint">Сканируйте коробку — товар сразу прибавится на складе. Незнакомый артикул — система спросит название.</div>
+        ` : `
+          <div class="eyebrow" style="margin-top:16px">Товар</div>
+          <select id="receiveSelect" class="scan-input" style="margin-top:6px">
+            ${inventory.map(i=>`<option value="${i.sku}">${i.sku} — ${i.name}</option>`).join('')}
+            <option value="__new__">+ Новый товар (создать)</option>
+          </select>
+          <div id="newSkuFields" style="display:none;margin-top:10px">
+            <input class="scan-input" id="newSkuCode" placeholder="Новый артикул, напр. TK-5001">
+            <input class="scan-input" id="newSkuName" placeholder="Название товара" style="margin-top:8px">
+          </div>
+          <div class="eyebrow" style="margin-top:14px">Количество</div>
+          <input class="scan-input" id="receiveQty" type="number" min="1" value="1" style="margin-top:6px">
+          <button class="btn btn-accent" style="margin-top:14px;width:100%;justify-content:center" onclick="submitManualReceipt()">Принять на склад</button>
+        `}
+      </div>
+
+      <div class="panel" style="flex:1">
+        <div style="padding:16px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center">
+          <h3 style="font-size:15px;color:var(--ink-soft)">Принято за смену</h3>
+          <div class="mono" style="font-size:13px;color:var(--ink-soft)">+${totalQty} шт · ${receivingLog.length} операций</div>
+        </div>
+        ${receivingLog.length ? receivingLog.slice().reverse().map(r=>`
+          <div class="pick-row">
+            <div>
+              <div class="sku-name">${r.name}</div>
+              <div class="sku-code mono">${r.sku} · ${r.time}</div>
+            </div>
+            <div class="qty-need" style="color:var(--ok);font-weight:600">+${r.qty} шт</div>
+          </div>
+        `).join('') : `<div class="empty" style="padding:40px"><span class="eyebrow">Пока пусто</span>Первая приёмка появится здесь</div>`}
+      </div>
+    </div>
+  `;
+
+  if(currentReceivingMode==='scan'){
+    const input = document.getElementById('receiveScanInput');
+    input.focus();
+    input.addEventListener('keydown', (e)=>{
+      if(e.key!=='Enter') return;
+      const code = input.value.trim().toUpperCase();
+      input.value='';
+      if(!code) return;
+      const item = inventory.find(i=>i.sku===code);
+      if(item){
+        item.qty += 1;
+        logReceipt(item.sku, item.name, 1);
+        toast(`+1 шт: ${item.name}`);
+        renderReceiving('scan');
+      } else {
+        const name = prompt('Новый артикул '+code+'. Название товара:');
+        if(name){
+          inventory.push({sku:code, name, qty:1});
+          logReceipt(code, name, 1);
+          toast(`Новый товар добавлен: ${name}`);
+        }
+        renderReceiving('scan');
+      }
+    });
+  } else {
+    const select = document.getElementById('receiveSelect');
+    select.addEventListener('change', ()=>{
+      document.getElementById('newSkuFields').style.display = select.value==='__new__' ? 'block' : 'none';
+    });
+  }
+}
+
+function submitManualReceipt(){
+  const select = document.getElementById('receiveSelect');
+  const qty = Math.max(1, parseInt(document.getElementById('receiveQty').value)||1);
+  if(select.value==='__new__'){
+    const code = document.getElementById('newSkuCode').value.trim().toUpperCase();
+    const name = document.getElementById('newSkuName').value.trim();
+    if(!code || !name){ toast('Укажите артикул и название нового товара'); return; }
+    if(inventory.find(i=>i.sku===code)){ toast('Такой артикул уже существует'); return; }
+    inventory.push({sku:code, name, qty});
+    logReceipt(code, name, qty);
+    toast(`Новый товар «${name}» принят: ${qty} шт`);
+  } else {
+    const item = inventory.find(i=>i.sku===select.value);
+    item.qty += qty;
+    logReceipt(item.sku, item.name, qty);
+    toast(`Принято: ${item.name} +${qty} шт`);
+  }
+  renderReceiving('manual');
+}
+
+function logReceipt(sku, name, qty){
+  const now = new Date();
+  const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  receivingLog.push({sku, name, qty, time});
+  sb.from('receiving_log').insert({sku, name, qty}).then(({error})=>{ if(error) console.error(error); });
+  logMovement(sku, name, qty, 'Приёмка');
+}
+
+// ---------- CLIENTS ----------
+function openNewClientForm(){ showingNewClientForm = true; renderClients(); }
+function closeNewClientForm(){ showingNewClientForm = false; renderClients(); }
+function createClient(){
+  const name = document.getElementById('newClientName').value.trim();
+  const contact = document.getElementById('newClientContact').value.trim();
+  if(!name){ toast('Укажите название клиента'); return; }
+  const id = 'CL-' + Date.now();
+  const finalContact = contact || '—';
+  const newClient = {id, name, contact: finalContact, wbKey:'', wbConnected:false, wbProducts:[], storageLiters:0, pricePerLiter:3};
+  clients.push(newClient);
+  showingNewClientForm = false;
+  toast('Клиент добавлен');
+  renderClients();
+  sb.from('clients').insert({id, name, contact: finalContact, storage_liters:0, price_per_liter:3}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить клиента в базе'); }
+  });
+}
+function openClient(id){ activeClientId = id; renderClients(); }
+function backToClients(){ activeClientId = null; renderClients(); }
+function computeClientStorageLiters(clientName){
+  return inventory
+    .filter(i => i.client === clientName && i.dims && i.dims.l && i.dims.w && i.dims.h)
+    .reduce((sum, i) => sum + (i.dims.l * i.dims.w * i.dims.h / 1000) * i.qty, 0);
+}
+function saveTariff(clientId){
+  const c = clients.find(x=>x.id===clientId);
+  const price = Math.max(0, parseFloat(document.getElementById('tariffPrice-'+clientId).value) || 0);
+  c.pricePerLiter = price;
+  toast('Цена хранения сохранена');
+  renderClients();
+  sb.from('clients').update({price_per_liter: price}).eq('id', clientId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить цену в базе'); }
+  });
+  recordStorageSnapshot(c);
+}
+async function upsertStorageSnapshot(clientId, day, liters, cost){
+  const { data: existing, error: selErr } = await sb.from('storage_history').select('id').eq('client_id', clientId).eq('day', day).limit(1);
+  if(selErr){ console.error(selErr); return; }
+  if(existing && existing.length){
+    const { error } = await sb.from('storage_history').update({liters, cost}).eq('id', existing[0].id);
+    if(error) console.error(error);
+  } else {
+    const { error } = await sb.from('storage_history').insert({client_id: clientId, day, liters, cost});
+    if(error) console.error(error);
+  }
+}
+async function recordStorageSnapshot(client){
+  const today = new Date().toISOString().slice(0,10);
+  const liters = computeClientStorageLiters(client.name);
+  const cost = liters * client.pricePerLiter;
+  await upsertStorageSnapshot(client.id, today, liters, cost);
+  await loadStorageHistory();
+  if(document.getElementById('tab-storage').classList.contains('active')) renderStorage();
+}
+async function recordAllStorageSnapshots(){
+  const today = new Date().toISOString().slice(0,10);
+  for(const c of clients){
+    const liters = computeClientStorageLiters(c.name);
+    const cost = liters * c.pricePerLiter;
+    await upsertStorageSnapshot(c.id, today, liters, cost);
+  }
+  await loadStorageHistory();
+}
+
+
+
+function connectWb(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  const key = document.getElementById('wbKeyInput-'+clientId).value.trim();
+  if(!key){ toast('Вставьте API-ключ'); return; }
+  client.wbKey = key;
+  client.wbConnected = true;
+  toast('Ключ сохранён (демо-режим)');
+  renderClients();
+  sb.from('clients').update({wb_key:key, wb_connected:true}).eq('id', clientId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить ключ в базе'); }
+  });
+}
+function disconnectWb(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  client.wbConnected = false;
+  client.wbKey = '';
+  client.wbProducts = [];
+  toast('Ключ удалён');
+  renderClients();
+  sb.from('clients').update({wb_key:'', wb_connected:false}).eq('id', clientId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
+  });
+}
+function generateWbMockProducts(){
+  const pool = [
+    {name:'Кроссовки Runmax, 42',        vendorCode:'RM-042-BLK',    l:32, w:20, h:12, weight:0.9},
+    {name:'Худи oversize, серый, M',      vendorCode:'HD-OVS-GRY-M', l:35, w:28, h:5,  weight:0.5},
+    {name:'Термокружка 400мл',            vendorCode:'TK-CUP-400',   l:10, w:10, h:20, weight:0.4},
+    {name:'Рюкзак трансформер',           vendorCode:'BAG-TRANS-01', l:45, w:30, h:20, weight:1.2},
+    {name:'Носки хлопковые (3 пары)',     vendorCode:'SOCK-COT-3P',  l:15, w:10, h:3,  weight:0.15},
+    {name:'Куртка ветровка, синяя, L',    vendorCode:'JCK-WND-BLU-L',l:40, w:30, h:8,  weight:0.6},
+    {name:'Кепка бейсболка',              vendorCode:'CAP-BSB-01',   l:25, w:20, h:12, weight:0.2},
+    {name:'Шапка вязаная',                vendorCode:'HAT-KNT-01',   l:20, w:15, h:8,  weight:0.15},
+  ];
+  const n = 3 + Math.floor(Math.random()*3);
+  return [...pool].sort(()=>Math.random()-0.5).slice(0,n).map(p=>({
+    nmId: 178000000 + Math.floor(Math.random()*900000),
+    name: p.name,
+    vendorCode: p.vendorCode,
+    barcode: '2' + Math.floor(1000000000 + Math.random()*8999999999),
+    price: 500 + Math.floor(Math.random()*4000),
+    dims: {l:p.l, w:p.w, h:p.h, weight:p.weight}
+  }));
+}
+function loadWbProducts(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  toast('Запрашиваем карточки товаров у Wildberries…');
+  setTimeout(()=>{
+    client.wbProducts = generateWbMockProducts();
+    toast(`Получено карточек: ${client.wbProducts.length}`);
+    renderClients();
+  }, 600);
+}
+function addWbProductToInventory(clientId, nmId){
+  const client = clients.find(c=>c.id===clientId);
+  const p = client.wbProducts.find(x=>x.nmId===nmId);
+  if(!p) return;
+  const sku = 'WB-' + p.nmId;
+  if(inventory.find(i=>i.sku===sku)){ toast('Уже добавлено в остатки'); return; }
+  inventory.push({
+    sku, name:p.name, qty:0, client:client.name,
+    vendorCode:p.vendorCode, barcode:p.barcode, dims:p.dims
+  });
+  syncInventoryRow(sku);
+  toast(`«${p.name}» добавлен в остатки (0 шт — укажите количество)`);
+  renderClients();
+}
+
+function renderClients(){
+  const body = document.getElementById('clientsBody');
+  document.getElementById('newClientBtn').style.display = activeClientId ? 'none' : 'inline-flex';
+  if(activeClientId) renderClientDetail(body);
+  else renderClientsList(body);
+}
+function renderClientsList(body){
+  const formHtml = showingNewClientForm ? `
+    <div class="panel" style="padding:18px;margin-bottom:18px">
+      <div class="eyebrow" style="margin-bottom:10px">Новый клиент</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <input class="search" id="newClientName" placeholder="Название / ФИО, напр. ИП Иванов И.И." style="flex:1;min-width:220px">
+        <input class="search" id="newClientContact" placeholder="Телефон или email" style="width:220px">
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn btn-primary" onclick="createClient()">Создать</button>
+        <button class="btn btn-ghost" onclick="closeNewClientForm()">Отмена</button>
+      </div>
+    </div>
+  ` : '';
+
+  const cardsHtml = clients.length ? clients.map(c=>{
+    const skus = inventory.filter(i=>i.client===c.name);
+    const totalQty = skus.reduce((s,i)=>s+i.qty,0);
+    const liters = computeClientStorageLiters(c.name);
+    return `
+      <div class="order-card" onclick="openClient('${c.id}')">
+        <div>
+          <div class="oid">${c.name}</div>
+          <div class="meta">${c.contact} · ${skus.length} товарных позиций · ${totalQty} шт · ${liters.toFixed(1)} л хранения · ${(liters*c.pricePerLiter).toFixed(0)} ₽/сутки</div>
+        </div>
+        ${c.wbConnected
+          ? `<span class="chip wb" style="margin-left:auto"><span class="dot"></span>WB подключён</span>`
+          : `<span style="margin-left:auto;font-size:12px;color:var(--ink-faint)">WB не подключён</span>`}
+      </div>
+    `;
+  }).join('') : `<div class="panel empty"><span class="eyebrow">Пока нет клиентов</span>Нажмите «+ Новый клиент», чтобы добавить первого</div>`;
+
+  body.innerHTML = formHtml + cardsHtml;
+}
+function renderClientDetail(body){
+  const c = clients.find(x=>x.id===activeClientId);
+  if(!c){ activeClientId = null; renderClientsList(body); return; }
+  const skus = inventory.filter(i=>i.client===c.name);
+  const totalQty = skus.reduce((s,i)=>s+i.qty,0);
+  const withoutDims = skus.filter(i=>i.qty>0 && !(i.dims && i.dims.l && i.dims.w && i.dims.h)).length;
+  const liters = computeClientStorageLiters(c.name);
+
+  body.innerHTML = `
+    <button class="btn btn-ghost" style="margin-bottom:16px" onclick="backToClients()">← Все клиенты</button>
+
+    <div class="panel" style="padding:20px;margin-bottom:18px">
+      <div class="eyebrow">Клиент</div>
+      <h2 style="font-size:24px;margin-top:4px">${c.name}</h2>
+      <div style="color:var(--ink-soft);font-size:13px;margin-top:4px">${c.contact}</div>
+      <div class="stat-row" style="margin-top:16px">
+        <div class="stat"><div class="val">${skus.length}</div><div class="lbl">Позиций на складе</div></div>
+        <div class="stat"><div class="val">${totalQty}</div><div class="lbl">Единиц товара</div></div>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:20px;margin-bottom:18px">
+      <div class="eyebrow" style="margin-bottom:4px">Тарификация</div>
+      <h3 style="font-size:18px;margin-bottom:12px">Хранение на складе</h3>
+      <p style="font-size:12px;color:var(--ink-soft);margin:0 0 14px 0">Объём считается автоматически: габариты каждого товара × его количество в остатках. Указать габариты можно в «Остатки» → «Изменить».</p>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Объём сейчас, л</div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;padding:10px 0">${liters.toFixed(2)} л</div>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Цена за литр, ₽/сутки</div>
+          <input class="search mono" id="tariffPrice-${c.id}" type="number" min="0" step="0.1" value="${c.pricePerLiter}" style="width:150px">
+        </div>
+        <button class="btn btn-primary" onclick="saveTariff('${c.id}')">Сохранить цену</button>
+      </div>
+      ${withoutDims ? `<p style="font-size:12px;color:var(--warn);margin-top:12px">⚠ У ${withoutDims} товарных позиций не указаны габариты — они не учтены в объёме выше</p>` : ''}
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:baseline;gap:8px">
+        <span style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700">${(liters*c.pricePerLiter).toFixed(2)} ₽</span>
+        <span style="font-size:12px;color:var(--ink-soft)">в сутки, при текущем объёме</span>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:20px;margin-bottom:18px">
+      <div class="eyebrow" style="margin-bottom:4px">Интеграция · Wildberries</div>
+      <h3 style="font-size:18px;margin-bottom:12px">API-ключ продавца</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input class="search mono" id="wbKeyInput-${c.id}" type="password" placeholder="Вставьте API-ключ из личного кабинета WB" style="flex:1;min-width:260px" value="${c.wbKey}">
+        <button class="btn btn-primary" onclick="connectWb('${c.id}')">Сохранить ключ</button>
+        ${c.wbConnected ? `<button class="btn btn-ghost" onclick="disconnectWb('${c.id}')">Отключить</button>` : ''}
+      </div>
+      <div style="margin-top:10px">
+        ${c.wbConnected
+          ? `<span class="chip wb"><span class="dot"></span>Ключ сохранён</span>`
+          : `<span style="font-size:12px;color:var(--ink-faint)">Ключ ещё не добавлен</span>`}
+      </div>
+      <p style="font-size:12px;color:var(--ink-faint);margin-top:12px;line-height:1.6">
+        Ключ выдаётся в личном кабинете продавца WB → «Настройки» → «Доступ к API». В этом прототипе ключ хранится только в памяти страницы и никуда не отправляется, а карточки ниже — демонстрационные. Настоящая загрузка потребует сервер, который будет обращаться к API Wildberries по этому ключу: напрямую из браузера так делать нельзя — ключ окажется виден любому, кто откроет код страницы.
+      </p>
+
+      ${c.wbConnected ? `
+        <div class="barcode-rule"></div>
+        <button class="btn btn-accent" onclick="loadWbProducts('${c.id}')">↓ Загрузить карточки товаров</button>
+        <div style="margin-top:14px">
+          ${c.wbProducts.length ? c.wbProducts.map(p=>{
+            const already = inventory.some(i=>i.sku==='WB-'+p.nmId);
+            return `
+            <div class="pick-row" style="align-items:flex-start">
+              <div class="wb-thumb"><span>📦</span></div>
+              <div>
+                <div class="sku-name">${p.name}</div>
+                <div class="sku-code mono">Артикул: ${p.vendorCode} · nmID ${p.nmId}</div>
+                <div class="sku-code mono">ШК ${p.barcode}</div>
+                <div class="sku-code mono">${p.dims.l}×${p.dims.w}×${p.dims.h} см · ${p.dims.weight} кг</div>
+              </div>
+              <div class="qty-need">${p.price} ₽</div>
+              <button class="btn ${already?'btn-ghost':'btn-primary'}" style="margin-left:12px" ${already?'disabled':''} onclick="addWbProductToInventory('${c.id}',${p.nmId})">${already?'Уже в остатках':'+ В остатки'}</button>
+            </div>
+          `;}).join('') : `<p style="font-size:13px;color:var(--ink-faint)">Карточки ещё не загружены</p>`}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+// ---------- STORAGE ----------
+function renderStorage(){
+  const filterSelect = document.getElementById('storageClientFilter');
+  const prevValue = filterSelect.value;
+  filterSelect.innerHTML = `<option value="">Все клиенты</option>` + clients.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+  filterSelect.value = clients.some(c=>c.id===prevValue) ? prevValue : '';
+
+  let data, title;
+  const byDay = {};
+  const rows = filterSelect.value ? storageHistoryRows.filter(r=>r.client_id===filterSelect.value) : storageHistoryRows;
+  rows.forEach(r=>{
+    byDay[r.day] = (byDay[r.day]||0) + Number(r.cost);
+  });
+  data = Object.keys(byDay).sort().map(day=>({date: new Date(day+'T00:00:00'), cost: byDay[day]}));
+  title = filterSelect.value ? (clients.find(x=>x.id===filterSelect.value)?.name || '') : 'Все клиенты';
+
+  const todayCost = data.length ? data[data.length-1].cost : 0;
+  const avgCost = data.length ? data.reduce((s,d)=>s+d.cost,0)/data.length : 0;
+  const totalCost = data.reduce((s,d)=>s+d.cost,0);
+
+  document.getElementById('storageStats').innerHTML = `
+    <div class="stat"><div class="val">${todayCost.toFixed(0)} ₽</div><div class="lbl">Сегодня</div></div>
+    <div class="stat"><div class="val">${avgCost.toFixed(0)} ₽</div><div class="lbl">В среднем за день</div></div>
+    <div class="stat"><div class="val">${totalCost.toFixed(0)} ₽</div><div class="lbl">Итого за ${data.length} дн.</div></div>
+  `;
+
+  document.getElementById('storageChartWrap').innerHTML = `
+    <div class="eyebrow" style="margin-bottom:14px">${title} · ${data.length} ${data.length===1?'день':'дней'} записей</div>
+    ${data.length ? renderStorageChartSvg(data) : `<p style="color:var(--ink-faint);font-size:13px">Пока нет ни одной реальной записи — она появится, как только сохраните тариф клиента или зайдёте на эту вкладку</p>`}
+    ${data.length && data.length<7 ? `<p style="color:var(--ink-faint);font-size:12px;margin-top:10px">Это настоящие записи, а не пример — график будет расти по одной точке в день, по мере использования системы</p>` : ''}
+  `;
+}
+function renderStorageChartSvg(data){
+  const w = 780, h = 260, pad = {left:56, right:16, top:16, bottom:28};
+  const innerW = w - pad.left - pad.right;
+  const innerH = h - pad.top - pad.bottom;
+  const maxVal = Math.max(...data.map(d=>d.cost), 1) * 1.15;
+  const stepX = data.length>1 ? innerW/(data.length-1) : 0;
+
+  const points = data.map((d,i)=>({
+    x: pad.left + i*stepX,
+    y: pad.top + innerH - (d.cost/maxVal)*innerH,
+    ...d
+  }));
+  const linePath = points.map((p,i)=>(i===0?'M':'L')+p.x.toFixed(1)+','+p.y.toFixed(1)).join(' ');
+  const areaPath = linePath + ` L${points[points.length-1].x.toFixed(1)},${(pad.top+innerH).toFixed(1)} L${points[0].x.toFixed(1)},${(pad.top+innerH).toFixed(1)} Z`;
+
+  let gridHtml = '';
+  const ticks = 4;
+  for(let t=0;t<=ticks;t++){
+    const val = maxVal - (maxVal/ticks)*t;
+    const y = pad.top + (innerH/ticks)*t;
+    gridHtml += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w-pad.right}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`;
+    gridHtml += `<text x="${pad.left-8}" y="${(y+4).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--ink-faint)">${Math.round(val)}</text>`;
+  }
+
+  let xLabelsHtml = '';
+  const labelEvery = Math.max(1, Math.ceil(data.length/6));
+  points.forEach((p,i)=>{
+    if(i % labelEvery === 0 || i===points.length-1){
+      const label = p.date.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
+      xLabelsHtml += `<text x="${p.x.toFixed(1)}" y="${h-8}" text-anchor="middle" font-size="10" fill="var(--ink-faint)">${label}</text>`;
+    }
+  });
+
+  const dotsHtml = points.map(p=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="var(--accent)"><title>${p.date.toLocaleDateString('ru-RU')} — ${Math.round(p.cost)} ₽</title></circle>`).join('');
+
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;font-family:'IBM Plex Mono',monospace">
+    ${gridHtml}
+    <path d="${areaPath}" fill="var(--accent)" opacity="0.08"/>
+    <path d="${linePath}" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+    ${dotsHtml}
+    ${xLabelsHtml}
+  </svg>`;
+}
+document.getElementById('storageClientFilter').addEventListener('change', renderStorage);
+
+// ---------- SUPPLIES (planned deliveries) ----------
+function renderSuppliesTab(){
+  document.getElementById('viewPlannedBtn').className = 'btn ' + (currentSuppliesView==='planned' ? 'btn-accent' : 'btn-ghost');
+  document.getElementById('viewReceivingBtn').className = 'btn ' + (currentSuppliesView==='receiving' ? 'btn-accent' : 'btn-ghost');
+  document.getElementById('suppliesBody').style.display = currentSuppliesView==='planned' ? 'block' : 'none';
+  document.getElementById('receivingBody').style.display = currentSuppliesView==='receiving' ? 'block' : 'none';
+  if(currentSuppliesView==='planned') renderSupplies();
+  else renderReceiving();
+}
+function setSuppliesView(view){
+  currentSuppliesView = view;
+  renderSuppliesTab();
+}
+function downloadSupplyTemplate(){
+  const data = [
+    ['Артикул','ШК','Кол-во'],
+    ['TK-1001','2460001112223',10],
+    ['TK-2005','2460004445556',25]
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:14},{wch:16},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Поставка');
+  XLSX.writeFile(wb, 'shablon_postavka.xlsx');
+}
+function setDraftSupplyClient(id){
+  draftSupplyClientId = id;
+  renderSuppliesCreatePanel();
+}
+function handleSupplyExcelUpload(inputEl){
+  const file = inputEl.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      const workbook = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+      const items = [];
+      let unmatched = 0;
+      for(let i=1;i<rows.length;i++){ // строка 0 — заголовок
+        const row = rows[i];
+        if(!row || !row.length) continue;
+        const sku = String(row[0]||'').trim().toUpperCase();
+        const qty = parseInt(row[2]) || 0;
+        if(!sku || qty<=0) continue;
+        const invItem = inventory.find(x=>x.sku===sku);
+        const name = invItem ? invItem.name : sku;
+        if(!invItem) unmatched++;
+        const existing = items.find(d=>d.sku===sku);
+        if(existing) existing.qty += qty;
+        else items.push({sku, name, qty});
+      }
+      if(items.length===0){
+        toast('В файле не найдено строк с артикулом и количеством');
+        inputEl.value = '';
+        return;
+      }
+      draftSupplyItems = items;
+      draftSupplyFileName = file.name;
+      toast(`Файл прочитан: ${items.length} SKU${unmatched?`, ${unmatched} не найдены в остатках`:''}`);
+      renderSuppliesCreatePanel();
+    }catch(err){
+      toast('Не удалось прочитать файл — проверьте формат Excel');
+    }
+    inputEl.value = '';
+  };
+  reader.readAsArrayBuffer(file);
+}
+function createSupply(){
+  const client = clients.find(c=>c.id===draftSupplyClientId);
+  if(!client){ toast('Выберите клиента склада / ИП'); return; }
+  if(draftSupplyItems.length===0){ toast('Загрузите Excel-файл с позициями поставки'); return; }
+  const id = 'ПС-' + Date.now();
+  const createdAt = new Date();
+  const items = draftSupplyItems.map(d=>({...d, receivedQty:0}));
+  supplies.unshift({
+    id, clientId: client.id, clientName: client.name,
+    createdAt, items, status: 'planned'
+  });
+  draftSupplyItems = [];
+  draftSupplyClientId = '';
+  draftSupplyFileName = '';
+  toast(`Поставка создана — статус «Едет»`);
+  renderSupplies();
+  sb.from('supplies').insert({id, client_id: client.id, client_name: client.name, status:'planned', created_at: createdAt.toISOString()}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить поставку в базе'); return; }
+    const rows = items.map(it=>({supply_id:id, sku:it.sku, name:it.name, qty:it.qty, received_qty:0}));
+    sb.from('supply_items').insert(rows).then(({error})=>{
+      if(error){ console.error(error); toast('Не удалось сохранить позиции поставки в базе'); }
+    });
+  });
+}
+function toggleSupplyReceiving(id){
+  const supply = supplies.find(s=>s.id===id);
+  if(!supply || supply.status==='received') return;
+  activeSupplyId = activeSupplyId===id ? null : id;
+  renderSuppliesTableWrap();
+}
+function checkSupplyAutoComplete(supply){
+  const total = supply.items.reduce((a,i)=>a+i.qty,0);
+  const received = supply.items.reduce((a,i)=>a+i.receivedQty,0);
+  if(received>=total && supply.status!=='received'){
+    supply.status = 'received';
+    sb.from('supplies').update({status:'received'}).eq('id', supply.id).then(({error})=>{ if(error) console.error(error); });
+  }
+}
+function adjustSupplyItem(supplyId, sku, delta){
+  const supply = supplies.find(s=>s.id===supplyId);
+  const item = supply.items.find(i=>i.sku===sku);
+  const newVal = Math.max(0, Math.min(item.qty, item.receivedQty + delta));
+  const diff = newVal - item.receivedQty;
+  if(diff===0) return;
+  item.receivedQty = newVal;
+  let inv = inventory.find(i=>i.sku===sku);
+  if(!inv){
+    inv = {sku, name: item.name, qty:0, client: supply.clientName};
+    inventory.push(inv);
+  }
+  inv.qty += diff;
+  if(diff>0) logReceipt(sku, item.name, diff);
+  else logMovement(sku, item.name, diff, 'Корректировка приёмки поставки');
+  checkSupplyAutoComplete(supply);
+  renderSuppliesTableWrap();
+  sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supplyId).eq('sku', sku).then(({error})=>{
+    if(error) console.error(error);
+  });
+}
+function finishSupplyReceiving(id){
+  const supply = supplies.find(s=>s.id===id);
+  const total = supply.items.reduce((a,i)=>a+i.qty,0);
+  const received = supply.items.reduce((a,i)=>a+i.receivedQty,0);
+  if(received < total){
+    toast(`Приёмка приостановлена: принято ${received} из ${total} шт`);
+  } else {
+    supply.status = 'received';
+    toast(`Поставка ${id} полностью принята`);
+    sb.from('supplies').update({status:'received'}).eq('id', id).then(({error})=>{ if(error) console.error(error); });
+  }
+  activeSupplyId = null;
+  renderSuppliesTableWrap();
+}
+function renderSupplyReceivingPanel(s){
+  return `
+    <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
+      <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
+        <div style="width:260px;flex-shrink:0">
+          <div class="eyebrow">Сканер приёмки</div>
+          <input class="search" id="supplyScanInput-${s.id}" placeholder="Артикул…" style="margin-top:8px;width:100%">
+          <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Сканируйте товар из этой поставки — он сразу зачислится на склад. Ниже можно скорректировать количество вручную.</p>
+          <button class="btn btn-primary" style="margin-top:12px;width:100%;justify-content:center" onclick="finishSupplyReceiving('${s.id}')">Завершить приёмку</button>
+        </div>
+        <div class="panel" style="flex:1;min-width:280px">
+          ${s.items.map(it=>{
+            const done = it.receivedQty >= it.qty;
+            return `<div class="pick-row ${done?'done':''}">
+              <div><div class="sku-name">${it.name}</div><div class="sku-code mono">${it.sku}</div></div>
+              <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+                <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',-1)">−</button>
+                <div class="qty-need" style="min-width:56px;text-align:center">${it.receivedQty}/${it.qty}</div>
+                <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',1)">+</button>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+function formatSupplyDate(d){
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const hh = String(d.getHours()).padStart(2,'0');
+  const mi = String(d.getMinutes()).padStart(2,'0');
+  return `${dd}.${mm}.${d.getFullYear()} ${hh}:${mi}`;
+}
+function supplyStatusInfo(s){
+  const totalQty = s.items.reduce((a,i)=>a+i.qty,0);
+  const totalReceived = s.items.reduce((a,i)=>a+i.receivedQty,0);
+  let label, cls;
+  if(s.status==='received'){ label='Принята'; cls='shipped'; }
+  else if(totalReceived>0){ label='В работе'; cls='assembling'; }
+  else { label='Едет'; cls='planned'; }
+  return {totalQty, totalReceived, label, cls};
+}
+function renderSupplies(){
+  renderSuppliesCreatePanel();
+  renderSuppliesTableWrap();
+}
+function renderSuppliesCreatePanel(){
+  const panel = document.getElementById('supplyCreatePanel');
+  const canCreate = draftSupplyClientId && draftSupplyItems.length>0;
+  const fileLabel = draftSupplyFileName
+    ? `${draftSupplyFileName} — ${draftSupplyItems.length} SKU · ${draftSupplyItems.reduce((s,d)=>s+d.qty,0)} шт`
+    : 'Файл не выбран';
+
+  panel.innerHTML = `
+    <div class="panel" style="padding:20px;margin-bottom:16px">
+      <h3 style="font-size:18px;margin-bottom:4px">Создать плановую поставку</h3>
+      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px 0">Скачайте шаблон Excel (артикул, ШК, количество), выберите клиента и загрузите — поставка появится в приёмке со статусом «Едет».</p>
+
+      <div class="eyebrow" style="margin-bottom:6px">Клиент склада / ИП</div>
+      <select class="search" id="supplyClientSelect" style="width:100%;max-width:360px;margin-bottom:16px" onchange="setDraftSupplyClient(this.value)">
+        <option value="">— выберите —</option>
+        ${clients.map(c=>`<option value="${c.id}" ${draftSupplyClientId===c.id?'selected':''}>${c.name}</option>`).join('')}
+      </select>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-ghost" onclick="downloadSupplyTemplate()">Скачать шаблон</button>
+        <label class="btn btn-ghost" style="cursor:pointer;margin:0">
+          Выбрать Excel
+          <input type="file" accept=".xlsx,.xls" style="display:none" onchange="handleSupplyExcelUpload(this)">
+        </label>
+        <button class="btn ${canCreate?'btn-accent':'btn-ghost'}" ${canCreate?'':'disabled'} onclick="createSupply()">Создать поставку</button>
+      </div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-top:10px">${fileLabel}</div>
+    </div>
+  `;
+}
+function renderSuppliesTableWrap(){
+  const q = (document.getElementById('supplySearch').value || '').toLowerCase();
+  const filtered = supplies.filter(s=>{
+    if(!q) return true;
+    const info = supplyStatusInfo(s);
+    return s.id.toLowerCase().includes(q) || (s.clientName||'').toLowerCase().includes(q) || info.label.toLowerCase().includes(q);
+  });
+  document.getElementById('supplyCount').textContent = `${filtered.length} из ${supplies.length}`;
+
+  const wrap = document.getElementById('suppliesTableWrap');
+  if(!supplies.length){
+    wrap.innerHTML = `<div class="panel empty"><span class="eyebrow">Пока нет поставок</span>Выберите клиента и загрузите Excel выше, чтобы создать первую</div>`;
+    return;
+  }
+  if(!filtered.length){
+    wrap.innerHTML = `<div class="panel empty">Ничего не найдено по запросу «${q}»</div>`;
+    return;
+  }
+
+  wrap.innerHTML = `
+    <div class="panel">
+      <table>
+        <thead><tr>
+          <th>ID</th><th>Поставщик / ИП</th><th>Статус</th><th>Расхождения</th><th>Кол-во</th><th>SKU</th><th>Создана</th>
+        </tr></thead>
+        <tbody>
+          ${filtered.map(s=>{
+            const info = supplyStatusInfo(s);
+            const isOpen = activeSupplyId===s.id;
+            const hasDiscrepancy = s.status==='received' && info.totalReceived!==info.totalQty;
+            const discHtml = hasDiscrepancy
+              ? `<span class="status overdue">Есть расхождения</span>`
+              : `<span style="color:var(--ink-faint);font-size:12px">—</span>`;
+            const qtyHtml = hasDiscrepancy
+              ? `<strong>${info.totalReceived} / ${info.totalQty}</strong>`
+              : `${info.totalQty}`;
+            let rowsHtml = `
+              <tr style="cursor:${s.status!=='received'?'pointer':'default'};${hasDiscrepancy?'background:var(--warn-bg)':''}" onclick="toggleSupplyReceiving('${s.id}')">
+                <td class="mono">${s.id}</td>
+                <td>${s.clientName}</td>
+                <td><span class="status ${info.cls}">${info.label}</span></td>
+                <td>${discHtml}</td>
+                <td>${qtyHtml}</td>
+                <td>${s.items.length}</td>
+                <td class="mono" style="font-size:12px">${formatSupplyDate(s.createdAt)}</td>
+              </tr>
+            `;
+            if(isOpen && s.status!=='received'){
+              rowsHtml += `<tr><td colspan="7" style="padding:0">${renderSupplyReceivingPanel(s)}</td></tr>`;
+            }
+            return rowsHtml;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  if(activeSupplyId){
+    const supply = supplies.find(s=>s.id===activeSupplyId);
+    const input = document.getElementById('supplyScanInput-'+activeSupplyId);
+    if(supply && input){
+      input.focus();
+      input.addEventListener('keydown', (e)=>{
+        if(e.key!=='Enter') return;
+        const code = input.value.trim().toUpperCase();
+        input.value='';
+        if(!code) return;
+        const item = supply.items.find(i=>i.sku===code);
+        if(!item){ toast('Этот артикул не входит в данную поставку'); return; }
+        if(item.receivedQty >= item.qty){ toast('Эта позиция уже полностью принята'); return; }
+        item.receivedQty++;
+        let inv = inventory.find(i=>i.sku===code);
+        if(!inv){
+          inv = {sku:code, name: item.name, qty:0, client: supply.clientName};
+          inventory.push(inv);
+        }
+        inv.qty++;
+        logReceipt(code, item.name, 1);
+        checkSupplyAutoComplete(supply);
+        renderSuppliesTableWrap();
+        sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', code).then(({error})=>{
+          if(error) console.error(error);
+        });
+      });
+    }
+  }
+}
+document.getElementById('supplySearch').addEventListener('input', renderSuppliesTableWrap);
+
+
+// ---------- EMPLOYEES & ROLES ----------
+function setEmployeesView(view){ currentEmployeesView = view; renderEmployeesTab(); }
+function openNewEmployeeForm(){ showingNewEmployeeForm = true; renderEmployeesTab(); }
+function closeNewEmployeeForm(){ showingNewEmployeeForm = false; renderEmployeesTab(); }
+function createEmployee(){
+  const name = document.getElementById('newEmpName').value.trim();
+  const login = document.getElementById('newEmpLogin').value.trim();
+  const pin = document.getElementById('newEmpPin').value.trim() || '1234';
+  const roleId = document.getElementById('newEmpRole').value;
+  if(!name || !login){ toast('Укажите имя и логин'); return; }
+  const id = 'EMP-' + Date.now();
+  employees.push({id, name, login, pin, roleId, active:true});
+  showingNewEmployeeForm = false;
+  toast('Сотрудник добавлен');
+  renderEmployeesTab();
+  sb.from('employees').insert({id, name, login, pin, role_id: roleId, active:true}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить сотрудника в базе (возможно, такой логин уже есть)'); }
+  });
+}
+function toggleEmployeeActive(id){
+  const emp = employees.find(e=>e.id===id);
+  emp.active = !emp.active;
+  renderEmployeesTab();
+  sb.from('employees').update({active: emp.active}).eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
+  });
+}
+function togglePermission(roleId, key){
+  const role = roles.find(r=>r.id===roleId);
+  role.permissions[key] = !role.permissions[key];
+  renderEmployeesTab();
+  sb.from('roles').update({permissions: role.permissions}).eq('id', roleId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить права в базе'); }
+  });
+}
+function renderEmployeesTab(){
+  document.getElementById('viewEmployeesBtn').className = 'btn ' + (currentEmployeesView==='list' ? 'btn-accent' : 'btn-ghost');
+  document.getElementById('viewRolesBtn').className = 'btn ' + (currentEmployeesView==='roles' ? 'btn-accent' : 'btn-ghost');
+  document.getElementById('newEmployeeBtn').style.display = currentEmployeesView==='list' ? 'inline-flex' : 'none';
+  const body = document.getElementById('employeesBody');
+
+  if(currentEmployeesView==='roles'){
+    const permLabels = [['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['employees','Сотрудники']];
+    body.innerHTML = roles.map(r=>`
+      <div class="panel" style="padding:18px;margin-bottom:12px">
+        <div class="oid" style="margin-bottom:10px">${r.name}</div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap">
+          ${permLabels.map(([key,label])=>`
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+              <input type="checkbox" ${r.permissions[key]?'checked':''} onchange="togglePermission('${r.id}','${key}')">
+              ${label}
+            </label>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+    return;
+  }
+
+  const formHtml = showingNewEmployeeForm ? `
+    <div class="panel" style="padding:18px;margin-bottom:18px">
+      <div class="eyebrow" style="margin-bottom:10px">Новый сотрудник</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <input class="search" id="newEmpName" placeholder="ФИО" style="flex:1;min-width:180px">
+        <input class="search" id="newEmpLogin" placeholder="Логин" style="width:150px">
+        <input class="search" id="newEmpPin" placeholder="PIN (по умолч. 1234)" style="width:170px">
+        <select class="search" id="newEmpRole" style="width:200px">
+          ${roles.map(r=>`<option value="${r.id}">${r.name}</option>`).join('')}
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="createEmployee()">Создать</button>
+      <button class="btn btn-ghost" onclick="closeNewEmployeeForm()">Отмена</button>
+    </div>
+  ` : '';
+
+  const listHtml = `
+    <div class="panel">
+      <table>
+        <thead><tr><th>Сотрудник</th><th>Логин</th><th>Роль</th><th>Статус</th><th></th></tr></thead>
+        <tbody>
+          ${employees.map(e=>{
+            const role = roles.find(r=>r.id===e.roleId);
+            return `<tr>
+              <td>${e.name}</td>
+              <td class="mono">${e.login}</td>
+              <td>${role?role.name:'—'}</td>
+              <td>${e.active ? '<span class="status assembled">Активен</span>' : '<span class="status shipped">Отключён</span>'}</td>
+              <td style="text-align:right">
+                <button class="btn btn-ghost" style="padding:5px 10px" onclick="toggleEmployeeActive('${e.id}')">${e.active?'Отключить':'Включить'}</button>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  body.innerHTML = formHtml + listHtml;
+}
+
+// ---------- LOAD FROM SUPABASE ----------
+function formatLogTime(iso){
+  const d = new Date(iso);
+  return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
+}
+async function loadRoles(){
+  const { data, error } = await sb.from('roles').select('*').order('id');
+  if(error){ console.error(error); return; }
+  roles = data.map(r=>({id:r.id, name:r.name, permissions:r.permissions||{}}));
+}
+async function loadEmployees(){
+  const { data, error } = await sb.from('employees').select('*').order('id');
+  if(error){ console.error(error); return; }
+  employees = data.map(e=>({id:e.id, name:e.name, login:e.login, pin:e.pin, roleId:e.role_id, active:e.active}));
+}
+async function loadInventory(){
+  const { data, error } = await sb.from('inventory').select('*').order('sku');
+  if(error){ console.error(error); return; }
+  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims}));
+}
+async function loadMovementLog(){
+  const { data, error } = await sb.from('movement_log').select('*').order('created_at',{ascending:true}).limit(500);
+  if(error){ console.error(error); return; }
+  movementLog = data.map(m=>({sku:m.sku, name:m.name, delta:m.delta, type:m.type, time: formatLogTime(m.created_at)}));
+}
+async function loadWriteOffLog(){
+  const { data, error } = await sb.from('write_off_log').select('*').order('created_at',{ascending:true}).limit(200);
+  if(error){ console.error(error); return; }
+  writeOffLog = data.map(w=>({sku:w.sku, name:w.name, qty:w.qty, reason:w.reason, time: formatLogTime(w.created_at)}));
+}
+async function loadReceivingLog(){
+  const { data, error } = await sb.from('receiving_log').select('*').order('created_at',{ascending:true}).limit(200);
+  if(error){ console.error(error); return; }
+  receivingLog = data.map(r=>({sku:r.sku, name:r.name, qty:r.qty, time: formatLogTime(r.created_at)}));
+}
+async function loadClients(){
+  const { data, error } = await sb.from('clients').select('*').order('name');
+  if(error){ console.error(error); return; }
+  clients = data.map(c=>({
+    id:c.id, name:c.name, contact:c.contact||'—', wbKey:c.wb_key||'', wbConnected:c.wb_connected||false,
+    wbProducts:[], storageLiters:c.storage_liters||0, pricePerLiter:c.price_per_liter||0
+  }));
+}
+async function loadStorageHistory(){
+  const { data, error } = await sb.from('storage_history').select('*').order('day',{ascending:true});
+  if(error){ console.error(error); return; }
+  storageHistoryRows = data;
+}
+async function loadSupplies(){
+  const { data: supplyRows, error: err1 } = await sb.from('supplies').select('*').order('created_at',{ascending:false});
+  if(err1){ console.error(err1); return; }
+  const { data: itemRows, error: err2 } = await sb.from('supply_items').select('*');
+  if(err2){ console.error(err2); return; }
+  supplies = supplyRows.map(s=>({
+    id: s.id,
+    clientId: s.client_id,
+    clientName: s.client_name,
+    status: s.status,
+    createdAt: new Date(s.created_at),
+    items: itemRows.filter(it=>it.supply_id===s.id).map(it=>({sku:it.sku, name:it.name, qty:it.qty, receivedQty:it.received_qty}))
+  }));
+}
+
+// ---------- INIT ----------
+async function initApp(){
+  if(!sb){
+    toast('Не удалось загрузить библиотеку базы данных. Проверьте интернет и обновите страницу (F5)');
+    return;
+  }
+  try{
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies()]);
+  }catch(err){
+    console.error(err);
+  }
+  if(!inventory.length && !employees.length){
+    toast('Не удалось подключиться к базе данных — проверьте, что SQL-схема выполнена');
+  }
+  renderInventory();
+  await loadStorageHistory();
+  recordAllStorageSnapshots().then(()=>{
+    if(document.getElementById('tab-storage').classList.contains('active')) renderStorage();
+  });
+  let savedTab = null;
+  try{ savedTab = localStorage.getItem('sklad42_active_tab'); }catch(e){}
+  const validTabs = ['inventory','clients','storage','supplies','employees'];
+  if(savedTab && validTabs.includes(savedTab) && savedTab!=='inventory'){
+    switchTab(savedTab);
+  }
+}
+initApp();
+</script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>СКЛАД/42 — прототип</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F0EEE6;
+    --panel:#FFFFFF;
+    --ink:#1C1B19;
+    --ink-soft:#6B665C;
+    --ink-faint:#A39C8C;
+    --accent:#FF5B1F;
+    --accent-ink:#FFFFFF;
+    --ok:#2F7D4F;
+    --ok-bg:#E7F2EA;
+    --warn:#B5471B;
+    --warn-bg:#FBE9E1;
+    --line:#DCD6C6;
+    --wb:#7A1FA8;
+    --wb-bg:#F1E4F7;
+    --oz:#005BFF;
+    --oz-bg:#E3ECFF;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  .eyebrow{
+    font-family:'Barlow Condensed',sans-serif;
+    text-transform:uppercase;
+    letter-spacing:0.08em;
+    font-weight:600;
+    color:var(--ink-soft);
+    font-size:12px;
+  }
+  h1,h2,h3{
+    font-family:'Barlow Condensed',sans-serif;
+    text-transform:uppercase;
+    letter-spacing:0.01em;
+    margin:0;
+    font-weight:700;
+  }
+
+  .app{display:flex;min-height:100vh;}
+
+  /* Sidebar */
+  .sidebar{
+    width:212px;
+    flex-shrink:0;
+    background:var(--ink);
+    color:#EDE9DD;
+    display:flex;
+    flex-direction:column;
+    padding:20px 14px;
+  }
+  .logo{
+    display:flex;
+    align-items:baseline;
+    gap:6px;
+    padding:6px 10px 22px 10px;
+  }
+  .logo b{
+    font-family:'Barlow Condensed',sans-serif;
+    font-size:22px;
+    font-weight:700;
+    letter-spacing:0.02em;
+  }
+  .logo span{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    color:var(--accent);
+  }
+  .nav-group-label{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:0.1em;
+    color:#68625A;
+    padding:8px 12px 4px 12px;
+  }
+  .nav-item{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:11px 12px;
+    border-radius:8px;
+    font-family:'Barlow Condensed',sans-serif;
+    font-size:16px;
+    font-weight:600;
+    letter-spacing:0.02em;
+    text-transform:uppercase;
+    color:#C9C3B4;
+    cursor:pointer;
+    border:1px solid transparent;
+    position:relative;
+  }
+  .nav-item .num{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    color:#68625A;
+    width:16px;
+    text-transform:none;
+  }
+  .nav-item:hover{color:#fff;}
+  .nav-item.active{
+    background:#28251F;
+    color:#fff;
+    border-color:#3A362D;
+  }
+  .nav-item.active .num{color:var(--accent);}
+  .nav-item .badge{
+    margin-left:auto;
+    background:var(--accent);
+    color:#fff;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:10px;
+    padding:1px 6px;
+    border-radius:20px;
+  }
+  .sidebar-foot{
+    margin-top:auto;
+    padding:10px;
+    font-size:11px;
+    color:#68625A;
+    font-family:'IBM Plex Mono',monospace;
+    border-top:1px solid #2C2922;
+    padding-top:14px;
+  }
+
+  /* Main */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;}
+  .topbar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:16px 28px;
+    border-bottom:1px solid var(--line);
+    background:var(--panel);
+  }
+  .cabinets{display:flex;gap:8px;}
+  .chip{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    padding:6px 12px;
+    border-radius:20px;
+    font-size:12px;
+    font-weight:600;
+  }
+  .chip .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);}
+  .chip.wb{background:var(--wb-bg);color:var(--wb);}
+  .chip.oz{background:var(--oz-bg);color:var(--oz);}
+
+  .content{padding:26px 28px 60px 28px;flex:1;}
+  .section{display:none;}
+  .section.active{display:block;}
+
+  .page-head{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    margin-bottom:20px;
+  }
+  .page-head h1{font-size:30px;}
+  .page-head p{margin:4px 0 0 0;color:var(--ink-soft);font-size:14px;}
+
+  .btn{
+    font-family:'Inter',sans-serif;
+    font-weight:600;
+    font-size:13px;
+    border:none;
+    border-radius:8px;
+    padding:10px 16px;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+  }
+  .btn-primary{background:var(--ink);color:#fff;}
+  .btn-primary:hover{background:#333029;}
+  .btn-accent{background:var(--accent);color:#fff;}
+  .btn-accent:hover{background:#E24E14;}
+  .btn-ghost{background:transparent;color:var(--ink-soft);border:1px solid var(--line);}
+  .btn-ghost:hover{border-color:var(--ink-soft);color:var(--ink);}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+
+  .stat-row{display:flex;gap:14px;margin-bottom:22px;}
+  .stat{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:14px 18px;
+    flex:1;
+  }
+  .stat .val{font-family:'Barlow Condensed',sans-serif;font-size:28px;font-weight:700;}
+  .stat .lbl{font-size:12px;color:var(--ink-soft);margin-top:2px;}
+
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:14px;
+    overflow:hidden;
+  }
+
+  .barcode-rule{
+    height:14px;
+    background-image:repeating-linear-gradient(90deg, var(--ink) 0px, var(--ink) 1px, transparent 1px, transparent 3px, var(--ink) 3px, var(--ink) 5px, transparent 5px, transparent 8px);
+    opacity:0.55;
+    margin:20px 0;
+    border-radius:2px;
+  }
+
+  table{width:100%;border-collapse:collapse;}
+  th{
+    text-align:left;
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:0.06em;
+    color:var(--ink-faint);
+    font-weight:600;
+    padding:12px 18px;
+    border-bottom:1px solid var(--line);
+  }
+  td{
+    padding:13px 18px;
+    border-bottom:1px solid var(--line);
+    font-size:14px;
+  }
+  tr:last-child td{border-bottom:none;}
+  .qty-low{color:var(--warn);font-weight:700;}
+  .search{
+    padding:9px 14px;
+    border:1px solid var(--line);
+    border-radius:8px;
+    font-size:13px;
+    width:260px;
+    font-family:'Inter',sans-serif;
+  }
+  .search:focus{outline:2px solid var(--ink);outline-offset:1px;}
+
+  .stepper-num{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    color:var(--accent);
+    letter-spacing:0.05em;
+  }
+
+  .order-card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:16px 18px;
+    margin-bottom:10px;
+    display:flex;
+    align-items:center;
+    gap:16px;
+    cursor:pointer;
+  }
+  .order-card:hover{border-color:var(--ink-soft);}
+  .order-card .oid{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:14px;}
+  .order-card .meta{color:var(--ink-soft);font-size:12px;margin-top:2px;}
+  .status{
+    font-size:11px;
+    font-weight:700;
+    text-transform:uppercase;
+    letter-spacing:0.04em;
+    padding:4px 10px;
+    border-radius:20px;
+    margin-left:auto;
+  }
+  .status.new{background:var(--oz-bg);color:var(--oz);}
+  .status.assembling{background:#FBEFDD;color:#A06A00;}
+  .status.assembled{background:var(--ok-bg);color:var(--ok);}
+  .status.printed{background:#EFEAFB;color:#5B3FBF;}
+  .status.overdue{background:var(--warn-bg);color:var(--warn);}
+  .status.planned{background:var(--oz-bg);color:var(--oz);}
+  .status.shipped{background:#EDEBE5;color:var(--ink-soft);}
+
+  .empty{
+    text-align:center;
+    padding:60px 20px;
+    color:var(--ink-faint);
+  }
+  .empty .eyebrow{display:block;margin-bottom:8px;}
+
+  /* assembly */
+  .assembly-layout{display:flex;gap:20px;align-items:flex-start;}
+  .scan-box{
+    background:var(--ink);
+    border-radius:14px;
+    padding:22px;
+    width:340px;
+    flex-shrink:0;
+    color:#fff;
+  }
+  .scan-box .eyebrow{color:#9C9686;}
+  .scan-input{
+    width:100%;
+    margin-top:12px;
+    padding:13px 14px;
+    border-radius:8px;
+    border:2px solid #3A362D;
+    background:#28251F;
+    color:#fff;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:15px;
+  }
+  .scan-input:focus{outline:none;border-color:var(--accent);}
+  .scan-hint{font-size:11px;color:#8A8478;margin-top:8px;line-height:1.5;}
+  .progress-track{height:6px;background:#3A362D;border-radius:4px;margin-top:18px;overflow:hidden;}
+  .progress-fill{height:100%;background:var(--accent);transition:width .35s ease;}
+
+  .pick-row{
+    display:flex;
+    align-items:center;
+    gap:14px;
+    padding:14px 18px;
+    border-bottom:1px solid var(--line);
+    position:relative;
+    overflow:hidden;
+  }
+  .pick-row:last-child{border-bottom:none;}
+  .pick-row .sku-name{font-weight:600;font-size:14px;}
+  .pick-row .sku-code{font-size:12px;color:var(--ink-soft);}
+  .pick-row .qty-need{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink-soft);}
+  .pick-row.done{background:var(--ok-bg);}
+  .pick-row.done .sku-name{color:var(--ok);}
+  .wb-thumb{
+    width:44px;height:44px;flex-shrink:0;
+    background:var(--bg);
+    border:1px solid var(--line);
+    border-radius:8px;
+    display:flex;align-items:center;justify-content:center;
+    font-size:18px;
+    opacity:0.6;
+  }
+  .stamp{
+    position:absolute;
+    right:18px;
+    top:50%;
+    transform:translateY(-50%) rotate(-8deg);
+    border:2px solid var(--ok);
+    color:var(--ok);
+    font-family:'Barlow Condensed',sans-serif;
+    font-weight:700;
+    font-size:12px;
+    letter-spacing:0.08em;
+    padding:2px 10px;
+    border-radius:4px;
+    opacity:0;
+    animation:stamp-in .32s ease forwards;
+  }
+  @keyframes stamp-in{
+    0%{opacity:0;transform:translateY(-50%) rotate(-8deg) scale(1.7);}
+    100%{opacity:1;transform:translateY(-50%) rotate(-8deg) scale(1);}
+  }
+
+  /* print */
+  .label-preview{
+    width:340px;
+    background:#fff;
+    border:2px solid var(--ink);
+    border-radius:6px;
+    padding:18px;
+    font-family:'IBM Plex Mono',monospace;
+  }
+  .label-preview .lp-top{display:flex;justify-content:space-between;font-size:11px;color:var(--ink-soft);}
+  .label-preview .lp-oid{font-size:20px;font-weight:600;margin:10px 0 4px 0;}
+  .label-preview .lp-bars{
+    height:46px;
+    margin:14px 0 8px 0;
+    background-image:repeating-linear-gradient(90deg, var(--ink) 0px, var(--ink) 2px, transparent 2px, transparent 4px, var(--ink) 4px, var(--ink) 5px, transparent 5px, transparent 9px, var(--ink) 9px, var(--ink) 10px, transparent 10px, transparent 13px);
+  }
+  .lp-code{text-align:center;font-size:12px;letter-spacing:0.2em;}
+  .lp-items{margin-top:14px;font-size:11px;color:var(--ink-soft);line-height:1.6;}
+
+  .toast-wrap{
+    position:fixed;
+    bottom:20px;
+    right:20px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    z-index:50;
+  }
+  .toast{
+    background:var(--ink);
+    color:#fff;
+    padding:12px 16px;
+    border-radius:10px;
+    font-size:13px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    box-shadow:0 8px 20px rgba(0,0,0,0.18);
+    animation:toast-in .25s ease;
+    border-left:3px solid var(--accent);
+  }
+  @keyframes toast-in{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+
+  .icon{width:17px;height:17px;flex-shrink:0;}
+
+  #loginScreen{
+    position:fixed; inset:0; z-index:100;
+    background:var(--bg);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .login-card{
+    width:340px;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:16px;
+    padding:32px;
+    box-shadow:0 12px 32px rgba(0,0,0,0.08);
+  }
+  .sidebar-user{
+    display:flex; flex-direction:column; gap:2px;
+    padding:10px; margin-bottom:8px;
+    background:#28251F; border-radius:8px;
+  }
+  .sidebar-user .name{font-size:13px;font-weight:600;color:#fff;}
+  .sidebar-user .role{font-size:11px;color:#9C9686;}
+</style>
+</head>
+<body>
+
+<div class="app" id="appRoot">
+  <div class="sidebar">
+    <div class="logo"><b>СКЛАД/42</b><span>WMS</span></div>
+    <div class="nav-group-label">Склад</div>
+    <div class="nav-item active" data-tab="inventory" style="padding-left:26px"><span class="num">01</span>Остатки</div>
+    <div class="nav-item" data-tab="clients"><span class="num">02</span>Клиенты</div>
+    <div class="nav-item" data-tab="storage"><span class="num">03</span>Хранение</div>
+    <div class="nav-item" data-tab="supplies"><span class="num">04</span>Плановые поставки</div>
+    <div class="nav-item" data-tab="employees"><span class="num">05</span>Сотрудники</div>
+    <div class="sidebar-foot">СКЛАД/42 · ОБЩИЙ ДОСТУП</div>
+  </div>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="eyebrow">Смена начата · 09:14</div>
+      <div class="cabinets">
+        <div class="chip wb"><span class="dot"></span>WB · кабинет подключён</div>
+        <div class="chip oz"><span class="dot"></span>Ozon · кабинет подключён</div>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- INVENTORY -->
+      <section class="section active" id="tab-inventory">
+        <div class="page-head">
+          <div>
+            <h1>Остатки склада</h1>
+            <p>Что и сколько лежит на полках прямо сейчас</p>
+          </div>
+          <div style="display:flex;gap:8px">
+            <select class="search" id="invClientFilter" style="width:200px">
+              <option value="">Все клиенты</option>
+            </select>
+            <input class="search" id="invSearch" placeholder="Поиск по названию или артикулу…">
+          </div>
+        </div>
+        <div class="stat-row" id="invStats"></div>
+        <div class="panel">
+          <table>
+            <thead><tr><th>Артикул</th><th>Товар</th><th>Штрихкод</th><th>Клиент</th><th>Остаток</th><th></th></tr></thead>
+            <tbody id="invBody"></tbody>
+          </table>
+        </div>
+        <div id="writeoffLogWrap" style="margin-top:16px"></div>
+      </section>
+
+      <!-- CLIENTS -->
+      <section class="section" id="tab-clients">
+        <div class="page-head">
+          <div>
+            <h1>Клиенты</h1>
+            <p>Продавцы, чей товар хранится на складе</p>
+          </div>
+          <button class="btn btn-accent" id="newClientBtn" onclick="openNewClientForm()">+ Новый клиент</button>
+        </div>
+        <div id="clientsBody"></div>
+      </section>
+
+      <!-- STORAGE -->
+      <section class="section" id="tab-storage">
+        <div class="page-head">
+          <div>
+            <h1>Хранение</h1>
+            <p>Стоимость хранения по дням, в рублях</p>
+          </div>
           <select class="search" id="storageClientFilter" style="width:220px">
             <option value="">Все клиенты</option>
           </select>
