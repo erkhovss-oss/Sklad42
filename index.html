@@ -672,20 +672,17 @@ function playBeep(type){
   }catch(e){ /* звук недоступен в этом браузере — не критично */ }
 }
 
-const MAX_CELLS = 10000;
-function barcodeToCell(barcode){
-  if(!barcode) return null;
-  let hash = 0;
-  for(let i=0;i<barcode.length;i++){
-    hash = (hash * 31 + barcode.charCodeAt(i)) >>> 0;
-  }
-  return (hash % MAX_CELLS) + 1;
+function ensureCellAssigned(item){
+  if(!item.barcode || item.cell) return item.cell || null;
+  const maxCell = inventory.reduce((m,i)=> (i.cell && i.cell>m) ? i.cell : m, 0);
+  item.cell = maxCell + 1;
+  return item.cell;
 }
 function announceCell(cellNumber){
   if(!soundEnabled || !cellNumber) return;
   try{
     window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance('Ячейка ' + cellNumber);
+    const utter = new SpeechSynthesisUtterance(String(cellNumber));
     utter.lang = 'ru-RU';
     utter.rate = 1;
     window.speechSynthesis.speak(utter);
@@ -839,7 +836,7 @@ function renderInventory(){
     let rowsHtml = `<tr>
       <td class="mono">${i.sku}</td>
       <td>${i.name}</td>
-      <td class="mono">${i.barcode||'—'}${i.barcode?`<div style="color:var(--ink-faint);font-size:11px">яч. ${barcodeToCell(i.barcode)}</div>`:''}</td>
+      <td class="mono">${i.barcode||'—'}${i.barcode?`<div style="color:var(--ink-faint);font-size:11px">яч. ${i.cell||'—'}</div>`:''}</td>
       <td>${i.client||'—'}</td>
       <td class="${i.qty<=3?'qty-low':''}">${i.qty} шт${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}</td>
       <td style="text-align:right;white-space:nowrap">
@@ -914,6 +911,7 @@ function saveEdit(sku){
   item.client = client || '—';
   item.qty = qty;
   item.dims = (l>0 && w>0 && h>0) ? {l, w, h, weight:(item.dims&&item.dims.weight)||0} : null;
+  ensureCellAssigned(item);
   syncInventoryRow(sku);
   if(qtyDelta!==0) logMovement(sku, name, qtyDelta, 'Изменение карточки');
   editingSku = null;
@@ -978,7 +976,8 @@ async function syncInventoryRow(sku){
     client_name: item.client || null,
     vendor_code: item.vendorCode || null,
     barcode: item.barcode || null,
-    dims: item.dims || null
+    dims: item.dims || null,
+    cell: item.cell || null
   });
   if(error){ console.error(error); toast('Не удалось сохранить изменения в базе'); }
 }
@@ -1004,7 +1003,7 @@ function renderReceiving(mode){
         ${currentReceivingMode==='scan' ? `
           <div class="eyebrow" style="margin-top:16px">Штрихкод</div>
           <input class="scan-input" id="receiveScanInput" placeholder="Штрихкод…" style="margin-top:6px">
-          <div class="scan-hint">Сканируйте штрихкод на коробке — товар прибавится на складе, а голос назовёт номер ячейки (1–10000), куда положить. Один и тот же штрихкод всегда попадает в одну и ту же ячейку. Незнакомый штрихкод — система спросит название и артикул.</div>
+          <div class="scan-hint">Сканируйте штрихкод — товар прибавится на складе, а голос назовёт номер ячейки цифрами. Новый штрихкод получает следующий свободный номер по порядку (1, 2, 3…) и запоминает его навсегда. Незнакомый штрихкод — система спросит название и артикул.</div>
         ` : `
           <div class="eyebrow" style="margin-top:16px">Товар</div>
           <select id="receiveSelect" class="scan-input" style="margin-top:6px">
@@ -1052,7 +1051,8 @@ function renderReceiving(mode){
         item.qty += 1;
         logReceipt(item.sku, item.name, 1);
         playBeep('ok');
-        const cell = barcodeToCell(item.barcode);
+        const cell = ensureCellAssigned(item);
+        syncInventoryRow(item.sku);
         announceCell(cell);
         toast(`+1 шт: ${item.name} → Ячейка ${cell}`);
         renderReceiving('scan');
@@ -1061,9 +1061,13 @@ function renderReceiving(mode){
         const name = prompt('Штрихкод '+code+' не найден. Название нового товара:');
         if(name){
           const sku = (prompt('Артикул для нового товара:') || ('SKU-'+Date.now())).trim().toUpperCase();
-          inventory.push({sku, name, qty:1, barcode:code});
+          const newItem = {sku, name, qty:1, barcode:code};
+          inventory.push(newItem);
+          const cell = ensureCellAssigned(newItem);
+          syncInventoryRow(sku);
           logReceipt(sku, name, 1);
-          toast(`Новый товар добавлен: ${name}`);
+          announceCell(cell);
+          toast(`Новый товар добавлен: ${name} → Ячейка ${cell}`);
         }
         renderReceiving('scan');
       }
@@ -1333,12 +1337,14 @@ function addWbProductToInventory(clientId, nmId){
   if(!p) return;
   const sku = 'WB-' + p.nmId;
   if(inventory.find(i=>i.sku===sku)){ toast('Уже добавлено в остатки'); return; }
-  inventory.push({
+  const newItem = {
     sku, name:p.name, qty:0, client:client.name,
     vendorCode:p.vendorCode, barcode:p.barcode, dims:p.dims
-  });
+  };
+  inventory.push(newItem);
+  const cell = ensureCellAssigned(newItem);
   syncInventoryRow(sku);
-  toast(`«${p.name}» добавлен в остатки (0 шт — укажите количество)`);
+  toast(`«${p.name}» добавлен в остатки (0 шт, ячейка ${cell} — укажите количество)`);
   renderClients();
 }
 
@@ -2032,7 +2038,8 @@ function renderSuppliesTableWrap(){
         }
         inv.qty++;
         logReceipt(sku, item.name, 1);
-        const cell = barcodeToCell(item.barcode || code);
+        const cell = ensureCellAssigned(inv);
+        syncInventoryRow(sku);
         if(item.receivedQty>item.qty && !wasOver){ playBeep('warn'); toast(`«${item.name}»: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
         else { playBeep('ok'); toast(`«${item.name}» → Ячейка ${cell}`); }
         announceCell(cell);
@@ -2171,7 +2178,7 @@ async function loadEmployees(){
 async function loadInventory(){
   const { data, error } = await sb.from('inventory').select('*').order('sku');
   if(error){ console.error(error); return; }
-  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims}));
+  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null}));
 }
 async function loadMovementLog(){
   const { data, error } = await sb.from('movement_log').select('*').order('created_at',{ascending:true}).limit(500);
