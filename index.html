@@ -823,7 +823,9 @@ function renderInventory(){
       <td>${i.client||'—'}</td>
       <td class="${i.qty<=3?'qty-low':''}">${i.qty} шт${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}</td>
       <td style="text-align:right;white-space:nowrap">
-        ${readOnly ? '' : `
+        ${readOnly ? `
+        <button class="btn btn-ghost" style="padding:5px 10px" onclick="openHistory('${i.sku}')">История</button>
+        ` : `
         <button class="btn btn-ghost" style="padding:5px 10px" onclick="adjustQty('${i.sku}',-1)">−</button>
         <button class="btn btn-ghost" style="padding:5px 10px" onclick="adjustQty('${i.sku}',1)">+</button>
         <button class="btn btn-ghost" style="padding:5px 10px" onclick="startEdit('${i.sku}')">Изменить</button>
@@ -833,7 +835,7 @@ function renderInventory(){
         `}
       </td>
     </tr>`;
-    if(!readOnly && historySku === i.sku){
+    if(historySku === i.sku){
       const moves = movementLog.filter(m=>m.sku===i.sku).slice().reverse().slice(0,20);
       rowsHtml += `<tr>
         <td colspan="6" style="padding:0">
