@@ -1245,7 +1245,7 @@ function saveWbWarehouseId(clientId){
 async function listWbWarehouses(clientId){
   toast('Запрашиваем список складов у Wildberries…');
   try{
-    const { data, error } = await sb.functions.invoke('wb-sync-stocks', { body: { clientId, action: 'list_warehouses' } });
+    const { data, error } = await sb.functions.invoke('wb-sync-stocks-ts', { body: { clientId, action: 'list_warehouses' } });
     if(error){ toast('Ошибка вызова функции: ' + error.message); return; }
     if(data && data.error){ toast('WB: ' + data.error); return; }
     const list = (data.warehouses || []).map(w=>`${w.id} — ${w.name}`).join('\n');
@@ -1257,7 +1257,7 @@ async function listWbWarehouses(clientId){
 async function pushStocksToWb(clientId){
   toast('Отправляем остатки на Wildberries…');
   try{
-    const { data, error } = await sb.functions.invoke('wb-sync-stocks', { body: { clientId, action: 'push_stocks' } });
+    const { data, error } = await sb.functions.invoke('wb-sync-stocks-ts', { body: { clientId, action: 'push_stocks' } });
     if(error){ toast('Ошибка вызова функции: ' + error.message); return; }
     if(data && data.error){ toast('WB: ' + data.error); return; }
     toast(`Отправлено на WB: ${data.sent} поз.${data.skipped ? `, пропущено без штрихкода: ${data.skipped}` : ''}`);
