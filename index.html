@@ -1242,11 +1242,20 @@ function saveWbWarehouseId(clientId){
     if(error){ console.error(error); toast('Не удалось сохранить ID склада в базе'); }
   });
 }
+async function extractFnErrorMessage(error){
+  if(error && error.context && typeof error.context.json === 'function'){
+    try{
+      const body = await error.context.json();
+      if(body && body.error) return body.error;
+    }catch(e){}
+  }
+  return error ? error.message : 'неизвестная ошибка';
+}
 async function listWbWarehouses(clientId){
   toast('Запрашиваем список складов у Wildberries…');
   try{
     const { data, error } = await sb.functions.invoke('wb-sync-stocks-ts', { body: { clientId, action: 'list_warehouses' } });
-    if(error){ toast('Ошибка вызова функции: ' + error.message); return; }
+    if(error){ toast('WB: ' + await extractFnErrorMessage(error)); return; }
     if(data && data.error){ toast('WB: ' + data.error); return; }
     const list = (data.warehouses || []).map(w=>`${w.id} — ${w.name}`).join('\n');
     alert('Склады продавца на WB:\n\n' + (list || 'пусто — сначала создайте склад в личном кабинете WB'));
@@ -1258,7 +1267,7 @@ async function pushStocksToWb(clientId){
   toast('Отправляем остатки на Wildberries…');
   try{
     const { data, error } = await sb.functions.invoke('wb-sync-stocks-ts', { body: { clientId, action: 'push_stocks' } });
-    if(error){ toast('Ошибка вызова функции: ' + error.message); return; }
+    if(error){ toast('WB: ' + await extractFnErrorMessage(error)); return; }
     if(data && data.error){ toast('WB: ' + data.error); return; }
     toast(`Отправлено на WB: ${data.sent} поз.${data.skipped ? `, пропущено без штрихкода: ${data.skipped}` : ''}`);
   }catch(e){
