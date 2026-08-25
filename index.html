@@ -1233,6 +1233,38 @@ function disconnectWb(clientId){
     if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
   });
 }
+function saveWbWarehouseId(clientId){
+  const c = clients.find(x=>x.id===clientId);
+  const val = document.getElementById('wbWarehouseId-'+clientId).value.trim();
+  c.wbWarehouseId = val;
+  toast('ID склада сохранён');
+  sb.from('clients').update({wb_warehouse_id: val}).eq('id', clientId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить ID склада в базе'); }
+  });
+}
+async function listWbWarehouses(clientId){
+  toast('Запрашиваем список складов у Wildberries…');
+  try{
+    const { data, error } = await sb.functions.invoke('wb-sync-stocks', { body: { clientId, action: 'list_warehouses' } });
+    if(error){ toast('Ошибка вызова функции: ' + error.message); return; }
+    if(data && data.error){ toast('WB: ' + data.error); return; }
+    const list = (data.warehouses || []).map(w=>`${w.id} — ${w.name}`).join('\n');
+    alert('Склады продавца на WB:\n\n' + (list || 'пусто — сначала создайте склад в личном кабинете WB'));
+  }catch(e){
+    toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
+  }
+}
+async function pushStocksToWb(clientId){
+  toast('Отправляем остатки на Wildberries…');
+  try{
+    const { data, error } = await sb.functions.invoke('wb-sync-stocks', { body: { clientId, action: 'push_stocks' } });
+    if(error){ toast('Ошибка вызова функции: ' + error.message); return; }
+    if(data && data.error){ toast('WB: ' + data.error); return; }
+    toast(`Отправлено на WB: ${data.sent} поз.${data.skipped ? `, пропущено без штрихкода: ${data.skipped}` : ''}`);
+  }catch(e){
+    toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
+  }
+}
 function generateWbMockProducts(){
   const pool = [
     {name:'Кроссовки Runmax, 42',        vendorCode:'RM-042-BLK',    l:32, w:20, h:12, weight:0.9},
@@ -1439,6 +1471,20 @@ function renderClientDetail(body){
         </div>
       ` : ''}
     </div>
+
+    ${c.wbConnected ? `
+    <div class="panel" style="padding:20px;margin-bottom:18px">
+      <div class="eyebrow" style="margin-bottom:4px">Wildberries · настоящая передача остатков</div>
+      <h3 style="font-size:18px;margin-bottom:12px">Синхронизация остатков</h3>
+      <p style="font-size:12px;color:var(--ink-soft);margin:0 0 14px 0">Это уже не демо — реально обращается к Wildberries через серверную функцию. Понадобится ID склада продавца (можно получить кнопкой ниже) и штрихкоды у товаров в «Остатках».</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <input class="search mono" id="wbWarehouseId-${c.id}" placeholder="ID склада WB" value="${c.wbWarehouseId||''}" style="width:200px">
+        <button class="btn btn-ghost" onclick="saveWbWarehouseId('${c.id}')">Сохранить</button>
+        <button class="btn btn-ghost" onclick="listWbWarehouses('${c.id}')">📋 Получить список складов</button>
+      </div>
+      <button class="btn btn-accent" onclick="pushStocksToWb('${c.id}')">🔄 Обновить остатки на WB</button>
+    </div>
+    ` : ''}
   `;
 }
 
@@ -2106,7 +2152,7 @@ async function loadClients(){
   if(error){ console.error(error); return; }
   clients = data.map(c=>({
     id:c.id, name:c.name, contact:c.contact||'—', telegram:c.telegram||'', wbKey:c.wb_key||'', wbConnected:c.wb_connected||false,
-    wbProducts:[], storageLiters:c.storage_liters||0, pricePerLiter:c.price_per_liter||0
+    wbWarehouseId:c.wb_warehouse_id||'', wbProducts:[], storageLiters:c.storage_liters||0, pricePerLiter:c.price_per_liter||0
   }));
 }
 async function loadStorageHistory(){
