@@ -983,8 +983,8 @@ function renderReceiving(mode){
 
         ${currentReceivingMode==='scan' ? `
           <div class="eyebrow" style="margin-top:16px">Штрихкод</div>
-          <input class="scan-input" id="receiveScanInput" placeholder="Артикул… (напр. TK-1001)" style="margin-top:6px">
-          <div class="scan-hint">Сканируйте коробку — товар сразу прибавится на складе. Незнакомый артикул — система спросит название.</div>
+          <input class="scan-input" id="receiveScanInput" placeholder="Штрихкод…" style="margin-top:6px">
+          <div class="scan-hint">Сканируйте штрихкод на коробке — товар сразу прибавится на складе. Незнакомый штрихкод — система спросит название и артикул.</div>
         ` : `
           <div class="eyebrow" style="margin-top:16px">Товар</div>
           <select id="receiveSelect" class="scan-input" style="margin-top:6px">
@@ -1024,10 +1024,10 @@ function renderReceiving(mode){
     input.focus();
     input.addEventListener('keydown', (e)=>{
       if(e.key!=='Enter') return;
-      const code = input.value.trim().toUpperCase();
+      const code = input.value.trim();
       input.value='';
       if(!code) return;
-      const item = inventory.find(i=>i.sku===code);
+      const item = inventory.find(i=>i.barcode===code);
       if(item){
         item.qty += 1;
         logReceipt(item.sku, item.name, 1);
@@ -1036,10 +1036,11 @@ function renderReceiving(mode){
         renderReceiving('scan');
       } else {
         playBeep('warn');
-        const name = prompt('Новый артикул '+code+'. Название товара:');
+        const name = prompt('Штрихкод '+code+' не найден. Название нового товара:');
         if(name){
-          inventory.push({sku:code, name, qty:1});
-          logReceipt(code, name, 1);
+          const sku = (prompt('Артикул для нового товара:') || ('SKU-'+Date.now())).trim().toUpperCase();
+          inventory.push({sku, name, qty:1, barcode:code});
+          logReceipt(sku, name, 1);
           toast(`Новый товар добавлен: ${name}`);
         }
         renderReceiving('scan');
@@ -1618,14 +1619,16 @@ function handleSupplyExcelUpload(inputEl){
         const row = rows[i];
         if(!row || !row.length) continue;
         const sku = String(row[0]||'').trim().toUpperCase();
+        const barcode = String(row[1]||'').trim();
         const qty = parseInt(row[2]) || 0;
         if(!sku || qty<=0) continue;
         const invItem = inventory.find(x=>x.sku===sku);
         const name = invItem ? invItem.name : sku;
+        const finalBarcode = barcode || (invItem ? invItem.barcode||'' : '');
         if(!invItem) unmatched++;
         const existing = items.find(d=>d.sku===sku);
         if(existing) existing.qty += qty;
-        else items.push({sku, name, qty});
+        else items.push({sku, name, qty, barcode: finalBarcode});
       }
       if(items.length===0){
         toast('В файле не найдено строк с артикулом и количеством');
@@ -1661,7 +1664,7 @@ function createSupply(){
   renderSupplies();
   sb.from('supplies').insert({id, client_id: client.id, client_name: client.name, status:'planned', created_at: createdAt.toISOString()}).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить поставку в базе'); return; }
-    const rows = items.map(it=>({supply_id:id, sku:it.sku, name:it.name, qty:it.qty, received_qty:0}));
+    const rows = items.map(it=>({supply_id:id, sku:it.sku, name:it.name, qty:it.qty, received_qty:0, barcode: it.barcode || null}));
     sb.from('supply_items').insert(rows).then(({error})=>{
       if(error){ console.error(error); toast('Не удалось сохранить позиции поставки в базе'); }
     });
@@ -1852,8 +1855,8 @@ function renderSupplyReceivingPanel(s){
             <div class="eyebrow">Сканер приёмки</div>
             <button class="btn btn-ghost sound-toggle" style="padding:3px 8px;font-size:11px" onclick="toggleSound()">${soundEnabled?'🔊 Звук':'🔇 Звук'}</button>
           </div>
-          <input class="search" id="supplyScanInput-${s.id}" placeholder="Артикул…" style="margin-top:8px;width:100%">
-          <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Сканируйте товар из этой поставки — он сразу зачислится на склад. Принять можно больше или меньше плана — расхождение зафиксируется при завершении.</p>
+          <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="margin-top:8px;width:100%">
+          <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Сканируйте штрихкод товара из этой поставки — он сразу зачислится на склад. Принять можно больше или меньше плана — расхождение зафиксируется при завершении.</p>
           <button class="btn btn-primary" style="margin-top:12px;width:100%;justify-content:center" onclick="finishSupplyReceiving('${s.id}')">Завершить приёмку</button>
         </div>
         <div class="panel" style="flex:1;min-width:280px">
@@ -1861,7 +1864,7 @@ function renderSupplyReceivingPanel(s){
             const done = it.receivedQty >= it.qty;
             const over = it.receivedQty > it.qty;
             return `<div class="pick-row ${done?'done':''}" ${over?'style="background:var(--warn-bg)"':''}>
-              <div><div class="sku-name">${it.name}</div><div class="sku-code mono">${it.sku}</div></div>
+              <div><div class="sku-name">${it.name}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:' · без штрихкода'}</div></div>
               <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
                 <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',-1)">−</button>
                 <div class="qty-need" style="min-width:56px;text-align:center;${over?'color:var(--warn);font-weight:700':''}">${it.receivedQty}/${it.qty}</div>
@@ -1988,24 +1991,29 @@ function renderSuppliesTableWrap(){
       input.focus();
       input.addEventListener('keydown', (e)=>{
         if(e.key!=='Enter') return;
-        const code = input.value.trim().toUpperCase();
+        const code = input.value.trim();
         input.value='';
         if(!code) return;
-        const item = supply.items.find(i=>i.sku===code);
-        if(!item){ playBeep('error'); toast('Этот артикул не входит в данную поставку'); return; }
+        let item = supply.items.find(i=>i.barcode && i.barcode===code);
+        if(!item){
+          const invMatch = inventory.find(i=>i.barcode===code);
+          if(invMatch) item = supply.items.find(i=>i.sku===invMatch.sku);
+        }
+        if(!item){ playBeep('error'); toast('Штрихкод не найден среди товаров этой поставки'); return; }
+        const sku = item.sku;
         const wasOver = item.receivedQty > item.qty;
         item.receivedQty++;
-        let inv = inventory.find(i=>i.sku===code);
+        let inv = inventory.find(i=>i.sku===sku);
         if(!inv){
-          inv = {sku:code, name: item.name, qty:0, client: supply.clientName};
+          inv = {sku, name: item.name, qty:0, client: supply.clientName, barcode: item.barcode||code};
           inventory.push(inv);
         }
         inv.qty++;
-        logReceipt(code, item.name, 1);
+        logReceipt(sku, item.name, 1);
         if(item.receivedQty>item.qty && !wasOver){ playBeep('warn'); toast(`«${item.name}»: принято больше, чем заказано (${item.receivedQty} из ${item.qty})`); }
         else { playBeep('ok'); }
         renderSuppliesTableWrap();
-        sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', code).then(({error})=>{
+        sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).then(({error})=>{
           if(error) console.error(error);
         });
       });
@@ -2183,7 +2191,7 @@ async function loadSupplies(){
     actNumber: s.act_number || '',
     actPricePerUnit: s.act_price || 0,
     createdAt: new Date(s.created_at),
-    items: itemRows.filter(it=>it.supply_id===s.id).map(it=>({sku:it.sku, name:it.name, qty:it.qty, receivedQty:it.received_qty}))
+    items: itemRows.filter(it=>it.supply_id===s.id).map(it=>({sku:it.sku, name:it.name, qty:it.qty, receivedQty:it.received_qty, barcode:it.barcode||''}))
   }));
 }
 
