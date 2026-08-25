@@ -958,7 +958,9 @@ async function syncInventoryRow(sku){
     client_name: item.client || null,
     vendor_code: item.vendorCode || null,
     barcode: item.barcode || null,
-    dims: item.dims || null
+    dims: item.dims || null,
+    wb_qty: item.wbQty || 0,
+    ozon_qty: item.ozonQty || 0
   });
   if(error){ console.error(error); toast('Не удалось сохранить изменения в базе'); }
 }
@@ -1318,6 +1320,54 @@ function renderClientsList(body){
 
   body.innerHTML = formHtml + cardsHtml;
 }
+function renderClientMarketplaceAlloc(c, skus){
+  const totalQty = skus.reduce((s,i)=>s+i.qty,0);
+  const totalWb = skus.reduce((s,i)=>s+(i.wbQty||0),0);
+  const totalOzon = skus.reduce((s,i)=>s+(i.ozonQty||0),0);
+  const totalFree = totalQty - totalWb - totalOzon;
+  return `
+    <div class="panel" style="padding:20px;margin-bottom:18px">
+      <div class="eyebrow" style="margin-bottom:4px">Маркетплейсы</div>
+      <h3 style="font-size:18px;margin-bottom:4px">Распределение остатков</h3>
+      <p style="font-size:12px;color:var(--ink-soft);margin:0 0 14px 0">Сколько товара со склада уже закреплено под WB и Ozon, а сколько ещё свободно и, возможно, нужно довезти на маркетплейс.</p>
+      <div class="stat-row" style="margin-bottom:14px">
+        <div class="stat"><div class="val">${totalQty}</div><div class="lbl">Всего на складе</div></div>
+        <div class="stat"><div class="val" style="color:var(--wb)">${totalWb}</div><div class="lbl">На WB</div></div>
+        <div class="stat"><div class="val" style="color:var(--oz)">${totalOzon}</div><div class="lbl">На Ozon</div></div>
+        <div class="stat"><div class="val" style="color:${totalFree>0?'var(--warn)':'var(--ink)'}">${totalFree}</div><div class="lbl">Не распределено</div></div>
+      </div>
+      ${totalFree>0 ? `<p style="font-size:12px;color:var(--warn);margin-bottom:14px">⚠ ${totalFree} шт ещё нигде не закреплено — возможно, стоит довезти на WB или Ozon</p>` : ''}
+      ${skus.length ? `
+        <div class="panel">
+          <table>
+            <thead><tr><th>Товар</th><th>Остаток</th><th>На WB</th><th>На Ozon</th><th>Своб.</th></tr></thead>
+            <tbody>
+              ${skus.map(i=>{
+                const free = i.qty - (i.wbQty||0) - (i.ozonQty||0);
+                return `<tr>
+                  <td>${i.name}<div class="sku-code mono">${i.sku}</div></td>
+                  <td>${i.qty} шт</td>
+                  <td><input class="search mono" type="number" min="0" max="${i.qty}" style="width:80px" value="${i.wbQty||0}" onchange="saveMarketplaceAlloc('${i.sku}','wb',this.value)"></td>
+                  <td><input class="search mono" type="number" min="0" max="${i.qty}" style="width:80px" value="${i.ozonQty||0}" onchange="saveMarketplaceAlloc('${i.sku}','ozon',this.value)"></td>
+                  <td style="color:${free<0?'var(--warn)':'var(--ink-soft)'}">${free}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : `<p style="font-size:13px;color:var(--ink-faint)">У клиента пока нет товаров на складе</p>`}
+    </div>
+  `;
+}
+function saveMarketplaceAlloc(sku, marketplace, value){
+  const item = inventory.find(i=>i.sku===sku);
+  if(!item) return;
+  const val = Math.max(0, parseInt(value) || 0);
+  if(marketplace==='wb') item.wbQty = val;
+  else item.ozonQty = val;
+  syncInventoryRow(sku);
+  renderClients();
+}
 function renderClientDetail(body){
   const c = clients.find(x=>x.id===activeClientId);
   if(!c){ activeClientId = null; renderClientsList(body); return; }
@@ -1399,6 +1449,8 @@ function renderClientDetail(body){
         <span style="font-size:12px;color:var(--ink-soft)">в сутки, при текущем объёме</span>
       </div>
     </div>
+
+    ${renderClientMarketplaceAlloc(c, skus)}
 
     <div class="panel" style="padding:20px;margin-bottom:18px">
       <div class="eyebrow" style="margin-bottom:4px">Интеграция · Wildberries</div>
@@ -2084,7 +2136,7 @@ async function loadEmployees(){
 async function loadInventory(){
   const { data, error } = await sb.from('inventory').select('*').order('sku');
   if(error){ console.error(error); return; }
-  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims}));
+  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, wbQty:i.wb_qty||0, ozonQty:i.ozon_qty||0}));
 }
 async function loadMovementLog(){
   const { data, error } = await sb.from('movement_log').select('*').order('created_at',{ascending:true}).limit(500);
