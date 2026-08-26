@@ -1955,8 +1955,25 @@ function renderSupplyReceivingPanel(s){
       </div>
     `;
   }
+  const totalPlan = s.items.reduce((a,i)=>a+i.qty,0);
+  const totalFact = s.items.reduce((a,i)=>a+i.receivedQty,0);
+  const pct = totalPlan ? Math.min(100, Math.round(totalFact/totalPlan*100)) : 0;
+  const sortedItems = s.items.slice().sort((a,b)=>{
+    const aDone = a.receivedQty >= a.qty ? 1 : 0;
+    const bDone = b.receivedQty >= b.qty ? 1 : 0;
+    return aDone - bDone;
+  });
   return `
     <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
+      <div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span class="mono" style="font-size:14px;font-weight:600">Принято ${totalFact} из ${totalPlan}</span>
+          <span class="mono" style="font-size:14px;font-weight:700;color:${pct>=100?'var(--ok)':'var(--accent)'}">${pct}%</span>
+        </div>
+        <div class="progress-track" style="background:var(--line)">
+          <div class="progress-fill" style="width:${pct}%;background:${pct>=100?'var(--ok)':'var(--accent)'}"></div>
+        </div>
+      </div>
       <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
         <div style="width:260px;flex-shrink:0">
           <div style="display:flex;justify-content:space-between;align-items:center">
@@ -1968,7 +1985,7 @@ function renderSupplyReceivingPanel(s){
           <button class="btn btn-primary" style="margin-top:12px;width:100%;justify-content:center" onclick="finishSupplyReceiving('${s.id}')">Завершить приёмку</button>
         </div>
         <div class="panel" style="flex:1;min-width:280px">
-          ${s.items.map(it=>{
+          ${sortedItems.map(it=>{
             const done = it.receivedQty >= it.qty;
             const over = it.receivedQty > it.qty;
             return `<div class="pick-row ${done?'done':''}" ${over?'style="background:var(--warn-bg)"':''}>
