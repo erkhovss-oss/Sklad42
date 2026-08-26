@@ -1798,7 +1798,7 @@ function editWarehouseInfo(){
 }
 function buildActRows(s){
   return s.items.map((it, idx)=>({
-    n: idx+1, sku: it.sku, name: it.name,
+    n: idx+1, sku: it.sku, barcode: it.barcode||'—', name: it.name,
     plan: it.qty, fact: it.receivedQty, diff: it.receivedQty - it.qty
   }));
 }
@@ -1830,13 +1830,13 @@ function downloadSupplyActExcel(id){
     [`Поставка: ${s.id}`],
     [`Клиент: ${s.clientName}`],
     [],
-    ['№','Артикул','Наименование','План, шт','Факт, шт','Расхождение'],
-    ...rows.map(r=>[r.n, r.sku, r.name, r.plan, r.fact, r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—']),
+    ['№','Артикул','ШК товара','Наименование','План, шт','Факт, шт','Расхождение'],
+    ...rows.map(r=>[r.n, r.sku, r.barcode, r.name, r.plan, r.fact, r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—']),
     [],
-    ['','','Итого:', summary.totalPlan, summary.totalFact, summary.mismatches ? `Расхождений: ${summary.mismatches} поз.` : 'Без расхождений']
+    ['','','','Итого:', summary.totalPlan, summary.totalFact, summary.mismatches ? `Расхождений: ${summary.mismatches} поз.` : 'Без расхождений']
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:4},{wch:14},{wch:32},{wch:10},{wch:10},{wch:18}];
+  ws['!cols'] = [{wch:4},{wch:14},{wch:18},{wch:32},{wch:10},{wch:10},{wch:18}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Акт приёмки');
   XLSX.writeFile(wb, `Akt_priemki_${actNumber}.xlsx`);
@@ -1885,11 +1885,11 @@ function generateSupplyActPdf(id){
       <p><b>Клиент:</b> ${s.clientName}</p>
       <p><b>Поставка:</b> № ${s.id}</p>
       <table>
-        <thead><tr><th>№</th><th>Артикул</th><th>Наименование</th><th class="num">План, шт</th><th class="num">Факт, шт</th><th class="num">Расхождение</th></tr></thead>
+        <thead><tr><th>№</th><th>Артикул</th><th>ШК товара</th><th>Наименование</th><th class="num">План, шт</th><th class="num">Факт, шт</th><th class="num">Расхождение</th></tr></thead>
         <tbody>
           ${rows.map(r=>`
             <tr class="${r.diff!==0?'mismatch':''}">
-              <td>${r.n}</td><td>${r.sku}</td><td>${r.name}</td>
+              <td>${r.n}</td><td>${r.sku}</td><td>${r.barcode}</td><td>${r.name}</td>
               <td class="num">${r.plan}</td><td class="num">${r.fact}</td>
               <td class="num">${r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—'}</td>
             </tr>
