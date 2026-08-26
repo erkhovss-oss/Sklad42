@@ -476,6 +476,9 @@
             <select class="search" id="invClientFilter" style="width:200px">
               <option value="">Все клиенты</option>
             </select>
+            <select class="search" id="invCellFilter" style="width:170px">
+              <option value="">Все ячейки</option>
+            </select>
             <input class="search" id="invSearch" placeholder="Поиск по названию или артикулу…" style="flex:1">
           </div>
           <div class="stat-row" id="invStats"></div>
@@ -757,6 +760,7 @@ document.getElementById('writeoffReasonFilter').addEventListener('change', rende
 function renderInventory(){
   const q = (document.getElementById('invSearch').value || '').toLowerCase();
   const clientFilter = document.getElementById('invClientFilter').value;
+  const cellFilter = document.getElementById('invCellFilter').value;
   const body = document.getElementById('invBody');
   const readOnly = !!clientViewMode;
 
@@ -766,10 +770,22 @@ function renderInventory(){
   filterSelect.innerHTML = `<option value="">Все клиенты</option>` + clientNames.map(c=>`<option value="${c}">${c}</option>`).join('');
   filterSelect.value = clientNames.includes(prevValue) ? prevValue : '';
 
+  const cellNumbers = [...new Set(inventory.map(i=>i.cell).filter(Boolean))].sort((a,b)=>a-b);
+  const cellSelect = document.getElementById('invCellFilter');
+  const prevCellValue = cellSelect.value;
+  cellSelect.innerHTML = `<option value="">Все ячейки</option>` + cellNumbers.map(c=>`<option value="${c}">Ячейка ${c}</option>`).join('');
+  cellSelect.value = cellNumbers.map(String).includes(prevCellValue) ? prevCellValue : '';
+
   const rows = inventory.filter(i =>
     (i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q)) &&
-    (readOnly ? i.client === clientViewMode.name : (!clientFilter || i.client === clientFilter))
-  );
+    (readOnly ? i.client === clientViewMode.name : (!clientFilter || i.client === clientFilter)) &&
+    (!cellFilter || String(i.cell)===cellFilter)
+  ).sort((a,b)=>{
+    if(!a.cell && !b.cell) return 0;
+    if(!a.cell) return 1;
+    if(!b.cell) return -1;
+    return a.cell - b.cell;
+  });
 
   body.innerHTML = rows.map(i => {
     if(!readOnly && editingSku === i.sku){
@@ -965,24 +981,32 @@ function logMovement(sku, name, delta, type){
   const now = new Date();
   const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   movementLog.push({sku, name, delta, type, time});
-  sb.from('movement_log').insert({sku, name, delta, type}).then(({error})=>{ if(error) console.error(error); });
+  sb.from('movement_log').insert({sku, name, delta, type})
+    .then(({error})=>{ if(error) console.error(error); })
+    .catch(e=>{ console.error(e); toast('Нет связи с базой — запись истории не сохранилась'); });
   syncInventoryRow(sku);
 }
 async function syncInventoryRow(sku){
   const item = inventory.find(i=>i.sku===sku);
   if(!item) return;
-  const { error } = await sb.from('inventory').upsert({
-    sku: item.sku, name: item.name, qty: item.qty,
-    client_name: item.client || null,
-    vendor_code: item.vendorCode || null,
-    barcode: item.barcode || null,
-    dims: item.dims || null,
-    cell: item.cell || null
-  });
-  if(error){ console.error(error); toast('Не удалось сохранить изменения в базе'); }
+  try{
+    const { error } = await sb.from('inventory').upsert({
+      sku: item.sku, name: item.name, qty: item.qty,
+      client_name: item.client || null,
+      vendor_code: item.vendorCode || null,
+      barcode: item.barcode || null,
+      dims: item.dims || null,
+      cell: item.cell || null
+    });
+    if(error){ console.error(error); toast(`Не сохранилось в базе: ${item.name} — повторите действие`); }
+  }catch(e){
+    console.error(e);
+    toast(`Нет связи с базой — «${item.name}» не сохранился, проверьте интернет и повторите`);
+  }
 }
 document.getElementById('invSearch').addEventListener('input', renderInventory);
 document.getElementById('invClientFilter').addEventListener('change', renderInventory);
+document.getElementById('invCellFilter').addEventListener('change', renderInventory);
 
 // ---------- RECEIVING ----------
 function renderReceiving(mode){
@@ -1104,7 +1128,9 @@ function logReceipt(sku, name, qty){
   const now = new Date();
   const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   receivingLog.push({sku, name, qty, time});
-  sb.from('receiving_log').insert({sku, name, qty}).then(({error})=>{ if(error) console.error(error); });
+  sb.from('receiving_log').insert({sku, name, qty})
+    .then(({error})=>{ if(error) console.error(error); })
+    .catch(e=>{ console.error(e); toast('Нет связи с базой — запись приёмки не сохранилась'); });
   logMovement(sku, name, qty, 'Приёмка');
 }
 
@@ -1724,7 +1750,7 @@ function adjustSupplyItem(supplyId, sku, delta){
   renderSuppliesTableWrap();
   sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supplyId).eq('sku', sku).then(({error})=>{
     if(error) console.error(error);
-  });
+  }).catch(e=>{ console.error(e); toast('Нет связи с базой — количество не сохранилось, повторите'); });
 }
 function finishSupplyReceiving(id){
   const supply = supplies.find(s=>s.id===id);
@@ -2046,7 +2072,7 @@ function renderSuppliesTableWrap(){
         renderSuppliesTableWrap();
         sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).then(({error})=>{
           if(error) console.error(error);
-        });
+        }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
       });
     }
   }
@@ -2242,6 +2268,8 @@ function enterClientViewMode(client){
   if(eyebrow) eyebrow.textContent = client.name;
   const filterSelect = document.getElementById('invClientFilter');
   if(filterSelect) filterSelect.style.display = 'none';
+  const cellFilterSelect = document.getElementById('invCellFilter');
+  if(cellFilterSelect) cellFilterSelect.style.display = 'none';
   const writeoffsBtn = document.getElementById('viewWriteoffsBtn');
   if(writeoffsBtn) writeoffsBtn.style.display = 'none';
   setInventoryView('stock');
