@@ -321,6 +321,31 @@
   .progress-track{height:6px;background:#3A362D;border-radius:4px;margin-top:18px;overflow:hidden;}
   .progress-fill{height:100%;background:var(--accent);transition:width .35s ease;}
 
+  .scoreboard-panel{
+    border:2px solid var(--line);
+    border-radius:14px;
+    padding:22px 18px;
+    text-align:center;
+    margin-bottom:16px;
+    transition:border-color .2s ease, background .2s ease;
+  }
+  .scoreboard-cell{
+    font-family:'Barlow Condensed',sans-serif;
+    font-size:56px;
+    font-weight:700;
+    line-height:1;
+  }
+  .scoreboard-barcode{font-size:15px;font-weight:600;margin-top:10px;}
+  .scoreboard-name{font-size:13px;color:var(--ink-soft);margin-top:4px;}
+  .scoreboard-status{
+    font-family:'Barlow Condensed',sans-serif;
+    font-weight:700;
+    font-size:19px;
+    letter-spacing:0.05em;
+    margin-top:12px;
+  }
+  .scoreboard-message{font-size:12px;color:var(--ink-faint);margin-top:4px;}
+
   .pick-row{
     display:flex;
     align-items:center;
@@ -648,6 +673,7 @@ function toggleSound(){
   if(soundEnabled) playBeep('ok');
 }
 let recentReceivingActions = [];
+let lastScanInfo = null;
 function pushRecentAction(entry){
   recentReceivingActions.unshift({...entry, time: new Date()});
   if(recentReceivingActions.length > 20) recentReceivingActions.length = 20;
@@ -668,6 +694,50 @@ function renderRecentActionsFeed(limit){
       <div class="qty-need" style="color:${a.qty>=0?'var(--ok)':'var(--warn)'};font-weight:600">${a.qty>=0?'+':''}${a.qty} шт</div>
     </div>`;
   }).join('');
+}
+function renderScanScoreboard(){
+  const colors = {
+    ok:    {border:'var(--ok)',   bg:'var(--ok-bg)',   text:'var(--ok)',   label:'ПРИНЯТО'},
+    over:  {border:'#A06A00',     bg:'#FBEFDD',        text:'#A06A00',     label:'БОЛЬШЕ ПЛАНА'},
+    error: {border:'var(--warn)', bg:'var(--warn-bg)', text:'var(--warn)', label:'НЕ НАЙДЕНО'},
+    undone:{border:'var(--line)', bg:'var(--bg)',      text:'var(--ink-soft)', label:'ОТМЕНЕНО'}
+  };
+  if(!lastScanInfo){
+    return `<div class="scoreboard-panel">
+      <div class="scoreboard-cell" style="color:var(--ink-faint)">—</div>
+      <p style="color:var(--ink-faint);font-size:13px;margin-top:10px">Ещё не было сканирований в этой сессии</p>
+    </div>`;
+  }
+  const info = lastScanInfo;
+  const c = colors[info.status] || colors.error;
+  return `
+    <div class="scoreboard-panel" style="border-color:${c.border};background:${c.bg}">
+      <div class="scoreboard-cell" style="color:${info.cell?c.text:'var(--ink-faint)'}">${info.cell || '—'}</div>
+      <div class="scoreboard-barcode mono">${info.barcode || '—'}</div>
+      <div class="scoreboard-name">${info.name || 'Штрихкод не распознан'}</div>
+      <div class="scoreboard-status" style="color:${c.text}">${c.label}</div>
+      ${info.message ? `<div class="scoreboard-message">${info.message}</div>` : ''}
+    </div>
+  `;
+}
+function undoLastScan(){
+  if(!lastScanInfo || !lastScanInfo.canUndo){ toast('Нечего отменять'); return; }
+  const info = lastScanInfo;
+  const supply = supplies.find(s=>s.id===info.supplyId);
+  if(!supply){ toast('Поставка не найдена'); return; }
+  const item = supply.items.find(i=>i.sku===info.sku);
+  if(!item){ toast('Позиция не найдена'); return; }
+  item.receivedQty = Math.max(0, item.receivedQty - info.delta);
+  const inv = inventory.find(i=>i.sku===info.sku && (i.client||'')===(supply.clientName||''));
+  if(inv) inv.qty = Math.max(0, inv.qty - info.delta);
+  logMovement(info.sku, info.name, -info.delta, 'Отмена скана', supply.clientName);
+  sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', info.sku).then(({error})=>{
+    if(error) console.error(error);
+  }).catch(e=>{ console.error(e); toast('Нет связи с базой — отмена не сохранилась'); });
+  pushRecentAction({name:info.name, sku:info.sku, qty:-info.delta, note:'отмена скана'});
+  toast(`Отменено: ${info.name} −${info.delta} шт`);
+  lastScanInfo = {...info, canUndo:false, status:'undone', message:'Последний скан отменён'};
+  renderSuppliesTableWrap();
 }
 
 function playBeep(type){
@@ -1776,6 +1846,7 @@ function createSupply(){
 function toggleSupplyReceiving(id){
   const supply = supplies.find(s=>s.id===id);
   if(!supply) return;
+  if(activeSupplyId !== id) lastScanInfo = null;
   activeSupplyId = activeSupplyId===id ? null : id;
   renderSuppliesTableWrap();
 }
@@ -2007,8 +2078,17 @@ function renderSupplyReceivingPanel(s){
     const bDone = b.receivedQty >= b.qty ? 1 : 0;
     return aDone - bDone;
   });
+  const mismatchCount = s.items.filter(i=>i.receivedQty !== i.qty && i.receivedQty>0).length;
+  const remaining = Math.max(0, totalPlan - totalFact);
   return `
     <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
+      ${renderScanScoreboard()}
+      <div class="stat-row" style="margin-bottom:16px">
+        <div class="stat"><div class="val" style="color:var(--ok)">${totalFact}</div><div class="lbl">Принято</div></div>
+        <div class="stat"><div class="val">${remaining}</div><div class="lbl">Осталось</div></div>
+        <div class="stat"><div class="val" style="color:${mismatchCount?'var(--warn)':'var(--ink)'}">${mismatchCount}</div><div class="lbl">С расхождением</div></div>
+        <div class="stat"><div class="val" style="color:${(s.unmatchedScans||0)?'var(--warn)':'var(--ink)'}">${s.unmatchedScans||0}</div><div class="lbl">Не найдено</div></div>
+      </div>
       <div style="margin-bottom:16px">
         <div style="display:flex;justify-content:space-between;align-items:baseline">
           <span class="mono" style="font-size:14px;font-weight:600">Принято ${totalFact} из ${totalPlan}</span>
@@ -2026,7 +2106,10 @@ function renderSupplyReceivingPanel(s){
           </div>
           <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="margin-top:8px;width:100%">
           <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Сканируйте штрихкод товара из этой поставки — сразу услышите номер ячейки (голосом) и увидите его в подсказке. Принять можно больше или меньше плана — расхождение зафиксируется при завершении.</p>
-          <button class="btn btn-primary" style="margin-top:12px;width:100%;justify-content:center" onclick="finishSupplyReceiving('${s.id}')">Завершить приёмку</button>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="undoLastScan()" ${(!lastScanInfo||!lastScanInfo.canUndo)?'disabled':''}>↩ Отменить скан</button>
+          </div>
+          <button class="btn btn-primary" style="margin-top:8px;width:100%;justify-content:center" onclick="finishSupplyReceiving('${s.id}')">Завершить приёмку</button>
           <div class="eyebrow" style="margin-top:18px;margin-bottom:4px">Последние действия</div>
           <div style="max-height:220px;overflow-y:auto">
             ${renderRecentActionsFeed(8)}
@@ -2172,7 +2255,14 @@ function renderSuppliesTableWrap(){
           const invMatch = inventory.find(i=>i.barcode===code);
           if(invMatch) item = supply.items.find(i=>i.sku===invMatch.sku);
         }
-        if(!item){ playBeep('error'); toast('Штрихкод не найден среди товаров этой поставки'); return; }
+        if(!item){
+          playBeep('error');
+          supply.unmatchedScans = (supply.unmatchedScans||0) + 1;
+          lastScanInfo = {supplyId: supply.id, sku:null, name:null, barcode: code, cell:null, delta:0, canUndo:false, status:'error', message:'Штрихкод не найден среди товаров этой поставки'};
+          toast('Штрихкод не найден среди товаров этой поставки');
+          renderSuppliesTableWrap();
+          return;
+        }
         const sku = item.sku;
         const wasOver = item.receivedQty > item.qty;
         item.receivedQty++;
@@ -2185,10 +2275,16 @@ function renderSuppliesTableWrap(){
         logReceipt(sku, item.name, 1, supply.clientName);
         const cell = ensureCellAssigned(inv);
         syncInventoryRow(sku, supply.clientName);
-        if(item.receivedQty>item.qty && !wasOver){ playBeep('warn'); toast(`«${item.name}»: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
+        const isOver = item.receivedQty>item.qty && !wasOver;
+        if(isOver){ playBeep('warn'); toast(`«${item.name}»: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
         else { playBeep('ok'); toast(`«${item.name}» → Ячейка ${cell}`); }
         announceCell(cell);
-        pushRecentAction({name:item.name, sku, qty:1, cell, note: (item.receivedQty>item.qty && !wasOver) ? 'больше плана' : ''});
+        pushRecentAction({name:item.name, sku, qty:1, cell, note: isOver ? 'больше плана' : ''});
+        lastScanInfo = {
+          supplyId: supply.id, sku, name:item.name, barcode: item.barcode||code, cell, delta:1, canUndo:true,
+          status: isOver ? 'over' : 'ok',
+          message: isOver ? `Принято больше плана: ${item.receivedQty} из ${item.qty}` : `Принято ${item.receivedQty} из ${item.qty}`
+        };
         renderSuppliesTableWrap();
         sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).then(({error})=>{
           if(error) console.error(error);
