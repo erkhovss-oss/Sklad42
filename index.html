@@ -460,7 +460,20 @@
 </head>
 <body>
 
-<div class="app" id="appRoot">
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="logo" style="padding:0 0 22px 0"><b>СКЛАД/42</b><span>WMS</span></div>
+    <div class="eyebrow" style="margin-bottom:16px">Вход в личный кабинет</div>
+    <div class="eyebrow" style="margin-bottom:6px;color:var(--ink-soft)">Логин</div>
+    <input class="search" id="loginInput" placeholder="Логин" style="width:100%;margin-bottom:14px" autocomplete="username">
+    <div class="eyebrow" style="margin-bottom:6px;color:var(--ink-soft)">Пароль</div>
+    <input class="search" id="passwordInput" type="password" placeholder="Пароль" style="width:100%;margin-bottom:16px" autocomplete="current-password" onkeydown="if(event.key==='Enter') attemptLogin()">
+    <button class="btn btn-accent" style="width:100%;justify-content:center" onclick="attemptLogin()">Войти</button>
+    <p id="loginError" style="font-size:12px;color:var(--warn);margin-top:12px;display:none">Неверный логин или пароль</p>
+  </div>
+</div>
+
+<div class="app" id="appRoot" style="display:none">
   <div class="sidebar">
     <div class="logo"><b>СКЛАД/42</b><span>WMS</span></div>
     <div class="nav-group-label">Склад</div>
@@ -469,7 +482,7 @@
     <div class="nav-item" data-tab="storage"><span class="num">03</span>Хранение</div>
     <div class="nav-item" data-tab="supplies"><span class="num">04</span>Плановые поставки</div>
     <div class="nav-item" data-tab="employees"><span class="num">05</span>Сотрудники</div>
-    <div class="sidebar-foot">СКЛАД/42 · ОБЩИЙ ДОСТУП</div>
+    <div class="sidebar-foot" id="sidebarFoot">СКЛАД/42 · WMS</div>
   </div>
 
   <div class="main">
@@ -650,6 +663,7 @@ let activeSupplyId = null;
 let roles = []; // загружается из базы (loadRoles)
 let employees = []; // загружается из базы (loadEmployees)
 let employeeCounter = 3;
+let currentUser = null;
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
 let editingRoleId = null;
@@ -2306,6 +2320,43 @@ document.getElementById('supplySearch').addEventListener('input', renderSupplies
 
 
 // ---------- EMPLOYEES & ROLES ----------
+// ---------- AUTH ----------
+function enterApp(emp){
+  currentUser = emp;
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appRoot').style.display = 'flex';
+  const role = roles.find(r=>r.id===emp.roleId);
+  document.getElementById('sidebarFoot').innerHTML = `
+    <div class="sidebar-user">
+      <div class="name">${emp.name}</div>
+      <div class="role">${role?role.name:'—'}</div>
+    </div>
+    <button class="btn btn-ghost" style="width:100%;justify-content:center;padding:6px" onclick="logout()">Выйти</button>
+  `;
+}
+function attemptLogin(){
+  const login = document.getElementById('loginInput').value.trim();
+  const password = document.getElementById('passwordInput').value;
+  const errorEl = document.getElementById('loginError');
+  const emp = employees.find(e=>e.login.toLowerCase()===login.toLowerCase() && e.active);
+  if(!emp || emp.pin !== password){
+    errorEl.style.display = 'block';
+    return;
+  }
+  errorEl.style.display = 'none';
+  try{ localStorage.setItem('sklad42_session', emp.id); }catch(e){}
+  enterApp(emp);
+}
+function logout(){
+  currentUser = null;
+  try{ localStorage.removeItem('sklad42_session'); }catch(e){}
+  document.getElementById('appRoot').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('loginInput').value = '';
+  document.getElementById('passwordInput').value = '';
+  document.getElementById('loginError').style.display = 'none';
+}
+
 function setEmployeesView(view){ currentEmployeesView = view; renderEmployeesTab(); }
 function openNewEmployeeForm(){ showingNewEmployeeForm = true; renderEmployeesTab(); }
 function closeNewEmployeeForm(){ showingNewEmployeeForm = false; renderEmployeesTab(); }
@@ -2370,7 +2421,7 @@ function renderEmployeesTab(){
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
         <input class="search" id="newEmpName" placeholder="ФИО" style="flex:1;min-width:180px">
         <input class="search" id="newEmpLogin" placeholder="Логин" style="width:150px">
-        <input class="search" id="newEmpPin" placeholder="PIN (по умолч. 1234)" style="width:170px">
+        <input class="search" id="newEmpPin" placeholder="Пароль (по умолч. 1234)" style="width:170px">
         <select class="search" id="newEmpRole" style="width:200px">
           ${roles.map(r=>`<option value="${r.id}">${r.name}</option>`).join('')}
         </select>
@@ -2528,8 +2579,20 @@ async function initApp(){
   const clientViewId = urlParams.get('client');
   if(clientViewId){
     const cv = clients.find(c=>c.id===clientViewId);
-    if(cv){ enterClientViewMode(cv); return; }
+    if(cv){
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('appRoot').style.display = 'flex';
+      enterClientViewMode(cv);
+      return;
+    }
     toast('Ссылка недействительна — клиент не найден');
+  }
+
+  let savedSessionId = null;
+  try{ savedSessionId = localStorage.getItem('sklad42_session'); }catch(e){}
+  if(savedSessionId){
+    const emp = employees.find(e=>e.id===savedSessionId && e.active);
+    if(emp) enterApp(emp);
   }
 
   let savedTab = null;
