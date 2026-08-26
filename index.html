@@ -1796,15 +1796,56 @@ function editWarehouseInfo(){
   try{ localStorage.setItem('sklad42_warehouse_info', JSON.stringify({name, inn: inn||''})); }catch(e){}
   toast('Реквизиты сохранены в этом браузере');
 }
-function generateSupplyAct(id){
+function buildActRows(s){
+  return s.items.map((it, idx)=>({
+    n: idx+1, sku: it.sku, name: it.name,
+    plan: it.qty, fact: it.receivedQty, diff: it.receivedQty - it.qty
+  }));
+}
+function actSummary(rows){
+  return {
+    totalPlan: rows.reduce((a,r)=>a+r.plan,0),
+    totalFact: rows.reduce((a,r)=>a+r.fact,0),
+    mismatches: rows.filter(r=>r.diff!==0).length
+  };
+}
+function saveActNumber(id){
   const s = supplies.find(x=>x.id===id);
-  const client = clients.find(c=>c.id===s.clientId) || {name:s.clientName, contact:''};
-  const priceInput = document.getElementById('actPrice-'+id);
-  const numberInput = document.getElementById('actNumber-'+id);
-  const price = Math.max(0, parseFloat(priceInput.value) || 0);
-  const actNumber = numberInput.value.trim() || s.id;
-  const totalReceived = s.items.reduce((a,i)=>a+i.receivedQty,0);
-  const total = (price*totalReceived).toFixed(2);
+  const actNumber = document.getElementById('actNumber-'+id).value.trim() || id;
+  s.actNumber = actNumber;
+  sb.from('supplies').update({act_number: actNumber}).eq('id', id).then(({error})=>{
+    if(error) console.error(error);
+  });
+  return actNumber;
+}
+function downloadSupplyActExcel(id){
+  const s = supplies.find(x=>x.id===id);
+  const actNumber = saveActNumber(id);
+  const rows = buildActRows(s);
+  const summary = actSummary(rows);
+  const today = new Date().toLocaleDateString('ru-RU');
+
+  const data = [
+    [`Акт приёмки № ${actNumber} от ${today}`],
+    [`Поставка: ${s.id}`],
+    [`Клиент: ${s.clientName}`],
+    [],
+    ['№','Артикул','Наименование','План, шт','Факт, шт','Расхождение'],
+    ...rows.map(r=>[r.n, r.sku, r.name, r.plan, r.fact, r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—']),
+    [],
+    ['','','Итого:', summary.totalPlan, summary.totalFact, summary.mismatches ? `Расхождений: ${summary.mismatches} поз.` : 'Без расхождений']
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:4},{wch:14},{wch:32},{wch:10},{wch:10},{wch:18}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Акт приёмки');
+  XLSX.writeFile(wb, `Akt_priemki_${actNumber}.xlsx`);
+}
+function generateSupplyActPdf(id){
+  const s = supplies.find(x=>x.id===id);
+  const actNumber = saveActNumber(id);
+  const rows = buildActRows(s);
+  const summary = actSummary(rows);
 
   let wh = getWarehouseInfo();
   if(!wh.name){
@@ -1819,48 +1860,54 @@ function generateSupplyAct(id){
   const win = window.open('', '_blank');
   if(!win){ toast('Браузер заблокировал открытие окна — разрешите всплывающие окна для этого сайта и попробуйте снова'); return; }
   win.document.write(`
-    <!DOCTYPE html><html><head><meta charset="utf-8"><title>Акт ${actNumber}</title>
+    <!DOCTYPE html><html><head><meta charset="utf-8"><title>Акт приёмки ${actNumber}</title>
     <style>
-      body{font-family:Arial,sans-serif;padding:40px;color:#111;max-width:800px;margin:0 auto;line-height:1.5}
+      body{font-family:Arial,sans-serif;padding:40px;color:#111;max-width:850px;margin:0 auto;line-height:1.5}
       h1{text-align:center;font-size:18px;margin-bottom:4px}
       .sub{text-align:center;color:#555;margin-bottom:24px}
       table{width:100%;border-collapse:collapse;margin-top:16px}
-      th,td{border:1px solid #333;padding:8px;font-size:13px;text-align:left}
+      th,td{border:1px solid #333;padding:7px;font-size:12px;text-align:left}
       th{background:#f2f2f2}
       td.num,th.num{text-align:right}
+      tr.mismatch td{background:#fdecea;font-weight:bold;color:#a12a1f}
+      .summary{margin-top:16px;font-size:13px}
+      .summary b.ok{color:#2f7d4f}
+      .summary b.bad{color:#a12a1f}
       .sign{margin-top:60px;display:flex;justify-content:space-between;gap:40px}
       .sign > div{width:100%}
       .line{border-bottom:1px solid #333;margin-top:44px;margin-bottom:4px}
       .small{font-size:11px;color:#666}
       @media print{ body{padding:20px} }
     </style></head><body>
-      <h1>АКТ №${actNumber}<br>оказанных услуг</h1>
+      <h1>АКТ ПРИЁМКИ №${actNumber}</h1>
       <div class="sub">${dateStr}</div>
-      <p><b>Исполнитель:</b> ${wh.name}${wh.inn?` (ИНН ${wh.inn})`:''}</p>
-      <p><b>Заказчик:</b> ${client.name}${client.contact && client.contact!=='—' ? ', тел. '+client.contact : ''}</p>
-      <p>Исполнитель оказал, а Заказчик принял следующие услуги по поставке № ${s.id}:</p>
+      <p><b>Исполнитель (склад):</b> ${wh.name}${wh.inn?` (ИНН ${wh.inn})`:''}</p>
+      <p><b>Клиент:</b> ${s.clientName}</p>
+      <p><b>Поставка:</b> № ${s.id}</p>
       <table>
-        <thead><tr><th>№</th><th>Наименование услуги</th><th class="num">Кол-во</th><th>Ед.</th><th class="num">Цена, ₽</th><th class="num">Сумма, ₽</th></tr></thead>
+        <thead><tr><th>№</th><th>Артикул</th><th>Наименование</th><th class="num">План, шт</th><th class="num">Факт, шт</th><th class="num">Расхождение</th></tr></thead>
         <tbody>
-          <tr><td>1</td><td>Приёмка и обработка товара</td><td class="num">${totalReceived}</td><td>шт</td><td class="num">${price.toFixed(2)}</td><td class="num">${total}</td></tr>
+          ${rows.map(r=>`
+            <tr class="${r.diff!==0?'mismatch':''}">
+              <td>${r.n}</td><td>${r.sku}</td><td>${r.name}</td>
+              <td class="num">${r.plan}</td><td class="num">${r.fact}</td>
+              <td class="num">${r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—'}</td>
+            </tr>
+          `).join('')}
         </tbody>
-        <tfoot><tr><td colspan="5" style="text-align:right"><b>Итого:</b></td><td class="num"><b>${total} ₽</b></td></tr></tfoot>
       </table>
-      <p style="margin-top:16px">Услуги оказаны полностью и в срок. Претензий по объёму, качеству и срокам оказания услуг Заказчик не имеет.</p>
+      <div class="summary">
+        Итого по плану: <b>${summary.totalPlan} шт</b> · Итого принято: <b>${summary.totalFact} шт</b><br>
+        ${summary.mismatches ? `<b class="bad">Выявлены расхождения по ${summary.mismatches} позиции(ям) — см. выделенные строки</b>` : `<b class="ok">Расхождений не выявлено, товар принят полностью в соответствии с планом</b>`}
+      </div>
       <div class="sign">
-        <div>Исполнитель<div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
-        <div>Заказчик<div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
+        <div>Принял (склад)<div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
+        <div>Сдал (поставщик)<div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
       </div>
       <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 300); };<\/script>
     </body></html>
   `);
   win.document.close();
-
-  s.actNumber = actNumber;
-  s.actPricePerUnit = price;
-  sb.from('supplies').update({act_number: actNumber, act_price: price}).eq('id', id).then(({error})=>{
-    if(error) console.error(error);
-  });
 }
 function renderSupplyReceivingPanel(s){
   if(s.status === 'received'){
@@ -1894,15 +1941,16 @@ function renderSupplyReceivingPanel(s){
         </div>
         <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line)">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-            <div class="eyebrow">Акт оказания услуг</div>
+            <div class="eyebrow">Акт приёмки</div>
             <button class="btn btn-ghost" style="padding:4px 8px;font-size:11px" onclick="editWarehouseInfo()">Реквизиты исполнителя</button>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-            <input class="search mono" id="actNumber-${s.id}" placeholder="№ акта" value="${s.actNumber || s.id}" style="width:140px">
-            <input class="search mono" id="actPrice-${s.id}" type="number" min="0" step="0.1" placeholder="Цена за ед., ₽" value="${s.actPricePerUnit||''}" style="width:170px">
-            <span style="font-size:12px;color:var(--ink-faint)">× ${totalReceived} шт принято</span>
+            <input class="search mono" id="actNumber-${s.id}" placeholder="№ акта" value="${s.actNumber || s.id}" style="width:160px">
           </div>
-          <button class="btn btn-accent" onclick="generateSupplyAct('${s.id}')">📄 Сформировать акт (PDF)</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-ghost" onclick="downloadSupplyActExcel('${s.id}')">📊 Скачать Excel</button>
+            <button class="btn btn-accent" onclick="generateSupplyActPdf('${s.id}')">📄 Скачать PDF</button>
+          </div>
         </div>
       </div>
     `;
