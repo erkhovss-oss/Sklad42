@@ -684,12 +684,25 @@ function ensureCellAssigned(item){
 function announceCell(cellNumber){
   if(!soundEnabled || !cellNumber) return;
   try{
-    window.speechSynthesis.cancel();
+    if(window.speechSynthesis.speaking || window.speechSynthesis.pending){
+      window.speechSynthesis.cancel();
+    }
     const utter = new SpeechSynthesisUtterance(String(cellNumber));
     utter.lang = 'ru-RU';
     utter.rate = 1;
     window.speechSynthesis.speak(utter);
   }catch(e){ /* синтез речи недоступен в этом браузере — не критично */ }
+}
+// Профилактика известного зависания speechSynthesis в Chrome при долгой работе:
+// если движок простаивает, периодически сбрасываем его внутреннюю очередь.
+if('speechSynthesis' in window){
+  setInterval(()=>{
+    try{
+      if(!window.speechSynthesis.speaking && !window.speechSynthesis.pending){
+        window.speechSynthesis.cancel();
+      }
+    }catch(e){}
+  }, 12000);
 }
 
 function switchTab(tab){
