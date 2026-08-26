@@ -674,6 +674,11 @@ function toggleSound(){
 }
 let recentReceivingActions = [];
 let lastScanInfo = null;
+let itemsListCollapsed = false;
+function toggleItemsListCollapse(){
+  itemsListCollapsed = !itemsListCollapsed;
+  renderSuppliesTableWrap();
+}
 function pushRecentAction(entry){
   recentReceivingActions.unshift({...entry, time: new Date()});
   if(recentReceivingActions.length > 20) recentReceivingActions.length = 20;
@@ -2116,7 +2121,11 @@ function renderSupplyReceivingPanel(s){
           </div>
         </div>
         <div class="panel" style="flex:1;min-width:280px">
-          ${sortedItems.map(it=>{
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer" onclick="toggleItemsListCollapse()">
+            <h3 style="font-size:14px;color:var(--ink-soft)">Позиции поставки (${s.items.length})</h3>
+            <span style="font-size:12px;color:var(--ink-faint)">${itemsListCollapsed ? 'Развернуть ▼' : 'Свернуть ▲'}</span>
+          </div>
+          ${itemsListCollapsed ? '' : sortedItems.map(it=>{
             const done = it.receivedQty >= it.qty;
             const over = it.receivedQty > it.qty;
             return `<div class="pick-row ${done?'done':''}" ${over?'style="background:var(--warn-bg)"':''}>
