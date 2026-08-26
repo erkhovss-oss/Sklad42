@@ -484,7 +484,7 @@
     <div class="nav-item" data-tab="clients"><span class="num">02</span>Клиенты</div>
     <div class="nav-item" data-tab="storage"><span class="num">03</span>Хранение</div>
     <div class="nav-item" data-tab="supplies"><span class="num">04</span>Плановые поставки</div>
-    <div class="nav-item" data-tab="outbound"><span class="num">05</span>Поставка товара</div>
+    <div class="nav-item" data-tab="outbound"><span class="num">05</span>Поставка на склад</div>
     <div class="nav-item" data-tab="employees"><span class="num">06</span>Сотрудники</div>
     <div class="sidebar-foot" id="sidebarFoot">СКЛАД/42 · WMS</div>
   </div>
@@ -606,7 +606,7 @@
       <section class="section" id="tab-outbound">
         <div class="page-head">
           <div>
-            <h1>Поставка товара</h1>
+            <h1>Поставка на склад</h1>
             <p>Отправка товара клиентов на партнёрские региональные склады фулфилмента</p>
           </div>
         </div>
@@ -1864,6 +1864,14 @@ function renderOutboundCreatePanel(){
       </div>
 
       ${client ? `
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;padding:12px;background:var(--bg);border-radius:10px">
+          <span style="font-size:12px;color:var(--ink-soft);margin-right:2px">Или сразу списком:</span>
+          <label class="btn btn-ghost" style="cursor:pointer;margin:0">
+            ⬆ Загрузить Excel
+            <input type="file" accept=".xlsx,.xls" style="display:none" onchange="handleOutboundExcelUpload(this)">
+          </label>
+          <button class="btn btn-ghost" onclick="downloadOutboundTemplate()">⬇ Шаблон (ШК / Кол-во)</button>
+        </div>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
           <select class="search" id="outboundItemSelect" style="width:280px">
             ${clientItems.length ? clientItems.map(i=>`<option value="${i.sku}">${i.sku} — ${i.name} (доступно ${i.qty})</option>`).join('') : `<option value="">нет товаров в наличии</option>`}
@@ -1913,6 +1921,63 @@ function addDraftOutboundItem(){
 function removeDraftOutboundItem(sku){
   draftOutboundItems = draftOutboundItems.filter(d=>d.sku!==sku);
   renderOutboundCreatePanel();
+}
+function downloadOutboundTemplate(){
+  const data = [
+    ['ШК','Кол-во'],
+    ['2460001112223',5],
+    ['2460004445556',10]
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:18},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Поставка на склад');
+  XLSX.writeFile(wb, 'shablon_postavka_na_sklad.xlsx');
+}
+function handleOutboundExcelUpload(inputEl){
+  const client = clients.find(c=>c.id===draftOutboundClientId);
+  if(!client){ toast('Сначала выберите клиента'); inputEl.value=''; return; }
+  const file = inputEl.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      const workbook = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+      let added = 0, skipped = 0;
+      for(let i=1;i<rows.length;i++){
+        const row = rows[i];
+        if(!row || !row.length) continue;
+        const barcode = String(row[0]||'').trim();
+        const qty = parseInt(row[1]) || 0;
+        if(!barcode || qty<=0) continue;
+        const item = inventory.find(x=>x.barcode===barcode && x.client===client.name);
+        if(!item){ skipped++; continue; }
+        const sku = item.sku;
+        const already = draftOutboundItems.find(d=>d.sku===sku);
+        const usedQty = already ? already.qty : 0;
+        if(usedQty + qty > item.qty){
+          toast(`«${item.name}»: на складе только ${item.qty} шт, взято максимум возможное`);
+          const addQty = Math.max(0, item.qty - usedQty);
+          if(addQty<=0){ skipped++; continue; }
+          if(already) already.qty += addQty; else draftOutboundItems.push({sku, name:item.name, qty:addQty, barcode:item.barcode||'', cell:item.cell||null});
+          added++;
+          continue;
+        }
+        if(already) already.qty += qty;
+        else draftOutboundItems.push({sku, name:item.name, qty, barcode:item.barcode||'', cell:item.cell||null});
+        added++;
+      }
+      if(added===0){ toast('Не найдено подходящих позиций в остатках этого клиента — проверьте штрихкоды'); }
+      else toast(`Загружено из файла: ${added} поз.${skipped?`, пропущено (штрихкод не найден у клиента/нет остатка): ${skipped}`:''}`);
+      renderOutboundCreatePanel();
+    }catch(err){
+      toast('Не удалось прочитать файл — проверьте формат Excel');
+    }
+    inputEl.value = '';
+  };
+  reader.readAsArrayBuffer(file);
 }
 function createOutboundSupply(){
   const client = clients.find(c=>c.id===draftOutboundClientId);
