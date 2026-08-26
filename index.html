@@ -647,6 +647,29 @@ function toggleSound(){
   document.querySelectorAll('.sound-toggle').forEach(btn=>{ btn.textContent = soundEnabled ? '🔊 Звук' : '🔇 Звук'; });
   if(soundEnabled) playBeep('ok');
 }
+let recentReceivingActions = [];
+function pushRecentAction(entry){
+  recentReceivingActions.unshift({...entry, time: new Date()});
+  if(recentReceivingActions.length > 20) recentReceivingActions.length = 20;
+}
+function renderRecentActionsFeed(limit){
+  limit = limit || 6;
+  const items = recentReceivingActions.slice(0, limit);
+  if(!items.length) return `<p style="font-size:12px;color:var(--ink-faint);margin:0">Пока нет действий в этой сессии</p>`;
+  return items.map(a=>{
+    const hh = a.time.getHours().toString().padStart(2,'0');
+    const mm = a.time.getMinutes().toString().padStart(2,'0');
+    const ss = a.time.getSeconds().toString().padStart(2,'0');
+    return `<div class="pick-row" style="padding:8px 0;background:transparent">
+      <div>
+        <div class="sku-name" style="font-size:13px">${a.name}</div>
+        <div class="sku-code mono">${hh}:${mm}:${ss}${a.cell?` · ячейка ${a.cell}`:''}${a.note?` · ${a.note}`:''}</div>
+      </div>
+      <div class="qty-need" style="color:${a.qty>=0?'var(--ok)':'var(--warn)'};font-weight:600">${a.qty>=0?'+':''}${a.qty} шт</div>
+    </div>`;
+  }).join('');
+}
+
 function playBeep(type){
   if(!soundEnabled) return;
   try{
@@ -1068,15 +1091,18 @@ function renderReceiving(mode){
           <h3 style="font-size:15px;color:var(--ink-soft)">Принято за смену</h3>
           <div class="mono" style="font-size:13px;color:var(--ink-soft)">+${totalQty} шт · ${receivingLog.length} операций</div>
         </div>
-        ${receivingLog.length ? receivingLog.slice().reverse().map(r=>`
+        ${receivingLog.length ? receivingLog.slice().reverse().map(r=>{
+          const invItem = inventory.find(i=>i.sku===r.sku);
+          const cellInfo = invItem && invItem.cell ? ` · яч. ${invItem.cell}` : '';
+          return `
           <div class="pick-row">
             <div>
               <div class="sku-name">${r.name}</div>
-              <div class="sku-code mono">${r.sku} · ${r.time}</div>
+              <div class="sku-code mono">${r.sku} · ${r.time}${cellInfo}</div>
             </div>
             <div class="qty-need" style="color:var(--ok);font-weight:600">+${r.qty} шт</div>
           </div>
-        `).join('') : `<div class="empty" style="padding:40px"><span class="eyebrow">Пока пусто</span>Первая приёмка появится здесь</div>`}
+        `;}).join('') : `<div class="empty" style="padding:40px"><span class="eyebrow">Пока пусто</span>Первая приёмка появится здесь</div>`}
       </div>
     </div>
   `;
@@ -1097,6 +1123,7 @@ function renderReceiving(mode){
         const cell = ensureCellAssigned(item);
         syncInventoryRow(item.sku);
         announceCell(cell);
+        pushRecentAction({name:item.name, sku:item.sku, qty:1, cell});
         toast(`+1 шт: ${item.name} → Ячейка ${cell}`);
         renderReceiving('scan');
       } else {
@@ -1110,6 +1137,7 @@ function renderReceiving(mode){
           syncInventoryRow(sku);
           logReceipt(sku, name, 1);
           announceCell(cell);
+          pushRecentAction({name, sku, qty:1, cell, note:'новый товар'});
           toast(`Новый товар добавлен: ${name} → Ячейка ${cell}`);
         }
         renderReceiving('scan');
@@ -1133,11 +1161,13 @@ function submitManualReceipt(){
     if(inventory.find(i=>i.sku===code)){ toast('Такой артикул уже существует'); return; }
     inventory.push({sku:code, name, qty});
     logReceipt(code, name, qty);
+    pushRecentAction({name, sku:code, qty, note:'новый товар, вручную'});
     toast(`Новый товар «${name}» принят: ${qty} шт`);
   } else {
     const item = inventory.find(i=>i.sku===select.value);
     item.qty += qty;
     logReceipt(item.sku, item.name, qty);
+    pushRecentAction({name:item.name, sku:item.sku, qty, note:'вручную'});
     toast(`Принято: ${item.name} +${qty} шт`);
   }
   renderReceiving('manual');
@@ -1765,6 +1795,7 @@ function adjustSupplyItem(supplyId, sku, delta){
   inv.qty += diff;
   if(diff>0) logReceipt(sku, item.name, diff, supply.clientName);
   else logMovement(sku, item.name, diff, 'Корректировка приёмки поставки', supply.clientName);
+  pushRecentAction({name:item.name, sku, qty:diff, cell:inv.cell, note:'вручную'});
   if(diff>0 && item.receivedQty>item.qty && !wasOver) toast(`«${item.name}»: принято больше, чем заказано (${item.receivedQty} из ${item.qty})`);
   renderSuppliesTableWrap();
   sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supplyId).eq('sku', sku).then(({error})=>{
@@ -1996,6 +2027,10 @@ function renderSupplyReceivingPanel(s){
           <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="margin-top:8px;width:100%">
           <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Сканируйте штрихкод товара из этой поставки — сразу услышите номер ячейки (голосом) и увидите его в подсказке. Принять можно больше или меньше плана — расхождение зафиксируется при завершении.</p>
           <button class="btn btn-primary" style="margin-top:12px;width:100%;justify-content:center" onclick="finishSupplyReceiving('${s.id}')">Завершить приёмку</button>
+          <div class="eyebrow" style="margin-top:18px;margin-bottom:4px">Последние действия</div>
+          <div style="max-height:220px;overflow-y:auto">
+            ${renderRecentActionsFeed(8)}
+          </div>
         </div>
         <div class="panel" style="flex:1;min-width:280px">
           ${sortedItems.map(it=>{
@@ -2153,6 +2188,7 @@ function renderSuppliesTableWrap(){
         if(item.receivedQty>item.qty && !wasOver){ playBeep('warn'); toast(`«${item.name}»: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
         else { playBeep('ok'); toast(`«${item.name}» → Ячейка ${cell}`); }
         announceCell(cell);
+        pushRecentAction({name:item.name, sku, qty:1, cell, note: (item.receivedQty>item.qty && !wasOver) ? 'больше плана' : ''});
         renderSuppliesTableWrap();
         sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).then(({error})=>{
           if(error) console.error(error);
