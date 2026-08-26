@@ -463,13 +463,16 @@
 <div id="loginScreen">
   <div class="login-card">
     <div class="logo" style="padding:0 0 22px 0"><b>СКЛАД/42</b><span>WMS</span></div>
-    <div class="eyebrow" style="margin-bottom:16px">Вход в личный кабинет</div>
-    <div class="eyebrow" style="margin-bottom:6px;color:var(--ink-soft)">Логин</div>
-    <input class="search" id="loginInput" placeholder="Логин" style="width:100%;margin-bottom:14px" autocomplete="username">
-    <div class="eyebrow" style="margin-bottom:6px;color:var(--ink-soft)">Пароль</div>
-    <input class="search" id="passwordInput" type="password" placeholder="Пароль" style="width:100%;margin-bottom:16px" autocomplete="current-password" onkeydown="if(event.key==='Enter') attemptLogin()">
-    <button class="btn btn-accent" style="width:100%;justify-content:center" onclick="attemptLogin()">Войти</button>
-    <p id="loginError" style="font-size:12px;color:var(--warn);margin-top:12px;display:none">Неверный логин или пароль</p>
+    <div id="loginLoading" style="text-align:center;padding:24px 0;color:var(--ink-faint);font-size:13px">Загрузка…</div>
+    <div id="loginFormWrap" style="display:none">
+      <div class="eyebrow" style="margin-bottom:16px">Вход в личный кабинет</div>
+      <div class="eyebrow" style="margin-bottom:6px;color:var(--ink-soft)">Логин</div>
+      <input class="search" id="loginInput" placeholder="Логин" style="width:100%;margin-bottom:14px" autocomplete="username">
+      <div class="eyebrow" style="margin-bottom:6px;color:var(--ink-soft)">Пароль</div>
+      <input class="search" id="passwordInput" type="password" placeholder="Пароль" style="width:100%;margin-bottom:16px" autocomplete="current-password" onkeydown="if(event.key==='Enter') attemptLogin()">
+      <button class="btn btn-accent" style="width:100%;justify-content:center" onclick="attemptLogin()">Войти</button>
+      <p id="loginError" style="font-size:12px;color:var(--warn);margin-top:12px;display:none">Неверный логин или пароль</p>
+    </div>
   </div>
 </div>
 
@@ -2321,6 +2324,12 @@ document.getElementById('supplySearch').addEventListener('input', renderSupplies
 
 // ---------- EMPLOYEES & ROLES ----------
 // ---------- AUTH ----------
+function showLoginForm(){
+  const loading = document.getElementById('loginLoading');
+  const form = document.getElementById('loginFormWrap');
+  if(loading) loading.style.display = 'none';
+  if(form) form.style.display = 'block';
+}
 function enterApp(emp){
   currentUser = emp;
   document.getElementById('loginScreen').style.display = 'none';
@@ -2352,6 +2361,7 @@ function logout(){
   try{ localStorage.removeItem('sklad42_session'); }catch(e){}
   document.getElementById('appRoot').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'flex';
+  showLoginForm();
   document.getElementById('loginInput').value = '';
   document.getElementById('passwordInput').value = '';
   document.getElementById('loginError').style.display = 'none';
@@ -2559,6 +2569,7 @@ function enterClientViewMode(client){
 async function initApp(){
   if(!sb){
     toast('Не удалось загрузить библиотеку базы данных. Проверьте интернет и обновите страницу (F5)');
+    showLoginForm();
     return;
   }
   try{
@@ -2590,10 +2601,12 @@ async function initApp(){
 
   let savedSessionId = null;
   try{ savedSessionId = localStorage.getItem('sklad42_session'); }catch(e){}
+  let autoLoggedIn = false;
   if(savedSessionId){
     const emp = employees.find(e=>e.id===savedSessionId && e.active);
-    if(emp) enterApp(emp);
+    if(emp){ enterApp(emp); autoLoggedIn = true; }
   }
+  if(!autoLoggedIn) showLoginForm();
 
   let savedTab = null;
   try{ savedTab = localStorage.getItem('sklad42_active_tab'); }catch(e){}
