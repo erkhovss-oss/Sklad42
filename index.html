@@ -977,22 +977,28 @@ function confirmDelete(sku){
 }
 function openHistory(sku){ historySku = historySku===sku ? null : sku; editingSku=null; writeOffSku=null; deletingSku=null; renderInventory(); }
 function closeHistory(){ historySku = null; renderInventory(); }
-function logMovement(sku, name, delta, type){
+function findInventoryItem(sku, client){
+  if(client !== undefined){
+    return inventory.find(i=>i.sku===sku && (i.client||'')===(client||''));
+  }
+  return inventory.find(i=>i.sku===sku);
+}
+function logMovement(sku, name, delta, type, client){
   const now = new Date();
   const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   movementLog.push({sku, name, delta, type, time});
   sb.from('movement_log').insert({sku, name, delta, type})
     .then(({error})=>{ if(error) console.error(error); })
     .catch(e=>{ console.error(e); toast('Нет связи с базой — запись истории не сохранилась'); });
-  syncInventoryRow(sku);
+  syncInventoryRow(sku, client);
 }
-async function syncInventoryRow(sku){
-  const item = inventory.find(i=>i.sku===sku);
+async function syncInventoryRow(sku, client){
+  const item = findInventoryItem(sku, client);
   if(!item) return;
   try{
     const { error } = await sb.from('inventory').upsert({
       sku: item.sku, name: item.name, qty: item.qty,
-      client_name: item.client || null,
+      client_name: item.client || '',
       vendor_code: item.vendorCode || null,
       barcode: item.barcode || null,
       dims: item.dims || null,
@@ -1124,14 +1130,14 @@ function submitManualReceipt(){
   renderReceiving('manual');
 }
 
-function logReceipt(sku, name, qty){
+function logReceipt(sku, name, qty, client){
   const now = new Date();
   const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   receivingLog.push({sku, name, qty, time});
   sb.from('receiving_log').insert({sku, name, qty})
     .then(({error})=>{ if(error) console.error(error); })
     .catch(e=>{ console.error(e); toast('Нет связи с базой — запись приёмки не сохранилась'); });
-  logMovement(sku, name, qty, 'Приёмка');
+  logMovement(sku, name, qty, 'Приёмка', client);
 }
 
 // ---------- CLIENTS ----------
@@ -1211,8 +1217,8 @@ async function confirmDeleteClient(id){
     const retry = await sb.from('clients').delete().eq('id', id);
     if(retry.error){ console.error(retry.error); toast('Не удалось удалить клиента в базе'); return; }
   }
-  await sb.from('inventory').update({client_name:null}).eq('client_name', c.name);
-  inventory.forEach(i=>{ if(i.client===c.name) i.client = null; });
+  await sb.from('inventory').update({client_name:''}).eq('client_name', c.name);
+  inventory.forEach(i=>{ if(i.client===c.name) i.client = ''; });
   supplies.forEach(s=>{ if(s.clientId===id) s.clientId = null; });
   storageHistoryRows = storageHistoryRows.filter(r=>r.client_id!==id);
   clients = clients.filter(x=>x.id!==id);
@@ -1738,14 +1744,14 @@ function adjustSupplyItem(supplyId, sku, delta){
   if(diff===0) return;
   const wasOver = item.receivedQty > item.qty;
   item.receivedQty = newVal;
-  let inv = inventory.find(i=>i.sku===sku);
+  let inv = inventory.find(i=>i.sku===sku && (i.client||'')===(supply.clientName||''));
   if(!inv){
     inv = {sku, name: item.name, qty:0, client: supply.clientName};
     inventory.push(inv);
   }
   inv.qty += diff;
-  if(diff>0) logReceipt(sku, item.name, diff);
-  else logMovement(sku, item.name, diff, 'Корректировка приёмки поставки');
+  if(diff>0) logReceipt(sku, item.name, diff, supply.clientName);
+  else logMovement(sku, item.name, diff, 'Корректировка приёмки поставки', supply.clientName);
   if(diff>0 && item.receivedQty>item.qty && !wasOver) toast(`«${item.name}»: принято больше, чем заказано (${item.receivedQty} из ${item.qty})`);
   renderSuppliesTableWrap();
   sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supplyId).eq('sku', sku).then(({error})=>{
@@ -2057,15 +2063,15 @@ function renderSuppliesTableWrap(){
         const sku = item.sku;
         const wasOver = item.receivedQty > item.qty;
         item.receivedQty++;
-        let inv = inventory.find(i=>i.sku===sku);
+        let inv = inventory.find(i=>i.sku===sku && (i.client||'')===(supply.clientName||''));
         if(!inv){
           inv = {sku, name: item.name, qty:0, client: supply.clientName, barcode: item.barcode||code};
           inventory.push(inv);
         }
         inv.qty++;
-        logReceipt(sku, item.name, 1);
+        logReceipt(sku, item.name, 1, supply.clientName);
         const cell = ensureCellAssigned(inv);
-        syncInventoryRow(sku);
+        syncInventoryRow(sku, supply.clientName);
         if(item.receivedQty>item.qty && !wasOver){ playBeep('warn'); toast(`«${item.name}»: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
         else { playBeep('ok'); toast(`«${item.name}» → Ячейка ${cell}`); }
         announceCell(cell);
