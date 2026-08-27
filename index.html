@@ -678,6 +678,7 @@ let draftSupplyClientId = '';
 let draftSupplyFileName = '';
 let currentSuppliesView = 'planned';
 let activeSupplyId = null;
+let deletingSupplyId = null;
 
 let roles = []; // загружается из базы (loadRoles)
 let employees = []; // загружается из базы (loadEmployees)
@@ -2470,6 +2471,31 @@ function generateSupplyActPdf(id){
   `);
   win.document.close();
 }
+function renderSupplyDeleteControl(s){
+  if(deletingSupplyId === s.id){
+    return `
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 10px;background:var(--warn-bg);border-radius:8px">
+        <span style="font-size:12px;color:var(--warn)">Удалить поставку ${s.id} без возможности восстановить?</span>
+        <button class="btn btn-accent" style="padding:5px 10px" onclick="confirmDeleteSupply('${s.id}')">Да, удалить</button>
+        <button class="btn btn-ghost" style="padding:5px 10px" onclick="cancelDeleteSupply()">Отмена</button>
+      </div>
+    `;
+  }
+  return `<button class="btn btn-ghost" style="padding:5px 10px;color:var(--warn)" onclick="openDeleteSupply('${s.id}')">Удалить поставку</button>`;
+}
+function openDeleteSupply(id){ deletingSupplyId = id; renderSuppliesTableWrap(); }
+function cancelDeleteSupply(){ deletingSupplyId = null; renderSuppliesTableWrap(); }
+function confirmDeleteSupply(id){
+  const s = supplies.find(x=>x.id===id);
+  supplies = supplies.filter(x=>x.id!==id);
+  deletingSupplyId = null;
+  if(activeSupplyId===id) activeSupplyId = null;
+  toast(`Поставка ${id} удалена. Уже принятый по ней товар на складе остался как есть.`);
+  renderSuppliesTableWrap();
+  sb.from('supplies').delete().eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить поставку в базе'); }
+  });
+}
 function renderSupplyReceivingPanel(s){
   if(s.status === 'received'){
     const totalQty = s.items.reduce((a,i)=>a+i.qty,0);
@@ -2485,6 +2511,7 @@ function renderSupplyReceivingPanel(s){
             <button class="btn btn-ghost" style="padding:5px 10px" onclick="saveUpdNumber('${s.id}')">Сохранить</button>
           </div>
         </div>
+        <div style="margin-bottom:14px">${renderSupplyDeleteControl(s)}</div>
         <div class="stat-row" style="margin-bottom:14px">
           <div class="stat"><div class="val">${totalQty}</div><div class="lbl">Заказано</div></div>
           <div class="stat"><div class="val">${totalReceived}</div><div class="lbl">Принято</div></div>
@@ -2529,6 +2556,7 @@ function renderSupplyReceivingPanel(s){
   const remaining = Math.max(0, totalPlan - totalFact);
   return `
     <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:12px">${renderSupplyDeleteControl(s)}</div>
       ${renderScanScoreboard()}
       <div class="stat-row" style="margin-bottom:16px">
         <div class="stat"><div class="val" style="color:var(--ok)">${totalFact}</div><div class="lbl">Принято</div></div>
