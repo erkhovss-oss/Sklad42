@@ -781,6 +781,36 @@ function undoLastScan(){
   renderSuppliesTableWrap();
 }
 
+const US_LAYOUT_MAP = {
+  Digit0:['0',')'], Digit1:['1','!'], Digit2:['2','@'], Digit3:['3','#'], Digit4:['4','$'],
+  Digit5:['5','%'], Digit6:['6','^'], Digit7:['7','&'], Digit8:['8','*'], Digit9:['9','('],
+  KeyA:['a','A'], KeyB:['b','B'], KeyC:['c','C'], KeyD:['d','D'], KeyE:['e','E'], KeyF:['f','F'],
+  KeyG:['g','G'], KeyH:['h','H'], KeyI:['i','I'], KeyJ:['j','J'], KeyK:['k','K'], KeyL:['l','L'],
+  KeyM:['m','M'], KeyN:['n','N'], KeyO:['o','O'], KeyP:['p','P'], KeyQ:['q','Q'], KeyR:['r','R'],
+  KeyS:['s','S'], KeyT:['t','T'], KeyU:['u','U'], KeyV:['v','V'], KeyW:['w','W'], KeyX:['x','X'],
+  KeyY:['y','Y'], KeyZ:['z','Z'],
+  Minus:['-','_'], Equal:['=','+'], BracketLeft:['[','{'], BracketRight:[']','}'],
+  Backslash:['\\','|'], Semicolon:[';',':'], Quote:["'",'"'], Comma:[',','<'], Period:['.','>'], Slash:['/','?'],
+  Backquote:['`','~'], Space:[' ',' ']
+};
+function forceEnglishInput(input){
+  if(!input || input.dataset.forceEnDone) return;
+  input.dataset.forceEnDone = '1';
+  input.addEventListener('keydown', function(e){
+    if(e.ctrlKey || e.metaKey || e.altKey) return;
+    if(e.key==='Enter' || e.key==='Backspace' || e.key==='Delete' || e.key==='Tab' ||
+       e.key==='ArrowLeft' || e.key==='ArrowRight' || e.key==='Home' || e.key==='End') return;
+    const mapped = US_LAYOUT_MAP[e.code];
+    if(mapped){
+      e.preventDefault();
+      const ch = e.shiftKey ? mapped[1] : mapped[0];
+      const start = input.selectionStart, end = input.selectionEnd;
+      input.value = input.value.slice(0,start) + ch + input.value.slice(end);
+      input.selectionStart = input.selectionEnd = start + 1;
+    }
+  });
+}
+
 function playBeep(type){
   if(!soundEnabled) return;
   try{
@@ -954,7 +984,7 @@ function renderInventory(){
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
             <input class="search" style="flex:1;min-width:160px" id="editName-${key}" value="${i.name}" placeholder="Название">
             <input class="search" style="width:100px" id="editSize-${key}" value="${i.size||''}" placeholder="Размер">
-            <input class="search mono" style="width:150px" id="editBarcode-${key}" value="${i.barcode||''}" placeholder="Штрихкод">
+            <input class="search mono" style="width:150px" id="editBarcode-${key}" value="${i.barcode||''}" placeholder="Штрихкод" autocomplete="off">
             <input class="search" style="width:170px" id="editClient-${key}" value="${i.client||''}" placeholder="Клиент">
             <input class="search" type="number" min="0" style="width:80px" id="editQty-${key}" value="${i.qty}" placeholder="Кол-во">
           </div>
@@ -1229,7 +1259,7 @@ function renderReceiving(mode){
 
         ${currentReceivingMode==='scan' ? `
           <div class="eyebrow" style="margin-top:16px">Штрихкод</div>
-          <input class="scan-input" id="receiveScanInput" placeholder="Штрихкод…" style="margin-top:6px">
+          <input class="scan-input" id="receiveScanInput" placeholder="Штрихкод…" style="margin-top:6px" autocomplete="off">
           <div class="scan-hint">Сканируйте штрихкод — товар прибавится на складе, а голос назовёт номер ячейки цифрами. Новый штрихкод получает следующий свободный номер по порядку (1, 2, 3…) и запоминает его навсегда. Незнакомый штрихкод — система спросит название и артикул.</div>
         ` : `
           <div class="eyebrow" style="margin-top:16px">Товар</div>
@@ -2579,9 +2609,9 @@ function renderSupplyReceivingPanel(s){
             <div class="eyebrow">Сканер приёмки${s.requiresKiz?' · КИЗ':''}</div>
             <button class="btn btn-ghost sound-toggle" style="padding:3px 8px;font-size:11px" onclick="toggleSound()">${soundEnabled?'🔊 Звук':'🔇 Звук'}</button>
           </div>
-          <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="margin-top:8px;width:100%" ${(s.requiresKiz && pendingKizItem)?'disabled':''}>
+          <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="margin-top:8px;width:100%" autocomplete="off" ${(s.requiresKiz && pendingKizItem)?'disabled':''}>
           ${s.requiresKiz ? `
-            <input class="search mono" id="supplyKizInput-${s.id}" placeholder="КИЗ (Честный Знак)…" style="margin-top:8px;width:100%" ${pendingKizItem?'':'disabled'}>
+            <input class="search mono" id="supplyKizInput-${s.id}" placeholder="КИЗ (Честный Знак)…" style="margin-top:8px;width:100%" autocomplete="off" ${pendingKizItem?'':'disabled'}>
             ${pendingKizItem ? `<div style="margin-top:8px;padding:8px 10px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--ink-soft)">Ожидается КИЗ для: <b>${pendingKizItem.name}</b></div>` : ''}
             <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Эта поставка требует КИЗ — сначала штрихкод товара, затем код каждой единицы (Честный Знак). Дубли КИЗ отклоняются автоматически.</p>
             <button class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:4px" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel)</button>
@@ -2743,7 +2773,7 @@ function renderSuppliesTableWrap(){
         let item = supply.items.find(i=>i.barcode && i.barcode===code);
         if(!item){
           const invMatch = inventory.find(i=>i.barcode===code);
-          if(invMatch) item = supply.items.find(i=>i.sku===invMatch.sku);
+          if(invMatch) item = supply.items.find(i=>i.sku===invMatch.sku && (i.size||'')===(invMatch.size||''));
         }
         if(!item){
           playBeep('error');
@@ -2765,6 +2795,7 @@ function renderSuppliesTableWrap(){
     }
     const kizInput = document.getElementById('supplyKizInput-'+activeSupplyId);
     if(supply && kizInput){
+      forceEnglishInput(kizInput);
       if(pendingKizItem) kizInput.focus();
       kizInput.addEventListener('keydown', (e)=>{
         if(e.key!=='Enter') return;
