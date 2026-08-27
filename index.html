@@ -490,14 +490,6 @@
   </div>
 
   <div class="main">
-    <div class="topbar">
-      <div class="eyebrow">Смена начата · 09:14</div>
-      <div class="cabinets">
-        <div class="chip wb"><span class="dot"></span>WB · кабинет подключён</div>
-        <div class="chip oz"><span class="dot"></span>Ozon · кабинет подключён</div>
-      </div>
-    </div>
-
     <div class="content">
 
       <!-- INVENTORY -->
@@ -715,6 +707,8 @@ function toggleSound(){
 }
 let recentReceivingActions = [];
 let lastScanInfo = null;
+let kizScans = [];
+let pendingKizItem = null;
 let itemsListCollapsed = false;
 function toggleItemsListCollapse(){
   itemsListCollapsed = !itemsListCollapsed;
@@ -2243,19 +2237,20 @@ function createSupply(){
   const client = clients.find(c=>c.id===draftSupplyClientId);
   if(!client){ toast('Выберите клиента склада / ИП'); return; }
   if(draftSupplyItems.length===0){ toast('Загрузите Excel-файл с позициями поставки'); return; }
+  const requiresKiz = document.getElementById('draftSupplyRequiresKiz').checked;
   const id = 'ПС-' + Date.now();
   const createdAt = new Date();
   const items = draftSupplyItems.map(d=>({...d, receivedQty:0}));
   supplies.unshift({
     id, clientId: client.id, clientName: client.name,
-    createdAt, items, status: 'planned'
+    createdAt, items, status: 'planned', requiresKiz
   });
   draftSupplyItems = [];
   draftSupplyClientId = '';
   draftSupplyFileName = '';
   toast(`Поставка создана — статус «Едет»`);
   renderSupplies();
-  sb.from('supplies').insert({id, client_id: client.id, client_name: client.name, status:'planned', created_at: createdAt.toISOString()}).then(({error})=>{
+  sb.from('supplies').insert({id, client_id: client.id, client_name: client.name, status:'planned', created_at: createdAt.toISOString(), requires_kiz: requiresKiz}).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить поставку в базе'); return; }
     const rows = items.map(it=>({supply_id:id, sku:it.sku, name:it.name, qty:it.qty, received_qty:0, barcode: it.barcode || null}));
     sb.from('supply_items').insert(rows).then(({error})=>{
@@ -2266,7 +2261,7 @@ function createSupply(){
 function toggleSupplyReceiving(id){
   const supply = supplies.find(s=>s.id===id);
   if(!supply) return;
-  if(activeSupplyId !== id) lastScanInfo = null;
+  if(activeSupplyId !== id){ lastScanInfo = null; pendingKizItem = null; }
   activeSupplyId = activeSupplyId===id ? null : id;
   renderSuppliesTableWrap();
 }
@@ -2464,6 +2459,7 @@ function renderSupplyReceivingPanel(s){
           <div class="stat"><div class="val">${totalReceived}</div><div class="lbl">Принято</div></div>
           <div class="stat"><div class="val" style="color:${mismatches.length?'var(--warn)':'var(--ok)'}">${mismatches.length}</div><div class="lbl">Позиций с расхождением</div></div>
         </div>
+        ${s.requiresKiz ? `<button class="btn btn-ghost" style="margin-bottom:14px" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel) — ${kizScans.filter(k=>k.supplyId===s.id).length} шт</button>` : ''}
         <div class="panel">
           ${s.items.map(it=>{
             const diff = it.receivedQty - it.qty;
@@ -2521,11 +2517,18 @@ function renderSupplyReceivingPanel(s){
       <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
         <div style="width:260px;flex-shrink:0">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <div class="eyebrow">Сканер приёмки</div>
+            <div class="eyebrow">Сканер приёмки${s.requiresKiz?' · КИЗ':''}</div>
             <button class="btn btn-ghost sound-toggle" style="padding:3px 8px;font-size:11px" onclick="toggleSound()">${soundEnabled?'🔊 Звук':'🔇 Звук'}</button>
           </div>
-          <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="margin-top:8px;width:100%">
-          <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Сканируйте штрихкод товара из этой поставки — сразу услышите номер ячейки (голосом) и увидите его в подсказке. Принять можно больше или меньше плана — расхождение зафиксируется при завершении.</p>
+          <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="margin-top:8px;width:100%" ${(s.requiresKiz && pendingKizItem)?'disabled':''}>
+          ${s.requiresKiz ? `
+            <input class="search mono" id="supplyKizInput-${s.id}" placeholder="КИЗ (Честный Знак)…" style="margin-top:8px;width:100%" ${pendingKizItem?'':'disabled'}>
+            ${pendingKizItem ? `<div style="margin-top:8px;padding:8px 10px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--ink-soft)">Ожидается КИЗ для: <b>${pendingKizItem.name}</b></div>` : ''}
+            <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Эта поставка требует КИЗ — сначала штрихкод товара, затем код каждой единицы (Честный Знак). Дубли КИЗ отклоняются автоматически.</p>
+            <button class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:4px" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel)</button>
+          ` : `
+            <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Сканируйте штрихкод товара из этой поставки — сразу услышите номер ячейки (голосом) и увидите его в подсказке. Принять можно больше или меньше плана — расхождение зафиксируется при завершении.</p>
+          `}
           <div style="display:flex;gap:8px;margin-top:12px">
             <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="undoLastScan()" ${(!lastScanInfo||!lastScanInfo.canUndo)?'disabled':''}>↩ Отменить скан</button>
           </div>
@@ -2604,6 +2607,10 @@ function renderSuppliesCreatePanel(){
         </label>
         <button class="btn ${canCreate?'btn-accent':'btn-ghost'}" ${canCreate?'':'disabled'} onclick="createSupply()">Создать поставку</button>
       </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--ink-soft);cursor:pointer">
+        <input type="checkbox" id="draftSupplyRequiresKiz">
+        Требует приёмку по КИЗ (Честный Знак) — при сканировании штрихкода дополнительно попросит код каждой единицы
+      </label>
       <div style="font-size:12px;color:var(--ink-faint);margin-top:10px">${fileLabel}</div>
     </div>
   `;
@@ -2668,7 +2675,7 @@ function renderSuppliesTableWrap(){
     const supply = supplies.find(s=>s.id===activeSupplyId);
     const input = document.getElementById('supplyScanInput-'+activeSupplyId);
     if(supply && input){
-      input.focus();
+      if(!(supply.requiresKiz && pendingKizItem)) input.focus();
       input.addEventListener('keydown', (e)=>{
         if(e.key!=='Enter') return;
         const code = input.value.trim();
@@ -2687,35 +2694,89 @@ function renderSuppliesTableWrap(){
           renderSuppliesTableWrap();
           return;
         }
-        const sku = item.sku;
-        const wasOver = item.receivedQty > item.qty;
-        item.receivedQty++;
-        let inv = inventory.find(i=>i.sku===sku && (i.client||'')===(supply.clientName||''));
-        if(!inv){
-          inv = {sku, name: item.name, qty:0, client: supply.clientName, barcode: item.barcode||code};
-          inventory.push(inv);
+        if(supply.requiresKiz){
+          pendingKizItem = {supplyId: supply.id, sku: item.sku, name: item.name, barcode: item.barcode||code};
+          playBeep('warn');
+          toast(`Отсканируйте КИЗ для «${item.name}»`);
+          renderSuppliesTableWrap();
+          return;
         }
-        inv.qty++;
-        logReceipt(sku, item.name, 1, supply.clientName);
-        const cell = ensureCellAssigned(inv);
-        syncInventoryRow(sku, supply.clientName);
-        const isOver = item.receivedQty>item.qty && !wasOver;
-        if(isOver){ playBeep('warn'); toast(`«${item.name}»: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
-        else { playBeep('ok'); toast(`«${item.name}» → Ячейка ${cell}`); }
-        announceCell(cell);
-        pushRecentAction({name:item.name, sku, qty:1, cell, note: isOver ? 'больше плана' : ''});
-        lastScanInfo = {
-          supplyId: supply.id, sku, name:item.name, barcode: item.barcode||code, cell, delta:1, canUndo:true,
-          status: isOver ? 'over' : 'ok',
-          message: isOver ? `Принято больше плана: ${item.receivedQty} из ${item.qty}` : `Принято ${item.receivedQty} из ${item.qty}`
-        };
-        renderSuppliesTableWrap();
-        sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).then(({error})=>{
-          if(error) console.error(error);
-        }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
+        finalizeSupplyItemReceipt(supply, item, item.barcode||code, null);
+      });
+    }
+    const kizInput = document.getElementById('supplyKizInput-'+activeSupplyId);
+    if(supply && kizInput){
+      if(pendingKizItem) kizInput.focus();
+      kizInput.addEventListener('keydown', (e)=>{
+        if(e.key!=='Enter') return;
+        const kizCode = kizInput.value.trim();
+        kizInput.value='';
+        if(!kizCode) return;
+        if(!pendingKizItem){ toast('Сначала отсканируйте штрихкод товара'); return; }
+        const dup = kizScans.find(k=>k.kizCode===kizCode);
+        if(dup){
+          playBeep('error');
+          toast(`Этот КИЗ уже был принят ранее (поставка ${dup.supplyId}, ${dup.name})`);
+          return;
+        }
+        const item = supply.items.find(i=>i.sku===pendingKizItem.sku);
+        finalizeSupplyItemReceipt(supply, item, pendingKizItem.barcode, kizCode);
+        pendingKizItem = null;
       });
     }
   }
+}
+function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
+  const sku = item.sku;
+  const wasOver = item.receivedQty > item.qty;
+  item.receivedQty++;
+  let inv = inventory.find(i=>i.sku===sku && (i.client||'')===(supply.clientName||''));
+  if(!inv){
+    inv = {sku, name: item.name, qty:0, client: supply.clientName, barcode: barcode||''};
+    inventory.push(inv);
+  }
+  inv.qty++;
+  logReceipt(sku, item.name, 1, supply.clientName);
+  const cell = ensureCellAssigned(inv);
+  syncInventoryRow(sku, supply.clientName);
+  const isOver = item.receivedQty>item.qty && !wasOver;
+  if(isOver){ playBeep('warn'); toast(`«${item.name}»: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
+  else { playBeep('ok'); toast(`«${item.name}» → Ячейка ${cell}`); }
+  announceCell(cell);
+  pushRecentAction({name:item.name, sku, qty:1, cell, note: isOver ? 'больше плана' : (kizCode ? 'КИЗ принят' : '')});
+  lastScanInfo = {
+    supplyId: supply.id, sku, name:item.name, barcode: barcode||'', cell, delta:1, canUndo:true,
+    status: isOver ? 'over' : 'ok',
+    message: isOver ? `Принято больше плана: ${item.receivedQty} из ${item.qty}` : `Принято ${item.receivedQty} из ${item.qty}`
+  };
+  if(kizCode){
+    const scan = {kizCode, supplyId:supply.id, sku, name:item.name, clientName:supply.clientName, time:new Date().toISOString()};
+    kizScans.push(scan);
+    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:supply.id, sku, name:item.name, client_name:supply.clientName}).then(({error})=>{
+      if(error){ console.error(error); toast('Не удалось сохранить КИЗ в базе — возможно, дубль'); }
+    });
+  }
+  renderSuppliesTableWrap();
+  sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).then(({error})=>{
+    if(error) console.error(error);
+  }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
+}
+function downloadKizExcel(supplyId){
+  const s = supplies.find(x=>x.id===supplyId);
+  const rows = kizScans.filter(k=>k.supplyId===supplyId);
+  if(!rows.length){ toast('По этой поставке ещё нет отсканированных КИЗ'); return; }
+  const data = [
+    [`КИЗ по поставке № ${supplyId}`],
+    [`Клиент: ${s ? s.clientName : ''}`],
+    [],
+    ['№','Артикул','Наименование','КИЗ','Время'],
+    ...rows.map((r,idx)=>[idx+1, r.sku, r.name, r.kizCode, new Date(r.time).toLocaleString('ru-RU')])
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:4},{wch:14},{wch:30},{wch:36},{wch:20}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'КИЗ');
+  XLSX.writeFile(wb, `KIZ_${supplyId}.xlsx`);
 }
 document.getElementById('supplySearch').addEventListener('input', renderSuppliesTableWrap);
 
@@ -2931,6 +2992,7 @@ async function loadSupplies(){
     updNumber: s.upd_number || '',
     actNumber: s.act_number || '',
     actPricePerUnit: s.act_price || 0,
+    requiresKiz: s.requires_kiz || false,
     createdAt: new Date(s.created_at),
     items: itemRows.filter(it=>it.supply_id===s.id).map(it=>({sku:it.sku, name:it.name, qty:it.qty, receivedQty:it.received_qty, barcode:it.barcode||''}))
   }));
@@ -2950,6 +3012,11 @@ async function loadOutboundSupplies(){
     items: itemRows.filter(it=>it.supply_id===s.id).map(it=>({sku:it.sku, name:it.name, qty:it.qty, barcode:it.barcode||'', cell:it.cell||null}))
   }));
 }
+async function loadKizScans(){
+  const { data, error } = await sb.from('kiz_scans').select('*').order('created_at',{ascending:true});
+  if(error){ console.error(error); return; }
+  kizScans = data.map(k=>({kizCode:k.kiz_code, supplyId:k.supply_id, sku:k.sku, name:k.name, clientName:k.client_name, time:k.created_at}));
+}
 
 // ---------- INIT ----------
 function enterClientViewMode(client){
@@ -2961,10 +3028,6 @@ function enterClientViewMode(client){
   if(groupLabel) groupLabel.textContent = 'Личный кабинет';
   const foot = document.querySelector('.sidebar-foot');
   if(foot) foot.textContent = 'ТОЛЬКО ПРОСМОТР';
-  const cabinets = document.querySelector('.cabinets');
-  if(cabinets) cabinets.style.display = 'none';
-  const eyebrow = document.querySelector('.topbar .eyebrow');
-  if(eyebrow) eyebrow.textContent = client.name;
   const filterSelect = document.getElementById('invClientFilter');
   if(filterSelect) filterSelect.style.display = 'none';
   const cellFilterSelect = document.getElementById('invCellFilter');
@@ -2986,7 +3049,7 @@ async function initApp(){
     return;
   }
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies()]);
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadKizScans()]);
   }catch(err){
     console.error(err);
   }
