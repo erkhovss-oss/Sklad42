@@ -2874,6 +2874,10 @@ function renderBoxPanel(supply){
   const boxes = outboundBoxes.filter(b=>b.supplyId===supply.id).sort((a,b)=>a.boxNumber-b.boxNumber);
   const mismatches = computeBoxMismatches(supply);
   const fullyDistributed = mismatches.length===0 && boxes.length>0;
+  const totalLines = supply.items.length;
+  const packedLines = supply.items.filter(i=>getRemainingForItem(supply,i.sku,i.size||'')===0).length;
+  const totalQty = supply.items.reduce((a,i)=>a+i.qty,0);
+  const packedQty = boxes.reduce((sum,b)=>sum + b.items.reduce((a,it)=>a+it.qty,0), 0);
   setTimeout(()=>{
     boxes.forEach(box=>{ if(expandedBoxId===box.id) renderBoxScanHandler(supply.id, box.id); });
   }, 0);
@@ -2885,12 +2889,10 @@ function renderBoxPanel(supply){
         <button class="btn btn-ghost" onclick="createOutboundBoxesBulk('${supply.id}')">Создать короба</button>
         <button class="btn btn-ghost" onclick="addSingleOutboundBox('${supply.id}')">+ Новый короб</button>
       </div>
-      ${mismatches.length ? `
-        <div style="padding:10px 14px;background:var(--warn-bg);border-radius:8px;margin-bottom:14px;font-size:12px;color:var(--warn)">
-          Не всё разложено по коробам:
-          ${mismatches.map(m=>`«${m.name}»${m.size?` (${m.size})`:''}: ${m.remaining>0?`осталось ${m.remaining} шт`:`лишнее +${-m.remaining} шт`}`).join('; ')}
-        </div>
-      ` : boxes.length ? `<div style="padding:10px 14px;background:var(--ok-bg);border-radius:8px;margin-bottom:14px;font-size:12px;color:var(--ok)">Всё распределено по коробам, можно печатать QR-коды</div>` : ''}
+      <div class="stat-row" style="margin-bottom:14px">
+        <div class="stat"><div class="val" style="color:${packedLines===totalLines?'var(--ok)':'var(--accent)'}">${packedLines}/${totalLines}</div><div class="lbl">Упаковано артикулов</div></div>
+        <div class="stat"><div class="val" style="color:${packedQty===totalQty?'var(--ok)':'var(--accent)'}">${packedQty}/${totalQty}</div><div class="lbl">Упаковано товаров</div></div>
+      </div>
       ${boxes.map(box=>renderBoxCard(supply, box)).join('')}
       <button class="btn btn-accent" style="margin-top:8px" ${fullyDistributed?'':'disabled'} onclick="printBoxLabels('${supply.id}')">🖨 Распечатать QR-коды коробов</button>
     </div>
