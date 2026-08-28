@@ -3247,9 +3247,10 @@ function renderKizScansList(supplyId, limit){
   const shown = limit ? rows.slice(0, limit) : rows;
   if(!shown.length) return `<p style="font-size:12px;color:var(--ink-faint);margin:8px 0">КИЗ ещё не отсканированы</p>`;
   return shown.map(r=>`
-    <div class="pick-row" style="padding:6px 0">
-      <div><div class="sku-name" style="font-size:12px">${r.name}</div><div class="sku-code mono" style="font-size:11px;word-break:break-all">${r.kizCode}</div></div>
-      <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;color:var(--warn);white-space:nowrap" onclick="removeKizScan('${supplyId}','${r.kizCode}')">Удалить</button>
+    <div style="padding:8px 0;border-bottom:1px solid var(--line)">
+      <div class="sku-name" style="font-size:12px">${r.name}</div>
+      <div class="sku-code mono" style="font-size:10px;line-height:1.5;word-break:break-all;overflow-wrap:anywhere;margin:4px 0">${r.kizCode}</div>
+      <button class="btn btn-ghost" style="padding:3px 10px;font-size:11px;color:var(--warn)" onclick="removeKizScan('${supplyId}','${r.kizCode}')">Удалить</button>
     </div>
   `).join('');
 }
