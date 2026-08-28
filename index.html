@@ -485,7 +485,8 @@
     <div class="nav-item" data-tab="storage"><span class="num">03</span>Хранение</div>
     <div class="nav-item" data-tab="supplies"><span class="num">04</span>Плановые поставки</div>
     <div class="nav-item" data-tab="outbound"><span class="num">05</span>Поставка на склад</div>
-    <div class="nav-item" data-tab="employees"><span class="num">06</span>Сотрудники</div>
+    <div class="nav-item" data-tab="fbs"><span class="num">06</span>Заказы FBS</div>
+    <div class="nav-item" data-tab="employees"><span class="num">07</span>Сотрудники</div>
     <div class="sidebar-foot" id="sidebarFoot">СКЛАД/42 · WMS</div>
   </div>
 
@@ -612,6 +613,26 @@
         </div>
       </section>
 
+      <!-- FBS ORDERS -->
+      <section class="section" id="tab-fbs">
+        <div class="page-head">
+          <div>
+            <h1>Заказы FBS</h1>
+            <p>Заказы из личного кабинета Wildberries — новые, на сборке, в доставке</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select class="search" id="fbsClientSelect" style="width:220px"></select>
+            <button class="btn btn-ghost" onclick="fetchNewFbsOrders()">🔄 Обновить сейчас</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:16px">
+          <button class="btn btn-accent" id="fbsTabNew" onclick="setFbsView('new')">Новый</button>
+          <button class="btn btn-ghost" id="fbsTabConfirm" onclick="setFbsView('confirm')">На сборке</button>
+          <button class="btn btn-ghost" id="fbsTabComplete" onclick="setFbsView('complete')">В доставке</button>
+        </div>
+        <div id="fbsBody"></div>
+      </section>
+
       <!-- EMPLOYEES -->
       <section class="section" id="tab-employees">
         <div class="page-head">
@@ -674,6 +695,13 @@ let draftOutboundItems = [];
 let activeOutboundId = null;
 let editingOutboundId = null;
 let deletingOutboundId = null;
+
+let fbsOrders = [];
+let fbsView = 'new';
+let fbsSelectedClientId = '';
+let assemblingOrder = null;
+let fbsPendingKiz = null;
+let fbsAutoPollTimer = null;
 let supplyCounter = 0;
 let draftSupplyItems = [];
 let draftSupplyClientId = '';
@@ -880,6 +908,7 @@ function switchTab(tab){
   if(tab==='storage') renderStorage();
   if(tab==='supplies') renderSuppliesTab();
   if(tab==='outbound') renderOutbound();
+  if(tab==='fbs') renderFbsOrders();
   if(tab==='employees') renderEmployeesTab();
   try{ localStorage.setItem('sklad42_active_tab', tab); }catch(e){}
 }
@@ -2336,6 +2365,233 @@ function printPickList(id){
 }
 document.getElementById('outboundSearch').addEventListener('input', renderOutboundTableWrap);
 
+// ---------- FBS ORDERS ----------
+function renderFbsClientSelect(){
+  const wbClients = clients.filter(c=>c.wbConnected);
+  const select = document.getElementById('fbsClientSelect');
+  const prev = select.value || fbsSelectedClientId;
+  select.innerHTML = wbClients.length
+    ? wbClients.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')
+    : `<option value="">Нет клиентов с подключённым WB</option>`;
+  if(wbClients.find(c=>c.id===prev)) select.value = prev;
+  fbsSelectedClientId = select.value;
+}
+function setFbsView(view){
+  fbsView = view;
+  document.getElementById('fbsTabNew').className = 'btn ' + (view==='new'?'btn-accent':'btn-ghost');
+  document.getElementById('fbsTabConfirm').className = 'btn ' + (view==='confirm'?'btn-accent':'btn-ghost');
+  document.getElementById('fbsTabComplete').className = 'btn ' + (view==='complete'?'btn-accent':'btn-ghost');
+  renderFbsBody();
+}
+function renderFbsOrders(){
+  renderFbsClientSelect();
+  setFbsView(fbsView);
+  if(!fbsAutoPollTimer){
+    fbsAutoPollTimer = setInterval(()=>{
+      if(document.getElementById('tab-fbs').classList.contains('active')) fetchNewFbsOrders(true);
+    }, 30000);
+  }
+  fetchNewFbsOrders(true);
+}
+async function fetchNewFbsOrders(silent){
+  const clientId = document.getElementById('fbsClientSelect').value;
+  if(!clientId) return;
+  try{
+    const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId, action: 'fetch_new' } });
+    if(error){ if(!silent) toast('WB: ' + await extractFnErrorMessage(error)); return; }
+    if(data && data.error){ if(!silent) toast('WB: ' + data.error); return; }
+    await loadFbsOrders();
+    if(!silent) toast(`Проверено — новых заказов: ${data.fetched||0}`);
+    renderFbsBody();
+  }catch(e){
+    if(!silent) toast('Не удалось вызвать серверную функцию — она развёрнута в Supabase?');
+  }
+}
+function renderFbsBody(){
+  const clientId = document.getElementById('fbsClientSelect') ? document.getElementById('fbsClientSelect').value : '';
+  const body = document.getElementById('fbsBody');
+  const rows = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus===fbsView);
+  if(!clientId){
+    body.innerHTML = `<div class="panel empty"><span class="eyebrow">Нет клиента</span>Подключите WB хотя бы одному клиенту в разделе «Клиенты»</div>`;
+    return;
+  }
+  if(!rows.length){
+    body.innerHTML = `<div class="panel empty">Заказов в этой вкладке пока нет</div>`;
+    return;
+  }
+  if(fbsView==='new'){
+    body.innerHTML = `<div class="panel">${rows.map(o=>`
+      <div class="pick-row">
+        <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${o.requiresKiz?' · требует КИЗ':''}</div></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-accent" style="padding:6px 12px" onclick="startAssembleOrder(${o.orderId})">Собрать</button>
+          <button class="btn btn-ghost" style="padding:6px 12px;color:var(--warn)" onclick="cancelFbsOrder(${o.orderId})">Отменить</button>
+        </div>
+      </div>
+    `).join('')}</div>`;
+  } else if(fbsView==='confirm'){
+    body.innerHTML = `
+      <div class="panel" style="padding:14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length}. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
+        <button class="btn btn-accent" onclick="closeFbsSupply()">📦 Закрыть поставку и отправить</button>
+      </div>
+      <div class="panel">${rows.map(o=>`
+        <div class="pick-row">
+          <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · заказ №${o.orderId}${o.kizCode?' · КИЗ принят ✓':(o.requiresKiz?' · КИЗ не прикреплён ⚠':'')}</div></div>
+          <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
+        </div>
+      `).join('')}</div>
+    `;
+  } else {
+    body.innerHTML = `<div class="panel">${rows.map(o=>`
+      <div class="pick-row">
+        <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · заказ №${o.orderId} · поставка ${o.wbSupplyId||'—'}</div></div>
+        <span class="status shipped">В доставке</span>
+      </div>
+    `).join('')}</div>`;
+  }
+}
+function startAssembleOrder(orderId){
+  const order = fbsOrders.find(o=>o.orderId===orderId);
+  if(!order) return;
+  assemblingOrder = order;
+  fbsPendingKiz = null;
+  const body = document.getElementById('fbsBody');
+  body.innerHTML = `
+    <div class="panel" style="padding:20px">
+      <div class="eyebrow" style="margin-bottom:10px">Сборка заказа №${order.orderId}</div>
+      <div style="display:flex;gap:14px;align-items:center;margin-bottom:16px">
+        <div><div class="sku-name" style="font-size:16px">${order.name||order.article}${order.size?` · ${order.size}`:''}</div><div class="sku-code mono">${order.article} · ШК ${order.barcode||'—'}</div></div>
+      </div>
+      <div class="eyebrow" style="margin-bottom:6px">Штрихкод товара</div>
+      <input class="search" id="fbsScanBarcode" placeholder="Отсканируйте штрихкод, чтобы подтвердить нужный товар…" style="width:100%;max-width:420px" autocomplete="off">
+      ${order.requiresKiz ? `
+        <div class="eyebrow" style="margin:14px 0 6px 0">КИЗ (Честный Знак)</div>
+        <input class="search mono" id="fbsScanKiz" placeholder="Отсканируйте КИЗ этой конкретной единицы…" style="width:100%;max-width:420px" autocomplete="off" disabled>
+      ` : ''}
+      <p style="font-size:12px;color:var(--ink-faint);margin-top:10px">Товар спишется с остатков этого клиента, как только заказ уйдёт на сборку.</p>
+      <button class="btn btn-ghost" style="margin-top:10px" onclick="cancelAssembleOrder()">Отмена</button>
+    </div>
+  `;
+  const bcInput = document.getElementById('fbsScanBarcode');
+  bcInput.focus();
+  bcInput.addEventListener('keydown', (e)=>{
+    if(e.key!=='Enter') return;
+    const code = bcInput.value.trim();
+    bcInput.value='';
+    if(!code) return;
+    if(order.barcode && code!==order.barcode){
+      playBeep('error');
+      toast('Штрихкод не совпадает с товаром этого заказа');
+      return;
+    }
+    playBeep('ok');
+    if(order.requiresKiz){
+      const kizInput = document.getElementById('fbsScanKiz');
+      kizInput.disabled = false;
+      forceEnglishInput(kizInput);
+      kizInput.focus();
+      toast('Теперь отсканируйте КИЗ этой единицы');
+      kizInput.addEventListener('keydown', (e2)=>{
+        if(e2.key!=='Enter') return;
+        const kizCode = kizInput.value.trim();
+        kizInput.value='';
+        if(!kizCode) return;
+        const dup = kizScans.find(k=>k.kizCode===kizCode);
+        if(dup){ playBeep('error'); toast(`Этот КИЗ уже был использован ранее (${dup.name})`); return; }
+        playBeep('ok');
+        finishAssembleOrder(order, kizCode);
+      });
+    } else {
+      finishAssembleOrder(order, null);
+    }
+  });
+}
+function cancelAssembleOrder(){
+  assemblingOrder = null;
+  fbsPendingKiz = null;
+  renderFbsBody();
+}
+function finishAssembleOrder(order, kizCode){
+  const client = clients.find(c=>c.id===order.clientId);
+  const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
+  if(!inv || inv.qty < 1){
+    toast(`Недостаточно на складе «${order.name||order.article}» — нет в остатках`);
+    return;
+  }
+  inv.qty -= 1;
+  logMovement(inv.sku, inv.name, -1, `Сборка заказа FBS №${order.orderId}`, inv.client, inv.size);
+  if(kizCode){
+    kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, clientName:order.clientName, time:new Date().toISOString()});
+    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, client_name:order.clientName}).then(({error})=>{
+      if(error) console.error(error);
+    });
+  }
+  assemblingOrder = null;
+  toast(`Заказ №${order.orderId} отправлен на сборку`);
+  renderFbsBody();
+
+  sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'assemble', orderId: order.orderId, kizCode } }).then(({data, error})=>{
+    if(error || (data && data.error)){
+      toast('WB (сборка): ' + (data && data.error ? data.error : (error?error.message:'ошибка')));
+      return;
+    }
+    order.supplierStatus = 'confirm';
+    order.wbSupplyId = data.wbSupplyId;
+    order.kizCode = kizCode;
+    sb.from('wb_orders').update({supplier_status:'confirm', wb_supply_id:data.wbSupplyId, kiz_code:kizCode}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
+    renderFbsBody();
+  });
+}
+function cancelFbsOrder(orderId){
+  const order = fbsOrders.find(o=>o.orderId===orderId);
+  if(!order) return;
+  if(!confirm(`Отменить заказ №${orderId}?`)) return;
+  sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'cancel', orderId } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    order.supplierStatus = 'cancel';
+    fbsOrders = fbsOrders.filter(o=>o.orderId!==orderId);
+    sb.from('wb_orders').update({supplier_status:'cancel'}).eq('order_id', orderId).then(()=>{});
+    toast(`Заказ №${orderId} отменён`);
+    renderFbsBody();
+  });
+}
+function closeFbsSupply(){
+  const clientId = document.getElementById('fbsClientSelect').value;
+  const client = clients.find(c=>c.id===clientId);
+  if(!confirm(`Закрыть текущую поставку клиента «${client?client.name:''}» и передать на склад WB?`)) return;
+  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'close_supply' } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm').forEach(o=>{ o.supplierStatus='complete'; });
+    sb.from('wb_orders').update({supplier_status:'complete'}).eq('client_id', clientId).eq('supplier_status','confirm').then(()=>{});
+    toast('Поставка закрыта и передана на склад WB');
+    setFbsView('complete');
+  });
+}
+function printFbsSticker(orderId){
+  const order = fbsOrders.find(o=>o.orderId===orderId);
+  if(!order) return;
+  toast('Запрашиваем этикетку у WB…');
+  sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'get_sticker', orderId } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    const win = window.open('', '_blank');
+    if(!win){ toast('Браузер заблокировал открытие окна'); return; }
+    win.document.write(`<iframe src="data:application/pdf;base64,${data.file}" style="width:100%;height:100vh;border:none"></iframe>`);
+    win.document.close();
+  });
+}
+async function loadFbsOrders(){
+  const { data, error } = await sb.from('wb_orders').select('*').order('created_at',{ascending:false}).limit(500);
+  if(error){ console.error(error); return; }
+  fbsOrders = data.map(o=>({
+    orderId:o.order_id, clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
+    article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
+    supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
+    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false
+  }));
+}
+document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fetchNewFbsOrders(true); });
+
 // ---------- SUPPLIES (planned deliveries) ----------
 function renderSuppliesTab(){
   document.getElementById('viewPlannedBtn').className = 'btn ' + (currentSuppliesView==='planned' ? 'btn-accent' : 'btn-ghost');
@@ -3307,7 +3563,7 @@ async function initApp(){
     return;
   }
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadKizScans()]);
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadKizScans(), loadFbsOrders()]);
   }catch(err){
     console.error(err);
   }
