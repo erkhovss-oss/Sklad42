@@ -1035,6 +1035,7 @@ function renderInventory(){
             <input class="search mono" style="width:150px" id="editBarcode-${key}" value="${i.barcode||''}" placeholder="Штрихкод" autocomplete="off">
             <input class="search" style="width:170px" id="editClient-${key}" value="${i.client||''}" placeholder="Клиент">
             <input class="search" type="number" min="0" style="width:80px" id="editQty-${key}" value="${i.qty}" placeholder="Кол-во">
+            <input class="search mono" type="number" min="1" style="width:90px" id="editCell-${key}" value="${i.cell||''}" placeholder="Ячейка">
           </div>
           <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
             <span style="font-size:12px;color:var(--ink-soft);white-space:nowrap">Габариты, см:</span>
@@ -1169,19 +1170,35 @@ async function saveEdit(key){
   const barcode = document.getElementById('editBarcode-'+key).value.trim();
   const newClient = document.getElementById('editClient-'+key).value.trim();
   const qty = Math.max(0, parseInt(document.getElementById('editQty-'+key).value) || 0);
+  const cellRaw = document.getElementById('editCell-'+key).value.trim();
+  const newCell = cellRaw ? Math.max(1, parseInt(cellRaw) || 0) : null;
   const l = parseFloat(document.getElementById('editDimsL-'+key).value) || 0;
   const w = parseFloat(document.getElementById('editDimsW-'+key).value) || 0;
   const h = parseFloat(document.getElementById('editDimsH-'+key).value) || 0;
   if(!name){ toast('Название не может быть пустым'); return; }
+  if(newCell !== null && newCell !== item.cell){
+    const conflict = inventory.find(i=> i!==item && i.cell===newCell);
+    if(conflict){
+      toast(`Ячейка ${newCell} уже занята: «${conflict.name}»${conflict.client?` (${conflict.client})`:''}`);
+      return;
+    }
+  }
   const qtyDelta = qty - item.qty;
   const oldSku = item.sku, oldClient = item.client, oldSize = item.size;
+  const hadCellBefore = !!item.cell;
   item.name = name;
   item.size = newSize || '';
   item.barcode = barcode || '';
   item.client = newClient || '—';
   item.qty = qty;
   item.dims = (l>0 && w>0 && h>0) ? {l, w, h, weight:(item.dims&&item.dims.weight)||0} : null;
-  await ensureCellAssigned(item);
+  if(newCell !== null){
+    item.cell = newCell;
+    sb.rpc('bump_cell_sequence', { new_val: newCell }).then(({error})=>{ if(error) console.error(error); });
+  } else if(cellRaw===''){
+    item.cell = null;
+  }
+  if(!item.cell && !hadCellBefore) await ensureCellAssigned(item);
   if(newSize!==oldSize || newClient!==oldClient){
     sb.from('inventory').delete().eq('sku', oldSku).eq('client_name', oldClient||'').eq('size', oldSize||'').then(({error})=>{
       if(error) console.error(error);
