@@ -828,6 +828,7 @@ function undoLastScan(){
   renderSuppliesTableWrap();
 }
 
+const MIN_KIZ_LENGTH = 20;
 const US_LAYOUT_MAP = {
   Digit0:['0',')'], Digit1:['1','!'], Digit2:['2','@'], Digit3:['3','#'], Digit4:['4','$'],
   Digit5:['5','%'], Digit6:['6','^'], Digit7:['7','&'], Digit8:['8','*'], Digit9:['9','('],
@@ -2600,6 +2601,11 @@ function startAssembleOrder(orderId){
         const kizCode = kizInput.value.trim();
         kizInput.value='';
         if(!kizCode) return;
+        if(kizCode.length < MIN_KIZ_LENGTH){
+          playBeep('error');
+          toast(`Код слишком короткий (${kizCode.length} симв.) — похоже на неполное сканирование, отсканируйте ещё раз`);
+          return;
+        }
         const dup = kizScans.find(k=>k.kizCode===kizCode);
         if(dup){ playBeep('error'); toast(`Этот КИЗ уже был использован ранее (${dup.name})`); return; }
         playBeep('ok');
@@ -2625,8 +2631,8 @@ function finishAssembleOrder(order, kizCode){
   inv.qty -= 1;
   logMovement(inv.sku, inv.name, -1, `Сборка заказа FBS №${order.orderId}`, inv.client, inv.size);
   if(kizCode){
-    kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, clientName:order.clientName, time:new Date().toISOString()});
-    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, client_name:order.clientName}).then(({error})=>{
+    kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, size:inv.size||'', clientName:order.clientName, time:new Date().toISOString()});
+    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, size:inv.size||null, client_name:order.clientName}).then(({error})=>{
       if(error) console.error(error);
     });
   }
@@ -2886,7 +2892,10 @@ function renderBoxCard(supply, box){
             </div>
             <button class="btn btn-accent" style="margin-top:10px;width:100%;justify-content:center" onclick="addAllRemainingToBox('${supply.id}','${box.id}')">📥 Добавить весь товар</button>
           </div>
-          <button class="btn btn-ghost" style="margin-top:10px;color:var(--warn)" onclick="deleteOutboundBox('${box.id}')">Удалить короб</button>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="downloadBoxExcel('${supply.id}','${box.id}')">📊 Скачать состав (Excel)</button>
+            <button class="btn btn-ghost" style="flex:1;justify-content:center;color:var(--warn)" onclick="deleteOutboundBox('${box.id}')">Удалить короб</button>
+          </div>
         </div>
       ` : ''}
     </div>
@@ -2916,9 +2925,65 @@ function renderBoxPanel(supply){
         <div class="stat"><div class="val" style="color:${packedQty===totalQty?'var(--ok)':'var(--accent)'}">${packedQty}/${totalQty}</div><div class="lbl">Упаковано товаров</div></div>
       </div>
       ${boxes.map(box=>renderBoxCard(supply, box)).join('')}
-      <button class="btn btn-accent" style="margin-top:8px" ${fullyDistributed?'':'disabled'} onclick="printBoxLabels('${supply.id}')">🖨 Распечатать QR-коды коробов</button>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-accent" style="flex:1;justify-content:center" ${fullyDistributed?'':'disabled'} onclick="printBoxLabels('${supply.id}')">🖨 Распечатать QR-коды коробов</button>
+        <button class="btn btn-ghost" style="flex:1;justify-content:center" ${boxes.length?'':'disabled'} onclick="downloadAllBoxesExcel('${supply.id}')">📊 Скачать все короба (Excel)</button>
+      </div>
     </div>
   `;
+}
+function downloadBoxExcel(supplyId, boxId){
+  const supply = outboundSupplies.find(s=>s.id===supplyId);
+  const box = outboundBoxes.find(b=>b.id===boxId);
+  if(!supply || !box) return;
+  if(!box.items.length){ toast('Короб пока пуст — нечего выгружать'); return; }
+  const totalQty = box.items.reduce((a,it)=>a+it.qty,0);
+  const data = [
+    [`Короб № ${box.boxNumber}`],
+    [`Поставка: ${supply.id}`],
+    [`Клиент: ${supply.clientName}`],
+    [`Куда: ${supply.destination}`],
+    [],
+    ['Артикул','Наименование','Размер','ШК','Кол-во'],
+    ...box.items.map(it=>[it.sku, it.name, it.size||'—', it.barcode||'—', it.qty]),
+    [],
+    ['','','','Итого:', totalQty]
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:14},{wch:30},{wch:10},{wch:18},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, `Короб ${box.boxNumber}`);
+  XLSX.writeFile(wb, `Korob_${box.boxNumber}_${supply.id}.xlsx`);
+}
+function downloadAllBoxesExcel(supplyId){
+  const supply = outboundSupplies.find(s=>s.id===supplyId);
+  const boxes = outboundBoxes.filter(b=>b.supplyId===supplyId).sort((a,b)=>a.boxNumber-b.boxNumber);
+  if(!supply || !boxes.length){ toast('Пока нет ни одного короба'); return; }
+  const data = [
+    [`Короба по поставке № ${supply.id}`],
+    [`Клиент: ${supply.clientName}`],
+    [`Куда: ${supply.destination}`],
+    [],
+    ['Короб №','Артикул','Наименование','Размер','ШК','Кол-во']
+  ];
+  let grandTotal = 0;
+  boxes.forEach(box=>{
+    if(!box.items.length){
+      data.push([box.boxNumber, '— пусто —','','','','']);
+      return;
+    }
+    box.items.forEach(it=>{
+      data.push([box.boxNumber, it.sku, it.name, it.size||'—', it.barcode||'—', it.qty]);
+      grandTotal += it.qty;
+    });
+  });
+  data.push([]);
+  data.push(['','','','','Итого по всем коробам:', grandTotal]);
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:10},{wch:14},{wch:30},{wch:10},{wch:18},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Короба');
+  XLSX.writeFile(wb, `Koroba_${supply.id}.xlsx`);
 }
 function printBoxLabels(supplyId){
   const supply = outboundSupplies.find(s=>s.id===supplyId);
@@ -3582,6 +3647,11 @@ function renderSuppliesTableWrap(){
         kizInput.value='';
         if(!kizCode) return;
         if(!pendingKizItem){ toast('Сначала отсканируйте штрихкод товара'); return; }
+        if(kizCode.length < MIN_KIZ_LENGTH){
+          playBeep('error');
+          toast(`Код слишком короткий (${kizCode.length} симв.) — похоже на неполное сканирование, отсканируйте ещё раз`);
+          return;
+        }
         const dup = kizScans.find(k=>k.kizCode===kizCode);
         if(dup){
           playBeep('error');
@@ -3621,9 +3691,9 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
     message: isOver ? `Принято больше плана: ${item.receivedQty} из ${item.qty}` : `Принято ${item.receivedQty} из ${item.qty}`
   };
   if(kizCode){
-    const scan = {kizCode, supplyId:supply.id, sku, name:item.name, clientName:supply.clientName, time:new Date().toISOString()};
+    const scan = {kizCode, supplyId:supply.id, sku, name:item.name, size:size||'', clientName:supply.clientName, time:new Date().toISOString()};
     kizScans.push(scan);
-    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:supply.id, sku, name:item.name, client_name:supply.clientName}).then(({error})=>{
+    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:supply.id, sku, name:item.name, size:size||null, client_name:supply.clientName}).then(({error})=>{
       if(error){ console.error(error); toast('Не удалось сохранить КИЗ в базе — возможно, дубль'); }
     });
   }
@@ -3715,11 +3785,11 @@ function downloadKizExcel(supplyId){
     [`КИЗ по поставке № ${supplyId}`],
     [`Клиент: ${s ? s.clientName : ''}`],
     [],
-    ['№','Артикул','Наименование','КИЗ','Время'],
-    ...rows.map((r,idx)=>[idx+1, r.sku, r.name, r.kizCode, new Date(r.time).toLocaleString('ru-RU')])
+    ['№','Артикул','Размер','Наименование','КИЗ','Время'],
+    ...rows.map((r,idx)=>[idx+1, r.sku, r.size||'—', r.name, r.kizCode, new Date(r.time).toLocaleString('ru-RU')])
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:4},{wch:14},{wch:30},{wch:36},{wch:20}];
+  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:30},{wch:36},{wch:20}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'КИЗ');
   XLSX.writeFile(wb, `KIZ_${supplyId}.xlsx`);
@@ -3999,7 +4069,7 @@ async function loadOutboundSupplies(){
 async function loadKizScans(){
   const { data, error } = await sb.from('kiz_scans').select('*').order('created_at',{ascending:true});
   if(error){ console.error(error); return; }
-  kizScans = data.map(k=>({kizCode:k.kiz_code, supplyId:k.supply_id, sku:k.sku, name:k.name, clientName:k.client_name, time:k.created_at}));
+  kizScans = data.map(k=>({kizCode:k.kiz_code, supplyId:k.supply_id, sku:k.sku, name:k.name, size:k.size||'', clientName:k.client_name, time:k.created_at}));
 }
 
 // ---------- INIT ----------
