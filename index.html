@@ -518,10 +518,12 @@
           </div>
           <div class="stat-row" id="invStats"></div>
           <div class="panel">
-            <table>
+            <div style="overflow-x:auto">
+              <table>
               <thead><tr><th>Артикул</th><th>Товар</th><th>Размер</th><th>Штрихкод</th><th>Клиент</th><th>Остаток</th><th></th></tr></thead>
               <tbody id="invBody"></tbody>
             </table>
+            </div>
           </div>
         </div>
 
@@ -1028,7 +1030,8 @@ function renderInventory(){
     if(!readOnly && editingSku === key){
       return `<tr>
         <td class="mono" style="vertical-align:top;padding-top:14px">${i.sku}</td>
-        <td colspan="6">
+        <td colspan="6" style="max-width:1px">
+          <div style="max-width:640px">
           <div style="margin-bottom:8px">
             <input class="search" style="width:100%" id="editName-${key}" value="${i.name}" placeholder="Название">
           </div>
@@ -1061,6 +1064,7 @@ function renderInventory(){
           <div style="display:flex;justify-content:flex-start;gap:8px;padding-top:8px;border-top:1px solid var(--line)">
             <button class="btn btn-primary" style="padding:6px 14px" onclick="saveEdit('${key}')">Сохранить</button>
             <button class="btn btn-ghost" style="padding:6px 14px" onclick="cancelEdit()">Отмена</button>
+          </div>
           </div>
         </td>
       </tr>`;
