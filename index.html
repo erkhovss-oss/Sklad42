@@ -1611,50 +1611,53 @@ async function pushStocksToWb(clientId){
     toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
   }
 }
-function generateWbMockProducts(){
-  const pool = [
-    {name:'Кроссовки Runmax, 42',        vendorCode:'RM-042-BLK',    l:32, w:20, h:12, weight:0.9},
-    {name:'Худи oversize, серый, M',      vendorCode:'HD-OVS-GRY-M', l:35, w:28, h:5,  weight:0.5},
-    {name:'Термокружка 400мл',            vendorCode:'TK-CUP-400',   l:10, w:10, h:20, weight:0.4},
-    {name:'Рюкзак трансформер',           vendorCode:'BAG-TRANS-01', l:45, w:30, h:20, weight:1.2},
-    {name:'Носки хлопковые (3 пары)',     vendorCode:'SOCK-COT-3P',  l:15, w:10, h:3,  weight:0.15},
-    {name:'Куртка ветровка, синяя, L',    vendorCode:'JCK-WND-BLU-L',l:40, w:30, h:8,  weight:0.6},
-    {name:'Кепка бейсболка',              vendorCode:'CAP-BSB-01',   l:25, w:20, h:12, weight:0.2},
-    {name:'Шапка вязаная',                vendorCode:'HAT-KNT-01',   l:20, w:15, h:8,  weight:0.15},
-  ];
-  const n = 3 + Math.floor(Math.random()*3);
-  return [...pool].sort(()=>Math.random()-0.5).slice(0,n).map(p=>({
-    nmId: 178000000 + Math.floor(Math.random()*900000),
-    name: p.name,
-    vendorCode: p.vendorCode,
-    barcode: '2' + Math.floor(1000000000 + Math.random()*8999999999),
-    price: 500 + Math.floor(Math.random()*4000),
-    dims: {l:p.l, w:p.w, h:p.h, weight:p.weight}
-  }));
-}
-function loadWbProducts(clientId){
+async function loadWbProducts(clientId){
   const client = clients.find(c=>c.id===clientId);
   toast('Запрашиваем карточки товаров у Wildberries…');
-  setTimeout(()=>{
-    client.wbProducts = generateWbMockProducts();
-    toast(`Получено карточек: ${client.wbProducts.length}`);
+  try{
+    const { data, error } = await sb.functions.invoke('wb-sync-stocks-ts', { body: { clientId, action: 'list_cards' } });
+    if(error){ toast('WB: ' + await extractFnErrorMessage(error)); return; }
+    if(data && data.error){ toast('WB: ' + data.error); return; }
+    const cards = data.cards || [];
+    const products = [];
+    cards.forEach(c=>{
+      const dims = (c.dimensions && c.dimensions.isValid && (c.dimensions.length||c.dimensions.width||c.dimensions.height))
+        ? {l:c.dimensions.length, w:c.dimensions.width, h:c.dimensions.height, weight:c.dimensions.weightBrutto||0}
+        : null;
+      const sizes = (c.sizes && c.sizes.length) ? c.sizes : [{techSize:'', skus:[]}];
+      sizes.forEach(s=>{
+        products.push({
+          nmId: c.nmID,
+          name: c.title || c.vendorCode,
+          vendorCode: c.vendorCode,
+          size: s.techSize || '',
+          barcode: (s.skus && s.skus[0]) || '',
+          dims
+        });
+      });
+    });
+    client.wbProducts = products;
+    toast(`Получено карточек: ${cards.length} (позиций с учётом размеров: ${products.length})`);
     renderClients();
-  }, 600);
+  }catch(e){
+    toast('Не удалось вызвать серверную функцию — она развёрнута в Supabase?');
+  }
 }
-function addWbProductToInventory(clientId, nmId){
+function addWbProductToInventory(clientId, nmId, size){
   const client = clients.find(c=>c.id===clientId);
-  const p = client.wbProducts.find(x=>x.nmId===nmId);
+  size = size || '';
+  const p = client.wbProducts.find(x=>x.nmId===nmId && (x.size||'')===size);
   if(!p) return;
   const sku = 'WB-' + p.nmId;
-  if(inventory.find(i=>i.sku===sku)){ toast('Уже добавлено в остатки'); return; }
+  if(findInventoryItem(sku, client.name, size)){ toast('Уже добавлено в остатки'); return; }
   const newItem = {
-    sku, name:p.name, qty:0, client:client.name,
-    vendorCode:p.vendorCode, barcode:p.barcode, dims:p.dims
+    sku, name:p.name, qty:0, client:client.name, size,
+    vendorCode:p.vendorCode, barcode:p.barcode||'', dims:p.dims
   };
   inventory.push(newItem);
   const cell = ensureCellAssigned(newItem);
-  syncInventoryRow(sku);
-  toast(`«${p.name}» добавлен в остатки (0 шт, ячейка ${cell} — укажите количество)`);
+  syncInventoryRow(newItem.sku, newItem.client, newItem.size);
+  toast(`«${p.name}»${size?` (${size})`:''} добавлен в остатки (0 шт, ячейка ${cell} — укажите количество)`);
   renderClients();
 }
 
@@ -1794,7 +1797,7 @@ function renderClientDetail(body){
           : `<span style="font-size:12px;color:var(--ink-faint)">Ключ ещё не добавлен</span>`}
       </div>
       <p style="font-size:12px;color:var(--ink-faint);margin-top:12px;line-height:1.6">
-        Ключ выдаётся в личном кабинете продавца WB → «Настройки» → «Доступ к API». В этом прототипе ключ хранится только в памяти страницы и никуда не отправляется, а карточки ниже — демонстрационные. Настоящая загрузка потребует сервер, который будет обращаться к API Wildberries по этому ключу: напрямую из браузера так делать нельзя — ключ окажется виден любому, кто откроет код страницы.
+        Ключ выдаётся в личном кабинете продавца WB → «Настройки» → «Доступ к API», нужны права «Контент». Запрос идёт через серверную функцию — ключ не покидает базу и не виден в коде страницы.
       </p>
 
       ${c.wbConnected ? `
@@ -1802,18 +1805,17 @@ function renderClientDetail(body){
         <button class="btn btn-accent" onclick="loadWbProducts('${c.id}')">↓ Загрузить карточки товаров</button>
         <div style="margin-top:14px">
           ${c.wbProducts.length ? c.wbProducts.map(p=>{
-            const already = inventory.some(i=>i.sku==='WB-'+p.nmId);
+            const already = findInventoryItem('WB-'+p.nmId, c.name, p.size||'');
             return `
             <div class="pick-row" style="align-items:flex-start">
               <div class="wb-thumb"><span>📦</span></div>
               <div>
-                <div class="sku-name">${p.name}</div>
+                <div class="sku-name">${p.name}${p.size?` · размер ${p.size}`:''}</div>
                 <div class="sku-code mono">Артикул: ${p.vendorCode} · nmID ${p.nmId}</div>
-                <div class="sku-code mono">ШК ${p.barcode}</div>
-                <div class="sku-code mono">${p.dims.l}×${p.dims.w}×${p.dims.h} см · ${p.dims.weight} кг</div>
+                <div class="sku-code mono">ШК ${p.barcode||'—'}</div>
+                ${p.dims ? `<div class="sku-code mono">${p.dims.l}×${p.dims.w}×${p.dims.h} см · ${p.dims.weight} кг</div>` : `<div class="sku-code mono" style="color:var(--ink-faint)">габариты не заполнены в карточке WB</div>`}
               </div>
-              <div class="qty-need">${p.price} ₽</div>
-              <button class="btn ${already?'btn-ghost':'btn-primary'}" style="margin-left:12px" ${already?'disabled':''} onclick="addWbProductToInventory('${c.id}',${p.nmId})">${already?'Уже в остатках':'+ В остатки'}</button>
+              <button class="btn ${already?'btn-ghost':'btn-primary'}" style="margin-left:12px" ${already?'disabled':''} onclick="addWbProductToInventory('${c.id}',${p.nmId},'${p.size||''}')">${already?'Уже в остатках':'+ В остатки'}</button>
             </div>
           `;}).join('') : `<p style="font-size:13px;color:var(--ink-faint)">Карточки ещё не загружены</p>`}
         </div>
@@ -3007,9 +3009,10 @@ function renderSupplyReceivingPanel(s){
             ${renderRecentActionsFeed(8)}
           </div>
         </div>
-        <div class="panel" style="flex:1;min-width:280px">
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer" onclick="toggleItemsListCollapse()">
-            <h3 style="font-size:14px;color:var(--ink-soft)">Позиции поставки (${s.items.length})</h3>
+        <div style="width:100%;border-top:2px solid var(--line);margin:18px 0 2px 0"></div>
+        <div class="panel" style="flex:1;min-width:280px;margin-top:2px">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer;background:var(--bg)" onclick="toggleItemsListCollapse()">
+            <h3 style="font-size:14px;color:var(--ink-soft)">📋 Позиции поставки (${s.items.length})</h3>
             <span style="font-size:12px;color:var(--ink-faint)">${itemsListCollapsed ? 'Развернуть ▼' : 'Свернуть ▲'}</span>
           </div>
           ${itemsListCollapsed ? '' : sortedItems.map(it=>{
