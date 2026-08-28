@@ -879,11 +879,18 @@ function playBeep(type){
   }catch(e){ /* звук недоступен в этом браузере — не критично */ }
 }
 
-function ensureCellAssigned(item){
+async function ensureCellAssigned(item){
   if(!item.barcode || item.cell) return item.cell || null;
-  const maxCell = inventory.reduce((m,i)=> (i.cell && i.cell>m) ? i.cell : m, 0);
-  item.cell = maxCell + 1;
-  return item.cell;
+  try{
+    const { data, error } = await sb.rpc('next_cell_number');
+    if(error){ console.error(error); toast('Не удалось выдать номер ячейки — проверьте интернет'); return null; }
+    item.cell = data;
+    return item.cell;
+  }catch(e){
+    console.error(e);
+    toast('Не удалось выдать номер ячейки — проверьте интернет');
+    return null;
+  }
 }
 function announceCell(cellNumber){
   if(!soundEnabled || !cellNumber) return;
@@ -1154,7 +1161,7 @@ function adjustQty(key, delta){
 }
 function startEdit(key){ editingSku = key; writeOffSku = null; deletingSku = null; historySku = null; renderInventory(); }
 function cancelEdit(){ editingSku = null; renderInventory(); }
-function saveEdit(key){
+async function saveEdit(key){
   const {sku, client, size} = parseItemKey(key);
   const item = findInventoryItem(sku, client, size);
   const name = document.getElementById('editName-'+key).value.trim();
@@ -1174,7 +1181,7 @@ function saveEdit(key){
   item.client = newClient || '—';
   item.qty = qty;
   item.dims = (l>0 && w>0 && h>0) ? {l, w, h, weight:(item.dims&&item.dims.weight)||0} : null;
-  ensureCellAssigned(item);
+  await ensureCellAssigned(item);
   if(newSize!==oldSize || newClient!==oldClient){
     sb.from('inventory').delete().eq('sku', oldSku).eq('client_name', oldClient||'').eq('size', oldSize||'').then(({error})=>{
       if(error) console.error(error);
@@ -1361,7 +1368,7 @@ function renderReceiving(mode){
   if(currentReceivingMode==='scan'){
     const input = document.getElementById('receiveScanInput');
     input.focus();
-    input.addEventListener('keydown', (e)=>{
+    input.addEventListener('keydown', async (e)=>{
       if(e.key!=='Enter') return;
       const code = input.value.trim();
       input.value='';
@@ -1371,7 +1378,7 @@ function renderReceiving(mode){
         item.qty += 1;
         logReceipt(item.sku, item.name, 1);
         playBeep('ok');
-        const cell = ensureCellAssigned(item);
+        const cell = await ensureCellAssigned(item);
         syncInventoryRow(item.sku);
         announceCell(cell);
         pushRecentAction({name:item.name, sku:item.sku, qty:1, cell});
@@ -1384,7 +1391,7 @@ function renderReceiving(mode){
           const sku = (prompt('Артикул для нового товара:') || ('SKU-'+Date.now())).trim().toUpperCase();
           const newItem = {sku, name, qty:1, barcode:code};
           inventory.push(newItem);
-          const cell = ensureCellAssigned(newItem);
+          const cell = await ensureCellAssigned(newItem);
           syncInventoryRow(sku);
           logReceipt(sku, name, 1);
           announceCell(cell);
@@ -1668,7 +1675,7 @@ async function loadWbProducts(clientId){
     toast('Не удалось вызвать серверную функцию — она развёрнута в Supabase?');
   }
 }
-function addWbProductToInventory(clientId, nmId, size){
+async function addWbProductToInventory(clientId, nmId, size){
   const client = clients.find(c=>c.id===clientId);
   size = size || '';
   const p = client.wbProducts.find(x=>x.nmId===nmId && (x.size||'')===size);
@@ -1680,7 +1687,7 @@ function addWbProductToInventory(clientId, nmId, size){
     vendorCode:p.vendorCode, barcode:p.barcode||'', dims:p.dims
   };
   inventory.push(newItem);
-  const cell = ensureCellAssigned(newItem);
+  const cell = await ensureCellAssigned(newItem);
   syncInventoryRow(newItem.sku, newItem.client, newItem.size);
   toast(`«${p.name}»${size?` (${size})`:''} добавлен в остатки (0 шт, ячейка ${cell} — укажите количество)`);
   renderClients();
@@ -3189,7 +3196,7 @@ function renderSuppliesTableWrap(){
     const input = document.getElementById('supplyScanInput-'+activeSupplyId);
     if(supply && input){
       if(!(supply.requiresKiz && pendingKizItem)) input.focus();
-      input.addEventListener('keydown', (e)=>{
+      input.addEventListener('keydown', async (e)=>{
         if(e.key!=='Enter') return;
         const code = input.value.trim();
         input.value='';
@@ -3220,14 +3227,14 @@ function renderSuppliesTableWrap(){
           renderSuppliesTableWrap();
           return;
         }
-        finalizeSupplyItemReceipt(supply, item, item.barcode||code, null);
+        await finalizeSupplyItemReceipt(supply, item, item.barcode||code, null);
       });
     }
     const kizInput = document.getElementById('supplyKizInput-'+activeSupplyId);
     if(supply && kizInput){
       forceEnglishInput(kizInput);
       if(pendingKizItem) kizInput.focus();
-      kizInput.addEventListener('keydown', (e)=>{
+      kizInput.addEventListener('keydown', async (e)=>{
         if(e.key!=='Enter') return;
         const kizCode = kizInput.value.trim();
         kizInput.value='';
@@ -3242,12 +3249,12 @@ function renderSuppliesTableWrap(){
         const item = supply.items.find(i=>i.sku===pendingKizItem.sku && (i.size||'')===(pendingKizItem.size||''));
         const pending = pendingKizItem;
         pendingKizItem = null;
-        finalizeSupplyItemReceipt(supply, item, pending.barcode, kizCode);
+        await finalizeSupplyItemReceipt(supply, item, pending.barcode, kizCode);
       });
     }
   }
 }
-function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
+async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   const sku = item.sku;
   const size = item.size || '';
   const wasOver = item.receivedQty > item.qty;
@@ -3259,7 +3266,7 @@ function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   }
   inv.qty++;
   logReceipt(inv.sku, inv.name, 1, inv.client, inv.size);
-  const cell = ensureCellAssigned(inv);
+  const cell = await ensureCellAssigned(inv);
   syncInventoryRow(inv.sku, inv.client, inv.size);
   const isOver = item.receivedQty>item.qty && !wasOver;
   if(isOver){ playBeep('warn'); toast(`«${item.name}»${size?` (${size})`:''}: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
