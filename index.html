@@ -694,6 +694,7 @@ let supplies = [];
 let outboundSupplies = [];
 let draftOutboundClientId = '';
 let draftOutboundItems = [];
+let outboundDraftCollapsed = false;
 let activeOutboundId = null;
 let editingOutboundId = null;
 let deletingOutboundId = null;
@@ -1280,6 +1281,17 @@ function findInventoryItemByBarcode(barcode, client){
   const extra = inventoryBarcodes.find(b=> b.barcode===barcode && (client===undefined || (b.clientName||'')===(client||'')) );
   if(extra) return findInventoryItem(extra.sku, extra.clientName, extra.size);
   return null;
+}
+function resolveDraftItem(d, clientName){
+  if(d.cell){
+    const byCell = inventory.find(i=>i.cell===d.cell);
+    if(byCell) return byCell;
+  }
+  if(d.barcode){
+    const byBarcode = findInventoryItemByBarcode(d.barcode, clientName);
+    if(byBarcode) return byBarcode;
+  }
+  return findInventoryItem(d.sku, clientName, d.size||'');
 }
 function logMovement(sku, name, delta, type, client, size){
   const now = new Date();
@@ -2021,27 +2033,46 @@ function renderOutboundCreatePanel(){
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
           <select class="search" id="outboundItemSelect" style="width:280px">
-            ${clientItems.length ? clientItems.map(i=>`<option value="${i.sku}">${i.sku} — ${i.name} (доступно ${i.qty})</option>`).join('') : `<option value="">нет товаров в наличии</option>`}
+            ${clientItems.length ? clientItems.map(i=>`<option value="${escapeHtml(itemKey(i))}">${i.sku}${i.size?` (${i.size})`:''} — ${i.name} (доступно ${i.qty})</option>`).join('') : `<option value="">нет товаров в наличии</option>`}
           </select>
           <input class="search" id="outboundItemQty" type="number" min="1" value="1" style="width:90px">
           <button class="btn btn-ghost" onclick="addDraftOutboundItem()" ${clientItems.length?'':'disabled'}>+ Добавить позицию</button>
         </div>
         ${draftOutboundItems.length ? `
           <div class="panel" style="margin-bottom:14px">
-            ${draftOutboundItems.map(d=>`
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;background:var(--bg)" onclick="toggleOutboundDraftCollapse()">
+              <h3 style="font-size:13px;color:var(--ink-soft)">Товары в поставке (${draftOutboundItems.length})</h3>
+              <span style="font-size:12px;color:var(--ink-faint)">${outboundDraftCollapsed ? '▼' : '▲'}</span>
+            </div>
+            ${outboundDraftCollapsed ? '' : draftOutboundItems.map(d=>`
               <div class="pick-row">
-                <div><div class="sku-name">${d.name}</div><div class="sku-code mono">${d.sku}${d.cell?` · яч. ${d.cell}`:''}</div></div>
+                <div><div class="sku-name">${d.name}${d.size?` · ${d.size}`:''}</div><div class="sku-code mono">${d.sku}${d.cell?` · яч. ${d.cell}`:''}</div></div>
                 <div class="qty-need">${d.qty} шт</div>
-                <button class="btn btn-ghost" style="padding:4px 8px" onclick="removeDraftOutboundItem('${d.sku}')">✕</button>
+                <button class="btn btn-ghost" style="padding:4px 8px" onclick="removeDraftOutboundItem('${escapeHtml(d.sku)}','${escapeHtml(d.size||'')}')">✕</button>
               </div>
             `).join('')}
           </div>
         ` : `<p style="font-size:13px;color:var(--ink-faint);margin:0 0 14px 0">Пока не добавлено ни одной позиции</p>`}
       ` : ''}
 
-      <button class="btn btn-accent" onclick="createOutboundSupply()" ${(client && draftOutboundItems.length)?'':'disabled'}>Создать поставку${totalQty?` (${totalQty} шт)`:''}</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-accent" onclick="createOutboundSupply()" ${(client && draftOutboundItems.length)?'':'disabled'}>Создать поставку${totalQty?` (${totalQty} шт)`:''}</button>
+        ${(client || draftOutboundItems.length) ? `<button class="btn btn-ghost" onclick="cancelOutboundDraft()">Отменить</button>` : ''}
+      </div>
     </div>
   `;
+}
+function toggleOutboundDraftCollapse(){
+  outboundDraftCollapsed = !outboundDraftCollapsed;
+  renderOutboundCreatePanel();
+}
+function cancelOutboundDraft(){
+  if(draftOutboundItems.length && !confirm('Отменить создание поставки? Все добавленные позиции будут убраны.')) return;
+  draftOutboundClientId = '';
+  draftOutboundItems = [];
+  outboundDraftCollapsed = false;
+  toast('Создание поставки отменено');
+  renderOutboundCreatePanel();
 }
 function setDraftOutboundClient(clientId){
   if(draftOutboundClientId !== clientId) draftOutboundItems = [];
@@ -2050,23 +2081,24 @@ function setDraftOutboundClient(clientId){
 }
 function addDraftOutboundItem(){
   const select = document.getElementById('outboundItemSelect');
-  const sku = select.value;
-  if(!sku) return;
+  const key = select.value;
+  if(!key) return;
   const qty = Math.max(1, parseInt(document.getElementById('outboundItemQty').value) || 1);
-  const item = inventory.find(i=>i.sku===sku);
+  const {sku, client, size} = parseItemKey(key);
+  const item = findInventoryItem(sku, client, size);
   if(!item) return;
-  const already = draftOutboundItems.find(d=>d.sku===sku);
+  const already = draftOutboundItems.find(d=>d.sku===sku && (d.size||'')===(size||'') && (d.barcode||'')===(item.barcode||''));
   const usedQty = already ? already.qty : 0;
   if(usedQty + qty > item.qty){
     toast(`На складе доступно только ${item.qty} шт «${item.name}»`);
     return;
   }
   if(already) already.qty += qty;
-  else draftOutboundItems.push({sku, name:item.name, qty, barcode:item.barcode||'', cell:item.cell||null});
+  else draftOutboundItems.push({sku, name:item.name, size:item.size||'', qty, barcode:item.barcode||'', cell:item.cell||null});
   renderOutboundCreatePanel();
 }
-function removeDraftOutboundItem(sku){
-  draftOutboundItems = draftOutboundItems.filter(d=>d.sku!==sku);
+function removeDraftOutboundItem(sku, size){
+  draftOutboundItems = draftOutboundItems.filter(d=>!(d.sku===sku && (d.size||'')===(size||'')));
   renderOutboundCreatePanel();
 }
 function downloadOutboundTemplate(){
@@ -2099,21 +2131,22 @@ function handleOutboundExcelUpload(inputEl){
         const barcode = String(row[0]||'').trim();
         const qty = parseInt(row[1]) || 0;
         if(!barcode || qty<=0) continue;
-        const item = inventory.find(x=>x.barcode===barcode && x.client===client.name);
+        const item = findInventoryItemByBarcode(barcode, client.name);
         if(!item){ skipped++; continue; }
         const sku = item.sku;
-        const already = draftOutboundItems.find(d=>d.sku===sku);
+        const size = item.size || '';
+        const already = draftOutboundItems.find(d=>d.sku===sku && (d.size||'')===size && (d.barcode||'')===(item.barcode||''));
         const usedQty = already ? already.qty : 0;
         if(usedQty + qty > item.qty){
           toast(`«${item.name}»: на складе только ${item.qty} шт, взято максимум возможное`);
           const addQty = Math.max(0, item.qty - usedQty);
           if(addQty<=0){ skipped++; continue; }
-          if(already) already.qty += addQty; else draftOutboundItems.push({sku, name:item.name, qty:addQty, barcode:item.barcode||'', cell:item.cell||null});
+          if(already) already.qty += addQty; else draftOutboundItems.push({sku, name:item.name, size, qty:addQty, barcode:item.barcode||barcode, cell:item.cell||null});
           added++;
           continue;
         }
         if(already) already.qty += qty;
-        else draftOutboundItems.push({sku, name:item.name, qty, barcode:item.barcode||'', cell:item.cell||null});
+        else draftOutboundItems.push({sku, name:item.name, size, qty, barcode:item.barcode||barcode, cell:item.cell||null});
         added++;
       }
       if(added===0){ toast('Не найдено подходящих позиций в остатках этого клиента — проверьте штрихкоды'); }
@@ -2134,7 +2167,7 @@ function createOutboundSupply(){
   if(!draftOutboundItems.length){ toast('Добавьте хотя бы одну позицию'); return; }
 
   for(const d of draftOutboundItems){
-    const item = inventory.find(i=>i.sku===d.sku);
+    const item = resolveDraftItem(d, client.name);
     if(!item || item.qty < d.qty){
       toast(`Недостаточно на складе: «${d.name}» (нужно ${d.qty}, есть ${item?item.qty:0})`);
       return;
@@ -2146,9 +2179,9 @@ function createOutboundSupply(){
   const items = draftOutboundItems.map(d=>({...d}));
 
   draftOutboundItems.forEach(d=>{
-    const item = inventory.find(i=>i.sku===d.sku);
+    const item = resolveDraftItem(d, client.name);
     item.qty -= d.qty;
-    logMovement(d.sku, d.name, -d.qty, `Отгрузка на склад: ${destination}`, client.name);
+    logMovement(item.sku, item.name, -d.qty, `Отгрузка на склад: ${destination}`, client.name, item.size);
   });
 
   outboundSupplies.unshift({
@@ -2166,6 +2199,7 @@ function createOutboundSupply(){
 
   draftOutboundItems = [];
   draftOutboundClientId = '';
+  outboundDraftCollapsed = false;
   toast(`Поставка ${id} создана`);
   renderOutbound();
   renderInventory();
@@ -2314,7 +2348,7 @@ function saveOutboundEdit(id){
     const newQty = Math.max(0, parseInt(inputEl.value)||0);
     const diff = newQty - it.qty;
     if(diff===0) continue;
-    const inv = it.barcode ? findInventoryItemByBarcode(it.barcode, s.clientName) : findInventoryItem(it.sku, s.clientName, it.size||'');
+    const inv = resolveDraftItem(it, s.clientName);
     if(diff>0 && (!inv || inv.qty < diff)){
       toast(`Недостаточно на складе для «${it.name}» — есть ${inv?inv.qty:0}, нужно ещё ${diff}`);
       return;
@@ -2351,7 +2385,7 @@ function confirmDeleteOutbound(id){
   const s = outboundSupplies.find(x=>x.id===id);
   if(!s) return;
   s.items.forEach(it=>{
-    const inv = it.barcode ? findInventoryItemByBarcode(it.barcode, s.clientName) : findInventoryItem(it.sku, s.clientName, it.size||'');
+    const inv = resolveDraftItem(it, s.clientName);
     if(inv){
       inv.qty += it.qty;
       logMovement(inv.sku, inv.name, it.qty, `Отмена поставки на склад: ${s.destination}`, inv.client, inv.size);
