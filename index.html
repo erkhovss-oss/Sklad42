@@ -1033,36 +1033,36 @@ function renderInventory(){
         <td colspan="6" style="max-width:1px">
           <div style="max-width:640px">
           <div style="margin-bottom:8px">
-            <input class="search" style="width:100%" id="editName-${key}" value="${i.name}" placeholder="Название">
+            <input class="search" style="width:100%" id="editName-${escapeHtml(key)}" value="${escapeHtml(i.name)}" placeholder="Название">
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-            <input class="search" style="width:100px" id="editSize-${key}" value="${i.size||''}" placeholder="Размер">
-            <input class="search mono" style="width:160px" id="editBarcode-${key}" value="${i.barcode||''}" placeholder="Штрихкод" autocomplete="off">
-            <input class="search" style="flex:1;min-width:140px" id="editClient-${key}" value="${i.client||''}" placeholder="Клиент">
+            <input class="search" style="width:100px" id="editSize-${escapeHtml(key)}" value="${escapeHtml(i.size||'')}" placeholder="Размер">
+            <input class="search mono" style="width:160px" id="editBarcode-${escapeHtml(key)}" value="${escapeHtml(i.barcode||'')}" placeholder="Штрихкод" autocomplete="off">
+            <input class="search" style="flex:1;min-width:140px" id="editClient-${escapeHtml(key)}" value="${escapeHtml(i.client||'')}" placeholder="Клиент">
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-            <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Кол-во</div><input class="search" type="number" min="0" style="width:90px" id="editQty-${key}" value="${i.qty}"></div>
-            <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Ячейка</div><input class="search mono" type="number" min="1" style="width:90px" id="editCell-${key}" value="${i.cell||''}"></div>
+            <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Кол-во</div><input class="search" type="number" min="0" style="width:90px" id="editQty-${escapeHtml(key)}" value="${i.qty}"></div>
+            <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Ячейка</div><input class="search mono" type="number" min="1" style="width:90px" id="editCell-${escapeHtml(key)}" value="${i.cell||''}"></div>
           </div>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
             <span style="font-size:12px;color:var(--ink-soft);white-space:nowrap">Габариты, см:</span>
-            <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsL-${key}" value="${i.dims&&i.dims.l||''}" placeholder="Д">
+            <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsL-${escapeHtml(key)}" value="${i.dims&&i.dims.l||''}" placeholder="Д">
             <span style="color:var(--ink-faint)">×</span>
-            <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsW-${key}" value="${i.dims&&i.dims.w||''}" placeholder="Ш">
+            <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsW-${escapeHtml(key)}" value="${i.dims&&i.dims.w||''}" placeholder="Ш">
             <span style="color:var(--ink-faint)">×</span>
-            <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsH-${key}" value="${i.dims&&i.dims.h||''}" placeholder="В">
+            <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsH-${escapeHtml(key)}" value="${i.dims&&i.dims.h||''}" placeholder="В">
             <span style="font-size:11px;color:var(--ink-faint)">нужно для расчёта хранения</span>
           </div>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
             <span style="font-size:12px;color:var(--ink-soft);white-space:nowrap">Доп. штрихкоды:</span>
             ${inventoryBarcodes.filter(b=>b.sku===i.sku && (b.clientName||'')===(i.client||'') && (b.size||'')===(i.size||'')).map(b=>`
-              <span class="mono" style="font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;display:inline-flex;align-items:center;gap:6px">${b.barcode}<span style="cursor:pointer;color:var(--warn);font-weight:700" onclick="removeExtraBarcode('${key}','${b.barcode}')">✕</span></span>
+              <span class="mono" style="font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;display:inline-flex;align-items:center;gap:6px">${escapeHtml(b.barcode)}<span class="inv-act" style="cursor:pointer;color:var(--warn);font-weight:700" data-act="removeExtraBarcode" data-key="${escapeHtml(key)}" data-barcode="${escapeHtml(b.barcode)}">✕</span></span>
             `).join('') || '<span style="font-size:12px;color:var(--ink-faint)">пока нет</span>'}
-            <input class="search mono" style="width:150px" id="newExtraBarcode-${key}" placeholder="ещё один ШК" autocomplete="off">
-            <button class="btn btn-ghost" style="padding:5px 10px" onclick="addExtraBarcode('${key}')">+ Добавить</button>
+            <input class="search mono" style="width:150px" id="newExtraBarcode-${escapeHtml(key)}" placeholder="ещё один ШК" autocomplete="off">
+            <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="addExtraBarcode" data-key="${escapeHtml(key)}">+ Добавить</button>
           </div>
           <div style="display:flex;justify-content:flex-start;gap:8px;padding-top:8px;border-top:1px solid var(--line)">
-            <button class="btn btn-primary" style="padding:6px 14px" onclick="saveEdit('${key}')">Сохранить</button>
+            <button class="btn btn-primary inv-act" style="padding:6px 14px" data-act="saveEdit" data-key="${escapeHtml(key)}">Сохранить</button>
             <button class="btn btn-ghost" style="padding:6px 14px" onclick="cancelEdit()">Отмена</button>
           </div>
           </div>
@@ -1075,9 +1075,9 @@ function renderInventory(){
         <td colspan="5">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <span style="font-size:13px;color:var(--ink-soft)">Списать</span>
-            <input class="search" type="number" min="1" max="${i.qty}" value="1" id="woQty-${key}" style="width:70px;padding:6px 10px">
+            <input class="search" type="number" min="1" max="${i.qty}" value="1" id="woQty-${escapeHtml(key)}" style="width:70px;padding:6px 10px">
             <span style="font-size:13px;color:var(--ink-soft)">шт из ${i.qty}, причина:</span>
-            <select class="search" id="woReason-${key}" style="width:170px;padding:6px 10px">
+            <select class="search" id="woReason-${escapeHtml(key)}" style="width:170px;padding:6px 10px">
               <option>Брак</option>
               <option>Порча при хранении</option>
               <option>Утеря</option>
@@ -1087,7 +1087,7 @@ function renderInventory(){
           </div>
         </td>
         <td style="text-align:right;white-space:nowrap">
-          <button class="btn btn-accent" style="padding:5px 10px" onclick="confirmWriteOff('${key}')">Списать</button>
+          <button class="btn btn-accent inv-act" style="padding:5px 10px" data-act="confirmWriteOff" data-key="${escapeHtml(key)}">Списать</button>
           <button class="btn btn-ghost" style="padding:5px 10px" onclick="cancelWriteOff()">Отмена</button>
         </td>
       </tr>`;
@@ -1097,9 +1097,9 @@ function renderInventory(){
         <td class="mono">${i.sku}</td>
         <td colspan="6">
           <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
-            <span style="font-size:13px;color:var(--warn)">Удалить «${i.name}»${i.size?` (размер ${i.size})`:''} из остатков без возможности восстановить?</span>
+            <span style="font-size:13px;color:var(--warn)">Удалить «${escapeHtml(i.name)}»${i.size?` (размер ${escapeHtml(i.size)})`:''} из остатков без возможности восстановить?</span>
             <div style="white-space:nowrap">
-              <button class="btn btn-accent" style="padding:5px 10px" onclick="confirmDelete('${key}')">Да, удалить</button>
+              <button class="btn btn-accent inv-act" style="padding:5px 10px" data-act="confirmDelete" data-key="${escapeHtml(key)}">Да, удалить</button>
               <button class="btn btn-ghost" style="padding:5px 10px" onclick="cancelDelete()">Отмена</button>
             </div>
           </div>
@@ -1115,14 +1115,14 @@ function renderInventory(){
       <td class="${i.qty<=3?'qty-low':''}">${i.qty} шт${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}</td>
       <td style="text-align:right;white-space:nowrap">
         ${readOnly ? `
-        <button class="btn btn-ghost" style="padding:5px 10px" onclick="openHistory('${key}')">История</button>
+        <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="openHistory" data-key="${escapeHtml(key)}">История</button>
         ` : `
-        <button class="btn btn-ghost" style="padding:5px 10px" onclick="adjustQty('${key}',-1)">−</button>
-        <button class="btn btn-ghost" style="padding:5px 10px" onclick="adjustQty('${key}',1)">+</button>
-        <button class="btn btn-ghost" style="padding:5px 10px" onclick="startEdit('${key}')">Изменить</button>
-        <button class="btn btn-ghost" style="padding:5px 10px" onclick="openHistory('${key}')">История</button>
-        <button class="btn btn-ghost" style="padding:5px 10px;color:var(--warn)" onclick="openWriteOff('${key}')">Списать</button>
-        <button class="btn btn-ghost" style="padding:5px 10px;color:var(--warn)" onclick="openDelete('${key}')">Удалить</button>
+        <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="adjustQty" data-key="${escapeHtml(key)}" data-delta="-1">−</button>
+        <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="adjustQty" data-key="${escapeHtml(key)}" data-delta="1">+</button>
+        <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="startEdit" data-key="${escapeHtml(key)}">Изменить</button>
+        <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="openHistory" data-key="${escapeHtml(key)}">История</button>
+        <button class="btn btn-ghost inv-act" style="padding:5px 10px;color:var(--warn)" data-act="openWriteOff" data-key="${escapeHtml(key)}">Списать</button>
+        <button class="btn btn-ghost inv-act" style="padding:5px 10px;color:var(--warn)" data-act="openDelete" data-key="${escapeHtml(key)}">Удалить</button>
         `}
       </td>
     </tr>`;
@@ -3373,6 +3373,22 @@ function removeAllKizScans(supplyId){
 document.addEventListener('click', function(e){
   const btn = e.target.closest('.kiz-delete-btn');
   if(btn) removeKizScan(btn.dataset.supply, btn.dataset.kiz);
+});
+document.addEventListener('click', function(e){
+  const btn = e.target.closest('.inv-act');
+  if(!btn) return;
+  const key = btn.dataset.key;
+  const act = btn.dataset.act;
+  if(act==='adjustQty') adjustQty(key, parseInt(btn.dataset.delta));
+  else if(act==='startEdit') startEdit(key);
+  else if(act==='openHistory') openHistory(key);
+  else if(act==='openWriteOff') openWriteOff(key);
+  else if(act==='openDelete') openDelete(key);
+  else if(act==='saveEdit') saveEdit(key);
+  else if(act==='confirmWriteOff') confirmWriteOff(key);
+  else if(act==='confirmDelete') confirmDelete(key);
+  else if(act==='addExtraBarcode') addExtraBarcode(key);
+  else if(act==='removeExtraBarcode') removeExtraBarcode(key, btn.dataset.barcode);
 });
 function downloadKizExcel(supplyId){
   const s = supplies.find(x=>x.id===supplyId);
