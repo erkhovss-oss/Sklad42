@@ -698,6 +698,7 @@ let outboundDraftCollapsed = false;
 let outboundBoxes = [];
 let activeBoxSupplyId = null;
 let expandedBoxId = null;
+let outboundItemsCollapsed = true;
 let activeOutboundId = null;
 let editingOutboundId = null;
 let deletingOutboundId = null;
@@ -2328,7 +2329,11 @@ function renderOutboundDetail(s){
       </div>
       ${activeBoxSupplyId===s.id ? renderBoxPanel(s) : ''}
       <div class="panel">
-        ${s.items.slice().sort((a,b)=>(a.cell||999999)-(b.cell||999999)).map(it=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer;background:var(--bg)" onclick="toggleOutboundItemsCollapse()">
+          <h3 style="font-size:14px;color:var(--ink-soft)">Позиции поставки (${s.items.length})</h3>
+          <span style="font-size:12px;color:var(--ink-faint)">${outboundItemsCollapsed ? '▼' : '▲'}</span>
+        </div>
+        ${outboundItemsCollapsed ? '' : s.items.slice().sort((a,b)=>(a.cell||999999)-(b.cell||999999)).map(it=>`
           <div class="pick-row">
             <div><div class="sku-name">${it.name}${it.size?` · ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:''}</div></div>
             <div class="qty-need">${it.cell?`яч. ${it.cell} · `:''}${it.qty} шт</div>
@@ -2706,6 +2711,10 @@ function toggleBoxPanel(supplyId){
   expandedBoxId = null;
   renderOutboundTableWrap();
 }
+function toggleOutboundItemsCollapse(){
+  outboundItemsCollapsed = !outboundItemsCollapsed;
+  renderOutboundTableWrap();
+}
 function getRemainingForItem(supply, sku, size){
   const planned = supply.items.filter(i=>i.sku===sku && (i.size||'')===(size||'')).reduce((a,i)=>a+i.qty,0);
   const boxed = outboundBoxes.filter(b=>b.supplyId===supply.id).reduce((sum,b)=>
@@ -2810,6 +2819,18 @@ function manualAddToBox(supplyId, boxId){
     renderOutboundTableWrap();
   }
 }
+function addAllRemainingToBox(supplyId, boxId){
+  const supply = outboundSupplies.find(s=>s.id===supplyId);
+  if(!supply) return;
+  let addedCount = 0;
+  supply.items.forEach(i=>{
+    const remaining = getRemainingForItem(supply, i.sku, i.size||'');
+    if(remaining > 0 && addItemToBox(supply, boxId, i.sku, i.size||'', remaining)) addedCount++;
+  });
+  if(addedCount===0){ toast('Нечего добавлять — весь товар уже распределён по коробам'); return; }
+  toast(`Добавлено в короб: ${addedCount} поз. (всё нераспределённое)`);
+  renderOutboundTableWrap();
+}
 function renderBoxScanHandler(supplyId, boxId){
   const input = document.getElementById('boxScanInput-'+boxId);
   if(!input) return;
@@ -2863,6 +2884,7 @@ function renderBoxCard(supply, box){
               <input class="search" id="boxItemQty-${box.id}" type="number" min="1" value="1" style="width:80px">
               <button class="btn btn-ghost" onclick="manualAddToBox('${supply.id}','${box.id}')">+ Добавить</button>
             </div>
+            <button class="btn btn-accent" style="margin-top:10px;width:100%;justify-content:center" onclick="addAllRemainingToBox('${supply.id}','${box.id}')">📥 Добавить весь товар</button>
           </div>
           <button class="btn btn-ghost" style="margin-top:10px;color:var(--warn)" onclick="deleteOutboundBox('${box.id}')">Удалить короб</button>
         </div>
