@@ -758,11 +758,11 @@ function renderRecentActionsFeed(limit){
     const mm = a.time.getMinutes().toString().padStart(2,'0');
     const ss = a.time.getSeconds().toString().padStart(2,'0');
     return `<div class="pick-row" style="padding:8px 0;background:transparent">
-      <div>
-        <div class="sku-name" style="font-size:13px">${a.name}</div>
+      <div style="flex:1;min-width:0">
+        <div class="sku-name" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${a.name}">${a.name}</div>
         <div class="sku-code mono">${hh}:${mm}:${ss}${a.cell?` · ячейка ${a.cell}`:''}${a.note?` · ${a.note}`:''}</div>
       </div>
-      <div class="qty-need" style="color:${a.qty>=0?'var(--ok)':'var(--warn)'};font-weight:600">${a.qty>=0?'+':''}${a.qty} шт</div>
+      <div class="qty-need" style="color:${a.qty>=0?'var(--ok)':'var(--warn)'};font-weight:600;flex-shrink:0">${a.qty>=0?'+':''}${a.qty} шт</div>
     </div>`;
   }).join('');
 }
@@ -2609,13 +2609,13 @@ function setSuppliesView(view){
 }
 function downloadSupplyTemplate(){
   const data = [
-    ['Артикул','Размер','ШК','Кол-во'],
-    ['TK-1001','40','2460001112223',10],
-    ['TK-1001','41','2460001112230',8],
-    ['TK-2005','','2460004445556',25]
+    ['Артикул','Наименование','Размер','ШК','Кол-во'],
+    ['TK-1001','Кроссовки Runmax','40','2460001112223',10],
+    ['TK-1001','Кроссовки Runmax','41','2460001112230',8],
+    ['TK-2005','Термокружка 400мл','','2460004445556',25]
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:14},{wch:10},{wch:16},{wch:10}];
+  ws['!cols'] = [{wch:14},{wch:26},{wch:10},{wch:16},{wch:10}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Поставка');
   XLSX.writeFile(wb, 'shablon_postavka.xlsx');
@@ -2639,12 +2639,13 @@ function handleSupplyExcelUpload(inputEl){
         const row = rows[i];
         if(!row || !row.length) continue;
         const sku = String(row[0]||'').trim().toUpperCase();
-        const size = String(row[1]||'').trim();
-        const barcode = String(row[2]||'').trim();
-        const qty = parseInt(row[3]) || 0;
+        const nameFromFile = String(row[1]||'').trim();
+        const size = String(row[2]||'').trim();
+        const barcode = String(row[3]||'').trim();
+        const qty = parseInt(row[4]) || 0;
         if(!sku || qty<=0) continue;
         const invItem = inventory.find(x=>x.sku===sku && (x.size||'')===size);
-        const name = invItem ? invItem.name : sku;
+        const name = nameFromFile || (invItem ? invItem.name : sku);
         const finalBarcode = barcode || (invItem ? invItem.barcode||'' : '');
         if(!invItem) unmatched++;
         const existing = items.find(d=>d.sku===sku && (d.size||'')===size);
@@ -3063,7 +3064,7 @@ function renderSuppliesCreatePanel(){
   panel.innerHTML = `
     <div class="panel" style="padding:20px;margin-bottom:16px">
       <h3 style="font-size:18px;margin-bottom:4px">Создать плановую поставку</h3>
-      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px 0">Скачайте шаблон Excel (артикул, размер, ШК, количество), выберите клиента и загрузите — поставка появится в приёмке со статусом «Едет». Разные размеры одного артикула — отдельные строки в файле, у каждой свой ШК.</p>
+      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px 0">Скачайте шаблон Excel (артикул, наименование, размер, ШК, количество), выберите клиента и загрузите — поставка появится в приёмке со статусом «Едет». Разные размеры одного артикула — отдельные строки в файле, у каждой свой ШК.</p>
 
       <div class="eyebrow" style="margin-bottom:6px">Клиент склада / ИП</div>
       <select class="search" id="supplyClientSelect" style="width:100%;max-width:360px;margin-bottom:16px" onchange="setDraftSupplyClient(this.value)">
@@ -3247,10 +3248,12 @@ function renderKizScansList(supplyId, limit){
   const shown = limit ? rows.slice(0, limit) : rows;
   if(!shown.length) return `<p style="font-size:12px;color:var(--ink-faint);margin:8px 0">КИЗ ещё не отсканированы</p>`;
   return shown.map(r=>`
-    <div style="padding:8px 0;border-bottom:1px solid var(--line)">
-      <div class="sku-name" style="font-size:12px">${r.name}</div>
-      <div class="sku-code mono" style="font-size:10px;line-height:1.5;word-break:break-all;overflow-wrap:anywhere;margin:4px 0">${r.kizCode}</div>
-      <button class="btn btn-ghost" style="padding:3px 10px;font-size:11px;color:var(--warn)" onclick="removeKizScan('${supplyId}','${r.kizCode}')">Удалить</button>
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+      <div style="flex:1;min-width:0">
+        <div class="sku-name" style="font-size:12px">${r.name}</div>
+        <div class="sku-code mono" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r.kizCode}">${r.kizCode}</div>
+      </div>
+      <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;color:var(--warn);white-space:nowrap;flex-shrink:0" onclick="removeKizScan('${supplyId}','${r.kizCode}')">Удалить</button>
     </div>
   `).join('');
 }
