@@ -2948,6 +2948,7 @@ function renderSupplyReceivingPanel(s){
         </div>
         ${s.requiresKiz ? `
           <button class="btn btn-ghost" style="margin-bottom:10px" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel) — ${kizScans.filter(k=>k.supplyId===s.id).length} шт</button>
+          <button class="btn btn-ghost" style="margin-bottom:10px;margin-left:8px;color:var(--warn)" onclick="removeAllKizScans('${s.id}')">🗑 Удалить все КИЗ</button>
           <div class="panel" style="margin-bottom:14px;max-height:240px;overflow-y:auto;padding:4px 12px">
             ${renderKizScansList(s.id)}
           </div>
@@ -3057,8 +3058,9 @@ function renderSupplyReceivingPanel(s){
         </div>
         ${kizListCollapsed ? '' : `
           <div style="padding:2px 16px">${renderKizScansList(s.id)}</div>
-          <div style="padding:0 16px 14px 16px">
-            <button class="btn btn-ghost" style="width:100%;justify-content:center" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel)</button>
+          <div style="padding:0 16px 14px 16px;display:flex;gap:8px">
+            <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel)</button>
+            <button class="btn btn-ghost" style="flex:1;justify-content:center;color:var(--warn)" onclick="removeAllKizScans('${s.id}')">🗑 Удалить все</button>
           </div>
         `}
       </div>
@@ -3281,6 +3283,11 @@ function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
 }
+function escapeHtml(str){
+  return String(str==null?'':str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 function renderKizScansList(supplyId, limit){
   const rows = kizScans.filter(k=>k.supplyId===supplyId).slice().reverse();
   const shown = limit ? rows.slice(0, limit) : rows;
@@ -3288,14 +3295,14 @@ function renderKizScansList(supplyId, limit){
   return shown.map(r=>`
     <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
       <div style="flex:1;min-width:0">
-        <div class="sku-name" style="font-size:12px">${r.name}</div>
-        <div class="sku-code mono" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r.kizCode}">${r.kizCode}</div>
+        <div class="sku-name" style="font-size:12px">${escapeHtml(r.name)}</div>
+        <div class="sku-code mono" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(r.kizCode)}">${escapeHtml(r.kizCode)}</div>
       </div>
-      <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;color:var(--warn);white-space:nowrap;flex-shrink:0" onclick="removeKizScan('${supplyId}','${r.kizCode}')">Удалить</button>
+      <button class="btn btn-ghost kiz-delete-btn" style="padding:3px 8px;font-size:11px;color:var(--warn);white-space:nowrap;flex-shrink:0" data-supply="${escapeHtml(supplyId)}" data-kiz="${escapeHtml(r.kizCode)}">Удалить</button>
     </div>
   `).join('');
 }
-function removeKizScan(supplyId, kizCode){
+function removeKizScan(supplyId, kizCode, silent){
   const supply = supplies.find(s=>s.id===supplyId);
   if(!supply) return;
   const idx = kizScans.findIndex(k=>k.supplyId===supplyId && k.kizCode===kizCode);
@@ -3317,9 +3324,24 @@ function removeKizScan(supplyId, kizCode){
   sb.from('kiz_scans').delete().eq('kiz_code', kizCode).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось удалить КИЗ в базе'); }
   });
-  toast(`КИЗ удалён, количество скорректировано (−1)`);
+  if(!silent){
+    toast(`КИЗ удалён, количество скорректировано (−1)`);
+    renderSuppliesTableWrap();
+  }
+}
+function removeAllKizScans(supplyId){
+  const count = kizScans.filter(k=>k.supplyId===supplyId).length;
+  if(!count){ toast('Нечего удалять'); return; }
+  if(!confirm(`Удалить все ${count} отсканированных КИЗ по этой поставке? Количество по каждой позиции будет уменьшено соответственно. Отменить нельзя.`)) return;
+  const codes = kizScans.filter(k=>k.supplyId===supplyId).map(k=>k.kizCode);
+  codes.forEach(code=>removeKizScan(supplyId, code, true));
+  toast(`Удалено КИЗ: ${codes.length}`);
   renderSuppliesTableWrap();
 }
+document.addEventListener('click', function(e){
+  const btn = e.target.closest('.kiz-delete-btn');
+  if(btn) removeKizScan(btn.dataset.supply, btn.dataset.kiz);
+});
 function downloadKizExcel(supplyId){
   const s = supplies.find(x=>x.id===supplyId);
   const rows = kizScans.filter(k=>k.supplyId===supplyId);
