@@ -740,9 +740,19 @@ let recentReceivingActions = [];
 let lastScanInfo = null;
 let kizScans = [];
 let pendingKizItem = null;
-let itemsListCollapsed = false;
+let itemsListCollapsed = true;
+let recentActionsCollapsed = true;
+let kizListCollapsed = true;
 function toggleItemsListCollapse(){
   itemsListCollapsed = !itemsListCollapsed;
+  renderSuppliesTableWrap();
+}
+function toggleRecentActionsCollapse(){
+  recentActionsCollapsed = !recentActionsCollapsed;
+  renderSuppliesTableWrap();
+}
+function toggleKizListCollapse(){
+  kizListCollapsed = !kizListCollapsed;
   renderSuppliesTableWrap();
 }
 function pushRecentAction(entry){
@@ -1027,7 +1037,17 @@ function renderInventory(){
             <span style="color:var(--ink-faint)">×</span>
             <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsH-${key}" value="${i.dims&&i.dims.h||''}" placeholder="В">
             <span style="font-size:11px;color:var(--ink-faint)">нужно для расчёта хранения</span>
-            <button class="btn btn-primary" style="margin-left:auto;padding:5px 10px" onclick="saveEdit('${key}')">Сохранить</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+            <span style="font-size:12px;color:var(--ink-soft);white-space:nowrap">Доп. штрихкоды:</span>
+            ${inventoryBarcodes.filter(b=>b.sku===i.sku && (b.clientName||'')===(i.client||'') && (b.size||'')===(i.size||'')).map(b=>`
+              <span class="mono" style="font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;display:inline-flex;align-items:center;gap:6px">${b.barcode}<span style="cursor:pointer;color:var(--warn);font-weight:700" onclick="removeExtraBarcode('${key}','${b.barcode}')">✕</span></span>
+            `).join('') || '<span style="font-size:12px;color:var(--ink-faint)">пока нет</span>'}
+            <input class="search mono" style="width:150px" id="newExtraBarcode-${key}" placeholder="ещё один ШК" autocomplete="off">
+            <button class="btn btn-ghost" style="padding:5px 10px" onclick="addExtraBarcode('${key}')">+ Добавить</button>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+            <button class="btn btn-primary" style="padding:5px 10px" onclick="saveEdit('${key}')">Сохранить</button>
             <button class="btn btn-ghost" style="padding:5px 10px" onclick="cancelEdit()">Отмена</button>
           </div>
         </td>
@@ -1220,9 +1240,14 @@ function findInventoryItem(sku, client, size){
     return true;
   });
 }
+let inventoryBarcodes = []; // {barcode, sku, clientName, size} — доп. штрихкоды сверх основного
 function findInventoryItemByBarcode(barcode, client){
   if(!barcode) return null;
-  return inventory.find(i=> i.barcode===barcode && (client===undefined || (i.client||'')===(client||'')) );
+  let item = inventory.find(i=> i.barcode===barcode && (client===undefined || (i.client||'')===(client||'')) );
+  if(item) return item;
+  const extra = inventoryBarcodes.find(b=> b.barcode===barcode && (client===undefined || (b.clientName||'')===(client||'')) );
+  if(extra) return findInventoryItem(extra.sku, extra.clientName, extra.size);
+  return null;
 }
 function logMovement(sku, name, delta, type, client, size){
   const now = new Date();
@@ -2963,17 +2988,31 @@ function renderSupplyReceivingPanel(s){
   });
   const mismatchCount = s.items.filter(i=>i.receivedQty !== i.qty && i.receivedQty>0).length;
   const remaining = Math.max(0, totalPlan - totalFact);
+  const kizCount = kizScans.filter(k=>k.supplyId===s.id).length;
   return `
     <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:12px">${renderSupplyDeleteControl(s)}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <button class="btn btn-ghost sound-toggle" style="padding:5px 10px" onclick="toggleSound()">${soundEnabled?'🔊 Звук':'🔇 Звук'}</button>
+        ${renderSupplyDeleteControl(s)}
+      </div>
+
       ${renderScanScoreboard()}
+
+      <div class="eyebrow" style="margin:16px 0 8px 0">Сканирование${s.requiresKiz?' · требует КИЗ':''}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+        <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="flex:1;min-width:240px" autocomplete="off" ${(s.requiresKiz && pendingKizItem)?'disabled':''}>
+        ${s.requiresKiz ? `<input class="search mono" id="supplyKizInput-${s.id}" placeholder="КИЗ (Честный Знак)…" style="flex:1;min-width:240px" autocomplete="off" ${pendingKizItem?'':'disabled'}>` : ''}
+      </div>
+      ${pendingKizItem ? `<div style="padding:8px 10px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--ink-soft);margin-bottom:8px">Ожидается КИЗ для: <b>${pendingKizItem.name}</b></div>` : ''}
+      <p style="font-size:12px;color:var(--ink-faint);margin:0 0 16px 0;line-height:1.5">${s.requiresKiz ? 'Сначала штрихкод товара, затем код каждой единицы (Честный Знак). Дубли КИЗ отклоняются автоматически.' : 'Сканируйте штрихкод товара из этой поставки — сразу услышите номер ячейки голосом. Принять можно больше или меньше плана — расхождение зафиксируется при завершении.'}</p>
+
       <div class="stat-row" style="margin-bottom:16px">
         <div class="stat"><div class="val" style="color:var(--ok)">${totalFact}</div><div class="lbl">Принято</div></div>
         <div class="stat"><div class="val">${remaining}</div><div class="lbl">Осталось</div></div>
         <div class="stat"><div class="val" style="color:${mismatchCount?'var(--warn)':'var(--ink)'}">${mismatchCount}</div><div class="lbl">С расхождением</div></div>
         <div class="stat"><div class="val" style="color:${(s.unmatchedScans||0)?'var(--warn)':'var(--ink)'}">${s.unmatchedScans||0}</div><div class="lbl">Не найдено</div></div>
       </div>
-      <div style="margin-bottom:16px">
+      <div style="margin-bottom:20px">
         <div style="display:flex;justify-content:space-between;align-items:baseline">
           <span class="mono" style="font-size:14px;font-weight:600">Принято ${totalFact} из ${totalPlan}</span>
           <span class="mono" style="font-size:14px;font-weight:700;color:${pct>=100?'var(--ok)':'var(--accent)'}">${pct}%</span>
@@ -2982,53 +3021,52 @@ function renderSupplyReceivingPanel(s){
           <div class="progress-fill" style="width:${pct}%;background:${pct>=100?'var(--ok)':'var(--accent)'}"></div>
         </div>
       </div>
-      <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
-        <div style="width:260px;flex-shrink:0">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <div class="eyebrow">Сканер приёмки${s.requiresKiz?' · КИЗ':''}</div>
-            <button class="btn btn-ghost sound-toggle" style="padding:3px 8px;font-size:11px" onclick="toggleSound()">${soundEnabled?'🔊 Звук':'🔇 Звук'}</button>
-          </div>
-          <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="margin-top:8px;width:100%" autocomplete="off" ${(s.requiresKiz && pendingKizItem)?'disabled':''}>
-          ${s.requiresKiz ? `
-            <input class="search mono" id="supplyKizInput-${s.id}" placeholder="КИЗ (Честный Знак)…" style="margin-top:8px;width:100%" autocomplete="off" ${pendingKizItem?'':'disabled'}>
-            ${pendingKizItem ? `<div style="margin-top:8px;padding:8px 10px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--ink-soft)">Ожидается КИЗ для: <b>${pendingKizItem.name}</b></div>` : ''}
-            <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Эта поставка требует КИЗ — сначала штрихкод товара, затем код каждой единицы (Честный Знак). Дубли КИЗ отклоняются автоматически.</p>
-            <button class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:4px" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel)</button>
-            <div class="eyebrow" style="margin-top:14px;margin-bottom:4px">Отсканированные КИЗ (${kizScans.filter(k=>k.supplyId===s.id).length})</div>
-            <div class="panel" style="max-height:180px;overflow-y:auto;padding:2px 10px">
-              ${renderKizScansList(s.id)}
+
+      <div class="panel" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer;background:var(--bg)" onclick="toggleItemsListCollapse()">
+          <h3 style="font-size:14px;color:var(--ink-soft)">Строки поставки (${s.items.length})</h3>
+          <span style="font-size:12px;color:var(--ink-faint)">${itemsListCollapsed ? '▼' : '▲'}</span>
+        </div>
+        ${itemsListCollapsed ? '' : sortedItems.map(it=>{
+          const done = it.receivedQty >= it.qty;
+          const over = it.receivedQty > it.qty;
+          return `<div class="pick-row ${done?'done':''}" ${over?'style="background:var(--warn-bg)"':''}>
+            <div><div class="sku-name">${it.name}${it.size?` · размер ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:' · без штрихкода'}</div></div>
+            <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+              <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',-1,'${it.size||''}')">−</button>
+              <div class="qty-need" style="min-width:56px;text-align:center;${over?'color:var(--warn);font-weight:700':''}">${it.receivedQty}/${it.qty}</div>
+              <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',1,'${it.size||''}')">+</button>
             </div>
-          ` : `
-            <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Сканируйте штрихкод товара из этой поставки — сразу услышите номер ячейки (голосом) и увидите его в подсказке. Принять можно больше или меньше плана — расхождение зафиксируется при завершении.</p>
-          `}
-          <div style="display:flex;gap:8px;margin-top:12px">
-            <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="undoLastScan()" ${(!lastScanInfo||!lastScanInfo.canUndo)?'disabled':''}>↩ Отменить скан</button>
-          </div>
-          <button class="btn btn-primary" style="margin-top:8px;width:100%;justify-content:center" onclick="finishSupplyReceiving('${s.id}')">Завершить приёмку</button>
-          <div class="eyebrow" style="margin-top:18px;margin-bottom:4px">Последние действия</div>
-          <div style="max-height:220px;overflow-y:auto">
-            ${renderRecentActionsFeed(8)}
-          </div>
+          </div>`;
+        }).join('')}
+      </div>
+
+      <div class="panel" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer;background:var(--bg)" onclick="toggleRecentActionsCollapse()">
+          <h3 style="font-size:14px;color:var(--ink-soft)">История сканов (${recentReceivingActions.length})</h3>
+          <span style="font-size:12px;color:var(--ink-faint)">${recentActionsCollapsed ? '▼' : '▲'}</span>
         </div>
-        <div style="width:100%;border-top:2px solid var(--line);margin:18px 0 2px 0"></div>
-        <div class="panel" style="flex:1;min-width:280px;margin-top:2px">
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer;background:var(--bg)" onclick="toggleItemsListCollapse()">
-            <h3 style="font-size:14px;color:var(--ink-soft)">📋 Позиции поставки (${s.items.length})</h3>
-            <span style="font-size:12px;color:var(--ink-faint)">${itemsListCollapsed ? 'Развернуть ▼' : 'Свернуть ▲'}</span>
-          </div>
-          ${itemsListCollapsed ? '' : sortedItems.map(it=>{
-            const done = it.receivedQty >= it.qty;
-            const over = it.receivedQty > it.qty;
-            return `<div class="pick-row ${done?'done':''}" ${over?'style="background:var(--warn-bg)"':''}>
-              <div><div class="sku-name">${it.name}${it.size?` · размер ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:' · без штрихкода'}</div></div>
-              <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
-                <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',-1,'${it.size||''}')">−</button>
-                <div class="qty-need" style="min-width:56px;text-align:center;${over?'color:var(--warn);font-weight:700':''}">${it.receivedQty}/${it.qty}</div>
-                <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',1,'${it.size||''}')">+</button>
-              </div>
-            </div>`;
-          }).join('')}
+        ${recentActionsCollapsed ? '' : `<div style="padding:2px 16px">${renderRecentActionsFeed(20)}</div>`}
+      </div>
+
+      ${s.requiresKiz ? `
+      <div class="panel" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer;background:var(--bg)" onclick="toggleKizListCollapse()">
+          <h3 style="font-size:14px;color:var(--ink-soft)">Отсканированные КИЗ (${kizCount})</h3>
+          <span style="font-size:12px;color:var(--ink-faint)">${kizListCollapsed ? '▼' : '▲'}</span>
         </div>
+        ${kizListCollapsed ? '' : `
+          <div style="padding:2px 16px">${renderKizScansList(s.id)}</div>
+          <div style="padding:0 16px 14px 16px">
+            <button class="btn btn-ghost" style="width:100%;justify-content:center" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel)</button>
+          </div>
+        `}
+      </div>
+      ` : ''}
+
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="undoLastScan()" ${(!lastScanInfo||!lastScanInfo.canUndo)?'disabled':''}>↩ Отменить скан</button>
+        <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="finishSupplyReceiving('${s.id}')">Завершить приёмку</button>
       </div>
     </div>
   `;
@@ -3472,6 +3510,44 @@ async function loadInventory(){
   if(error){ console.error(error); return; }
   inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null}));
 }
+async function loadInventoryBarcodes(){
+  const { data, error } = await sb.from('inventory_barcodes').select('*');
+  if(error){ console.error(error); return; }
+  inventoryBarcodes = data.map(b=>({barcode:b.barcode, sku:b.sku, clientName:b.client_name, size:b.size||''}));
+}
+function addExtraBarcode(key){
+  const {sku, client, size} = parseItemKey(key);
+  const input = document.getElementById('newExtraBarcode-'+key);
+  const barcode = input.value.trim();
+  if(!barcode){ toast('Введите штрихкод'); return; }
+  if(findInventoryItemByBarcode(barcode, undefined)){
+    toast('Этот штрихкод уже привязан к другому товару');
+    return;
+  }
+  inventoryBarcodes.push({barcode, sku, clientName: client||'', size: size||''});
+  sb.from('inventory_barcodes').insert({barcode, sku, client_name: client||'', size: size||''}).then(({error})=>{
+    if(error){
+      console.error(error);
+      inventoryBarcodes = inventoryBarcodes.filter(b=>b.barcode!==barcode);
+      toast('Не удалось сохранить штрихкод в базе — возможно, он уже используется');
+      renderInventory();
+      return;
+    }
+    toast('Штрихкод добавлен');
+    renderInventory();
+  });
+  input.value='';
+  renderInventory();
+}
+function removeExtraBarcode(key, barcode){
+  const {client} = parseItemKey(key);
+  inventoryBarcodes = inventoryBarcodes.filter(b=>!(b.barcode===barcode && (b.clientName||'')===(client||'')));
+  sb.from('inventory_barcodes').delete().eq('barcode', barcode).eq('client_name', client||'').then(({error})=>{
+    if(error) console.error(error);
+  });
+  toast('Штрихкод удалён');
+  renderInventory();
+}
 async function loadMovementLog(){
   const { data, error } = await sb.from('movement_log').select('*').order('created_at',{ascending:true}).limit(500);
   if(error){ console.error(error); return; }
@@ -3570,7 +3646,7 @@ async function initApp(){
     return;
   }
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadKizScans(), loadFbsOrders()]);
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadKizScans(), loadFbsOrders()]);
   }catch(err){
     console.error(err);
   }
