@@ -513,7 +513,7 @@
             <select class="search" id="invCellFilter" style="width:170px">
               <option value="">Все ячейки</option>
             </select>
-            <input class="search" id="invSearch" placeholder="Поиск по названию или артикулу…" style="flex:1">
+            <input class="search" id="invSearch" placeholder="Поиск по названию, артикулу или штрихкоду (можно частично)…" style="flex:1">
           </div>
           <div class="stat-row" id="invStats"></div>
           <div class="panel">
@@ -672,6 +672,8 @@ let outboundSupplies = [];
 let draftOutboundClientId = '';
 let draftOutboundItems = [];
 let activeOutboundId = null;
+let editingOutboundId = null;
+let deletingOutboundId = null;
 let supplyCounter = 0;
 let draftSupplyItems = [];
 let draftSupplyClientId = '';
@@ -903,7 +905,7 @@ function renderWriteoffsView(){
   const reasonFilter = reasonSelect.value;
 
   const filtered = writeOffLog.filter(w =>
-    (!q || w.sku.toLowerCase().includes(q) || w.name.toLowerCase().includes(q)) &&
+    (!q || w.sku.toLowerCase().includes(q) || w.name.toLowerCase().includes(q) || inventory.some(i=>i.sku===w.sku && (i.barcode||'').toLowerCase().includes(q))) &&
     (!reasonFilter || w.reason === reasonFilter)
   );
   const totalQty = filtered.reduce((s,w)=>s+w.qty,0);
@@ -962,7 +964,7 @@ function renderInventory(){
   cellSelect.value = cellNumbers.map(String).includes(prevCellValue) ? prevCellValue : '';
 
   const rows = inventory.filter(i =>
-    (i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q)) &&
+    (i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q) || (i.barcode||'').toLowerCase().includes(q)) &&
     (readOnly ? i.client === clientViewMode.name : (!clientFilter || i.client === clientFilter)) &&
     (!cellFilter || String(i.cell)===cellFilter)
   ).sort((a,b)=>{
@@ -1188,6 +1190,10 @@ function findInventoryItem(sku, client, size){
     if(size!==undefined && (i.size||'')!==(size||'')) return false;
     return true;
   });
+}
+function findInventoryItemByBarcode(barcode, client){
+  if(!barcode) return null;
+  return inventory.find(i=> i.barcode===barcode && (client===undefined || (i.client||'')===(client||'')) );
 }
 function logMovement(sku, name, delta, type, client, size){
   const now = new Date();
@@ -2077,6 +2083,7 @@ function createOutboundSupply(){
   renderInventory();
 }
 function toggleOutboundDetail(id){
+  if(activeOutboundId !== id){ editingOutboundId = null; deletingOutboundId = null; }
   activeOutboundId = activeOutboundId===id ? null : id;
   renderOutboundTableWrap();
 }
@@ -2144,6 +2151,44 @@ function renderOutboundTableWrap(){
 }
 function renderOutboundDetail(s){
   const totalQty = s.items.reduce((a,i)=>a+i.qty,0);
+
+  if(deletingOutboundId === s.id){
+    return `
+      <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 14px;background:var(--warn-bg);border-radius:8px">
+          <span style="font-size:13px;color:var(--warn)">Удалить поставку ${s.id}? Товар (${totalQty} шт) вернётся в остатки на складе. Отменить нельзя.</span>
+          <div style="white-space:nowrap">
+            <button class="btn btn-accent" onclick="confirmDeleteOutbound('${s.id}')">Да, удалить</button>
+            <button class="btn btn-ghost" onclick="cancelDeleteOutbound()">Отмена</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if(editingOutboundId === s.id){
+    return `
+      <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
+        <div class="eyebrow" style="margin-bottom:4px">Изменить поставку ${s.id}</div>
+        <div style="margin:10px 0 14px 0">
+          <div class="eyebrow" style="margin-bottom:6px">Куда отправляем</div>
+          <input class="search" id="editOutboundDest-${s.id}" value="${s.destination}" style="width:100%;max-width:420px">
+        </div>
+        <div class="panel" style="margin-bottom:14px">
+          ${s.items.map(it=>`
+            <div class="pick-row">
+              <div><div class="sku-name">${it.name}${it.size?` · ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:''}</div></div>
+              <input class="search mono" type="number" min="0" value="${it.qty}" style="width:90px" id="editOutQty-${s.id}-${it.sku}-${it.size||''}">
+            </div>
+          `).join('')}
+        </div>
+        <p style="font-size:12px;color:var(--ink-faint);margin:0 0 14px 0">Поставьте 0, чтобы убрать позицию целиком. Увеличение количества списывает разницу со склада ещё раз, уменьшение — возвращает.</p>
+        <button class="btn btn-accent" onclick="saveOutboundEdit('${s.id}')">Сохранить изменения</button>
+        <button class="btn btn-ghost" onclick="cancelEditOutbound()">Отмена</button>
+      </div>
+    `;
+  }
+
   return `
     <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
@@ -2151,6 +2196,8 @@ function renderOutboundDetail(s){
         <div style="display:flex;gap:8px">
           <button class="btn btn-accent" onclick="printPickList('${s.id}')">🖨 Лист подбора</button>
           ${s.status!=='shipped' ? `<button class="btn btn-ghost" onclick="markOutboundShipped('${s.id}')">Отметить отправленной</button>` : ''}
+          <button class="btn btn-ghost" onclick="openEditOutbound('${s.id}')">Изменить</button>
+          <button class="btn btn-ghost" style="color:var(--warn)" onclick="openDeleteOutbound('${s.id}')">Удалить</button>
         </div>
       </div>
       <div class="panel">
@@ -2163,6 +2210,74 @@ function renderOutboundDetail(s){
       </div>
     </div>
   `;
+}
+function openEditOutbound(id){ editingOutboundId = id; deletingOutboundId = null; renderOutboundTableWrap(); }
+function cancelEditOutbound(){ editingOutboundId = null; renderOutboundTableWrap(); }
+function saveOutboundEdit(id){
+  const s = outboundSupplies.find(x=>x.id===id);
+  if(!s) return;
+  const newDest = document.getElementById('editOutboundDest-'+id).value.trim();
+  if(!newDest){ toast('Укажите склад назначения'); return; }
+
+  const changes = [];
+  for(const it of s.items){
+    const inputEl = document.getElementById(`editOutQty-${id}-${it.sku}-${it.size||''}`);
+    if(!inputEl) continue;
+    const newQty = Math.max(0, parseInt(inputEl.value)||0);
+    const diff = newQty - it.qty;
+    if(diff===0) continue;
+    const inv = it.barcode ? findInventoryItemByBarcode(it.barcode, s.clientName) : findInventoryItem(it.sku, s.clientName, it.size||'');
+    if(diff>0 && (!inv || inv.qty < diff)){
+      toast(`Недостаточно на складе для «${it.name}» — есть ${inv?inv.qty:0}, нужно ещё ${diff}`);
+      return;
+    }
+    changes.push({it, newQty, diff, inv});
+  }
+
+  changes.forEach(({it, newQty, diff, inv})=>{
+    if(inv){
+      inv.qty -= diff;
+      logMovement(inv.sku, inv.name, -diff, `Корректировка поставки на склад: ${newDest}`, inv.client, inv.size);
+    }
+    it.qty = newQty;
+  });
+  s.items = s.items.filter(it=>it.qty>0);
+  s.destination = newDest;
+  editingOutboundId = null;
+  toast('Изменения сохранены');
+  renderOutbound();
+  renderInventory();
+
+  sb.from('outbound_supplies').update({destination:newDest}).eq('id', id).then(({error})=>{ if(error) console.error(error); });
+  sb.from('outbound_supply_items').delete().eq('supply_id', id).then(({error})=>{
+    if(error){ console.error(error); return; }
+    if(s.items.length){
+      const rows = s.items.map(it=>({supply_id:id, sku:it.sku, name:it.name, qty:it.qty, barcode:it.barcode||null, cell:it.cell||null, size:it.size||null}));
+      sb.from('outbound_supply_items').insert(rows).then(({error})=>{ if(error) console.error(error); });
+    }
+  });
+}
+function openDeleteOutbound(id){ deletingOutboundId = id; editingOutboundId = null; renderOutboundTableWrap(); }
+function cancelDeleteOutbound(){ deletingOutboundId = null; renderOutboundTableWrap(); }
+function confirmDeleteOutbound(id){
+  const s = outboundSupplies.find(x=>x.id===id);
+  if(!s) return;
+  s.items.forEach(it=>{
+    const inv = it.barcode ? findInventoryItemByBarcode(it.barcode, s.clientName) : findInventoryItem(it.sku, s.clientName, it.size||'');
+    if(inv){
+      inv.qty += it.qty;
+      logMovement(inv.sku, inv.name, it.qty, `Отмена поставки на склад: ${s.destination}`, inv.client, inv.size);
+    }
+  });
+  outboundSupplies = outboundSupplies.filter(x=>x.id!==id);
+  deletingOutboundId = null;
+  if(activeOutboundId===id) activeOutboundId = null;
+  toast(`Поставка ${id} удалена, товар возвращён на склад`);
+  renderOutbound();
+  renderInventory();
+  sb.from('outbound_supplies').delete().eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить поставку в базе'); }
+  });
 }
 function printPickList(id){
   const s = outboundSupplies.find(x=>x.id===id);
@@ -2335,14 +2450,14 @@ function adjustSupplyItem(supplyId, sku, delta, size){
   if(diff===0) return;
   const wasOver = item.receivedQty > item.qty;
   item.receivedQty = newVal;
-  let inv = findInventoryItem(sku, supply.clientName, size);
+  let inv = item.barcode ? findInventoryItemByBarcode(item.barcode, supply.clientName) : findInventoryItem(sku, supply.clientName, size);
   if(!inv){
-    inv = {sku, name: item.name, qty:0, client: supply.clientName, size};
+    inv = {sku, name: item.name, qty:0, client: supply.clientName, size, barcode: item.barcode||''};
     inventory.push(inv);
   }
   inv.qty += diff;
-  if(diff>0) logReceipt(sku, item.name, diff, supply.clientName, size);
-  else logMovement(sku, item.name, diff, 'Корректировка приёмки поставки', supply.clientName, size);
+  if(diff>0) logReceipt(inv.sku, inv.name, diff, inv.client, inv.size);
+  else logMovement(inv.sku, inv.name, diff, 'Корректировка приёмки поставки', inv.client, inv.size);
   pushRecentAction({name:item.name + (size?` (${size})`:''), sku, qty:diff, cell:inv.cell, note:'вручную'});
   if(diff>0 && item.receivedQty>item.qty && !wasOver) toast(`«${item.name}»${size?` (${size})`:''}: принято больше, чем заказано (${item.receivedQty} из ${item.qty})`);
   renderSuppliesTableWrap();
@@ -2547,7 +2662,12 @@ function renderSupplyReceivingPanel(s){
           <div class="stat"><div class="val">${totalReceived}</div><div class="lbl">Принято</div></div>
           <div class="stat"><div class="val" style="color:${mismatches.length?'var(--warn)':'var(--ok)'}">${mismatches.length}</div><div class="lbl">Позиций с расхождением</div></div>
         </div>
-        ${s.requiresKiz ? `<button class="btn btn-ghost" style="margin-bottom:14px" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel) — ${kizScans.filter(k=>k.supplyId===s.id).length} шт</button>` : ''}
+        ${s.requiresKiz ? `
+          <button class="btn btn-ghost" style="margin-bottom:10px" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel) — ${kizScans.filter(k=>k.supplyId===s.id).length} шт</button>
+          <div class="panel" style="margin-bottom:14px;max-height:240px;overflow-y:auto;padding:4px 12px">
+            ${renderKizScansList(s.id)}
+          </div>
+        ` : ''}
         <div class="panel">
           ${s.items.map(it=>{
             const diff = it.receivedQty - it.qty;
@@ -2615,6 +2735,10 @@ function renderSupplyReceivingPanel(s){
             ${pendingKizItem ? `<div style="margin-top:8px;padding:8px 10px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--ink-soft)">Ожидается КИЗ для: <b>${pendingKizItem.name}</b></div>` : ''}
             <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Эта поставка требует КИЗ — сначала штрихкод товара, затем код каждой единицы (Честный Знак). Дубли КИЗ отклоняются автоматически.</p>
             <button class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:4px" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel)</button>
+            <div class="eyebrow" style="margin-top:14px;margin-bottom:4px">Отсканированные КИЗ (${kizScans.filter(k=>k.supplyId===s.id).length})</div>
+            <div class="panel" style="max-height:180px;overflow-y:auto;padding:2px 10px">
+              ${renderKizScansList(s.id)}
+            </div>
           ` : `
             <p style="font-size:12px;color:var(--ink-faint);margin-top:8px;line-height:1.5">Сканируйте штрихкод товара из этой поставки — сразу услышите номер ячейки (голосом) и увидите его в подсказке. Принять можно больше или меньше плана — расхождение зафиксируется при завершении.</p>
           `}
@@ -2772,8 +2896,14 @@ function renderSuppliesTableWrap(){
         if(!code) return;
         let item = supply.items.find(i=>i.barcode && i.barcode===code);
         if(!item){
-          const invMatch = inventory.find(i=>i.barcode===code);
-          if(invMatch) item = supply.items.find(i=>i.sku===invMatch.sku && (i.size||'')===(invMatch.size||''));
+          const candidates = supply.items.filter(i=>i.sku===code);
+          if(candidates.length===1) item = candidates[0];
+          else if(candidates.length>1){
+            playBeep('error');
+            toast('У этого артикула несколько размеров в поставке — отсканируйте именно штрихкод, а не артикул');
+            renderSuppliesTableWrap();
+            return;
+          }
         }
         if(!item){
           playBeep('error');
@@ -2784,7 +2914,7 @@ function renderSuppliesTableWrap(){
           return;
         }
         if(supply.requiresKiz){
-          pendingKizItem = {supplyId: supply.id, sku: item.sku, name: item.name, barcode: item.barcode||code};
+          pendingKizItem = {supplyId: supply.id, sku: item.sku, name: item.name, barcode: item.barcode||code, size: item.size||''};
           playBeep('warn');
           toast(`Отсканируйте КИЗ для «${item.name}»`);
           renderSuppliesTableWrap();
@@ -2809,9 +2939,10 @@ function renderSuppliesTableWrap(){
           toast(`Этот КИЗ уже был принят ранее (поставка ${dup.supplyId}, ${dup.name})`);
           return;
         }
-        const item = supply.items.find(i=>i.sku===pendingKizItem.sku);
-        finalizeSupplyItemReceipt(supply, item, pendingKizItem.barcode, kizCode);
+        const item = supply.items.find(i=>i.sku===pendingKizItem.sku && (i.size||'')===(pendingKizItem.size||''));
+        const pending = pendingKizItem;
         pendingKizItem = null;
+        finalizeSupplyItemReceipt(supply, item, pending.barcode, kizCode);
       });
     }
   }
@@ -2821,15 +2952,15 @@ function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   const size = item.size || '';
   const wasOver = item.receivedQty > item.qty;
   item.receivedQty++;
-  let inv = findInventoryItem(sku, supply.clientName, size);
+  let inv = barcode ? findInventoryItemByBarcode(barcode, supply.clientName) : findInventoryItem(sku, supply.clientName, size);
   if(!inv){
     inv = {sku, name: item.name, qty:0, client: supply.clientName, size, barcode: barcode||''};
     inventory.push(inv);
   }
   inv.qty++;
-  logReceipt(sku, item.name, 1, supply.clientName, size);
+  logReceipt(inv.sku, inv.name, 1, inv.client, inv.size);
   const cell = ensureCellAssigned(inv);
-  syncInventoryRow(sku, supply.clientName, size);
+  syncInventoryRow(inv.sku, inv.client, inv.size);
   const isOver = item.receivedQty>item.qty && !wasOver;
   if(isOver){ playBeep('warn'); toast(`«${item.name}»${size?` (${size})`:''}: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
   else { playBeep('ok'); toast(`«${item.name}»${size?` (${size})`:''} → Ячейка ${cell}`); }
@@ -2851,6 +2982,42 @@ function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).then(({error})=>{
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
+}
+function renderKizScansList(supplyId, limit){
+  const rows = kizScans.filter(k=>k.supplyId===supplyId).slice().reverse();
+  const shown = limit ? rows.slice(0, limit) : rows;
+  if(!shown.length) return `<p style="font-size:12px;color:var(--ink-faint);margin:8px 0">КИЗ ещё не отсканированы</p>`;
+  return shown.map(r=>`
+    <div class="pick-row" style="padding:6px 0">
+      <div><div class="sku-name" style="font-size:12px">${r.name}</div><div class="sku-code mono" style="font-size:11px;word-break:break-all">${r.kizCode}</div></div>
+      <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;color:var(--warn);white-space:nowrap" onclick="removeKizScan('${supplyId}','${r.kizCode}')">Удалить</button>
+    </div>
+  `).join('');
+}
+function removeKizScan(supplyId, kizCode){
+  const supply = supplies.find(s=>s.id===supplyId);
+  if(!supply) return;
+  const idx = kizScans.findIndex(k=>k.supplyId===supplyId && k.kizCode===kizCode);
+  if(idx===-1) return;
+  const scan = kizScans[idx];
+  kizScans.splice(idx,1);
+
+  const item = supply.items.find(i=>i.sku===scan.sku);
+  if(item){
+    item.receivedQty = Math.max(0, item.receivedQty-1);
+    const inv = findInventoryItem(scan.sku, supply.clientName, item.size);
+    if(inv) inv.qty = Math.max(0, inv.qty-1);
+    logMovement(scan.sku, scan.name, -1, 'Удаление КИЗ', supply.clientName, item.size);
+    sb.from('supply_items').update({received_qty:item.receivedQty}).eq('supply_id', supplyId).eq('sku', scan.sku).eq('size', item.size||null).then(({error})=>{
+      if(error) console.error(error);
+    });
+  }
+
+  sb.from('kiz_scans').delete().eq('kiz_code', kizCode).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить КИЗ в базе'); }
+  });
+  toast(`КИЗ удалён, количество скорректировано (−1)`);
+  renderSuppliesTableWrap();
 }
 function downloadKizExcel(supplyId){
   const s = supplies.find(x=>x.id===supplyId);
