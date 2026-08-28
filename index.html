@@ -1029,15 +1029,19 @@ function renderInventory(){
       return `<tr>
         <td class="mono" style="vertical-align:top;padding-top:14px">${i.sku}</td>
         <td colspan="6">
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <input class="search" style="flex:1;min-width:160px" id="editName-${key}" value="${i.name}" placeholder="Название">
-            <input class="search" style="width:100px" id="editSize-${key}" value="${i.size||''}" placeholder="Размер">
-            <input class="search mono" style="width:150px" id="editBarcode-${key}" value="${i.barcode||''}" placeholder="Штрихкод" autocomplete="off">
-            <input class="search" style="width:170px" id="editClient-${key}" value="${i.client||''}" placeholder="Клиент">
-            <input class="search" type="number" min="0" style="width:80px" id="editQty-${key}" value="${i.qty}" placeholder="Кол-во">
-            <input class="search mono" type="number" min="1" style="width:90px" id="editCell-${key}" value="${i.cell||''}" placeholder="Ячейка">
+          <div style="margin-bottom:8px">
+            <input class="search" style="width:100%" id="editName-${key}" value="${i.name}" placeholder="Название">
           </div>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <input class="search" style="width:100px" id="editSize-${key}" value="${i.size||''}" placeholder="Размер">
+            <input class="search mono" style="width:160px" id="editBarcode-${key}" value="${i.barcode||''}" placeholder="Штрихкод" autocomplete="off">
+            <input class="search" style="flex:1;min-width:140px" id="editClient-${key}" value="${i.client||''}" placeholder="Клиент">
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Кол-во</div><input class="search" type="number" min="0" style="width:90px" id="editQty-${key}" value="${i.qty}"></div>
+            <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Ячейка</div><input class="search mono" type="number" min="1" style="width:90px" id="editCell-${key}" value="${i.cell||''}"></div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
             <span style="font-size:12px;color:var(--ink-soft);white-space:nowrap">Габариты, см:</span>
             <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsL-${key}" value="${i.dims&&i.dims.l||''}" placeholder="Д">
             <span style="color:var(--ink-faint)">×</span>
@@ -1046,7 +1050,7 @@ function renderInventory(){
             <input class="search mono" type="number" min="0" step="0.1" style="width:64px" id="editDimsH-${key}" value="${i.dims&&i.dims.h||''}" placeholder="В">
             <span style="font-size:11px;color:var(--ink-faint)">нужно для расчёта хранения</span>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
             <span style="font-size:12px;color:var(--ink-soft);white-space:nowrap">Доп. штрихкоды:</span>
             ${inventoryBarcodes.filter(b=>b.sku===i.sku && (b.clientName||'')===(i.client||'') && (b.size||'')===(i.size||'')).map(b=>`
               <span class="mono" style="font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;display:inline-flex;align-items:center;gap:6px">${b.barcode}<span style="cursor:pointer;color:var(--warn);font-weight:700" onclick="removeExtraBarcode('${key}','${b.barcode}')">✕</span></span>
@@ -1054,9 +1058,9 @@ function renderInventory(){
             <input class="search mono" style="width:150px" id="newExtraBarcode-${key}" placeholder="ещё один ШК" autocomplete="off">
             <button class="btn btn-ghost" style="padding:5px 10px" onclick="addExtraBarcode('${key}')">+ Добавить</button>
           </div>
-          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
-            <button class="btn btn-primary" style="padding:5px 10px" onclick="saveEdit('${key}')">Сохранить</button>
-            <button class="btn btn-ghost" style="padding:5px 10px" onclick="cancelEdit()">Отмена</button>
+          <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:8px;border-top:1px solid var(--line)">
+            <button class="btn btn-primary" style="padding:6px 14px" onclick="saveEdit('${key}')">Сохранить</button>
+            <button class="btn btn-ghost" style="padding:6px 14px" onclick="cancelEdit()">Отмена</button>
           </div>
         </td>
       </tr>`;
