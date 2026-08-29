@@ -1008,7 +1008,7 @@ function renderInventory(){
   const clientNames = [...new Set(inventory.map(i=>i.client).filter(Boolean))].sort();
   const filterSelect = document.getElementById('invClientFilter');
   const prevValue = filterSelect.value;
-  filterSelect.innerHTML = `<option value="">Все клиенты</option>` + clientNames.map(c=>`<option value="${c}">${c}</option>`).join('');
+  filterSelect.innerHTML = `<option value="">Все клиенты</option>` + clientNames.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
   filterSelect.value = clientNames.includes(prevValue) ? prevValue : '';
 
   const cellNumbers = [...new Set(inventory.map(i=>i.cell).filter(Boolean))].sort((a,b)=>a-b);
@@ -1373,7 +1373,7 @@ function renderReceiving(mode){
         ` : `
           <div class="eyebrow" style="margin-top:16px">Товар</div>
           <select id="receiveSelect" class="scan-input" style="margin-top:6px">
-            ${inventory.map(i=>`<option value="${i.sku}">${i.sku} — ${i.name}</option>`).join('')}
+            ${inventory.map(i=>`<option value="${escapeHtml(i.sku)}">${escapeHtml(i.sku)} — ${escapeHtml(i.name)}</option>`).join('')}
             <option value="__new__">+ Новый товар (создать)</option>
           </select>
           <div id="newSkuFields" style="display:none;margin-top:10px">
@@ -2023,7 +2023,7 @@ function renderOutboundCreatePanel(){
         <div style="flex:1;min-width:220px">
           <div class="eyebrow" style="margin-bottom:6px">Куда отправляем (склад назначения)</div>
           <input class="search" id="outboundDestination" list="outboundDestList" placeholder="напр. Региональный склад — Казань" style="width:100%">
-          <datalist id="outboundDestList">${destinations.map(d=>`<option value="${d}">`).join('')}</datalist>
+          <datalist id="outboundDestList">${destinations.map(d=>`<option value="${escapeHtml(d)}">`).join('')}</datalist>
         </div>
       </div>
 
