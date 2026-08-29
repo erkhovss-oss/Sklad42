@@ -486,7 +486,8 @@
     <div class="nav-item" data-tab="supplies"><span class="num">04</span>Плановые поставки</div>
     <div class="nav-item" data-tab="outbound"><span class="num">05</span>Поставка на склад</div>
     <div class="nav-item" data-tab="fbs"><span class="num">06</span>Заказы FBS</div>
-    <div class="nav-item" data-tab="employees"><span class="num">07</span>Сотрудники</div>
+    <div class="nav-item" data-tab="dds"><span class="num">07</span>ДДС</div>
+    <div class="nav-item" data-tab="employees"><span class="num">08</span>Сотрудники</div>
     <div class="sidebar-foot" id="sidebarFoot">ТелеПак · WMS</div>
   </div>
 
@@ -635,6 +636,50 @@
         <div id="fbsBody"></div>
       </section>
 
+      <!-- DDS -->
+      <section class="section" id="tab-dds">
+        <div class="page-head">
+          <div>
+            <h1>ДДС</h1>
+            <p>Движение денежных средств — приход и расход</p>
+          </div>
+        </div>
+        <div class="panel" style="padding:20px;margin-bottom:18px">
+          <div class="eyebrow" style="margin-bottom:10px">Новая операция</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <select class="search" id="ddsType" style="width:140px">
+              <option value="income">Приход</option>
+              <option value="expense">Расход</option>
+            </select>
+            <select class="search" id="ddsCategory" style="width:220px"></select>
+            <input class="search" id="ddsAmount" type="number" min="0" step="0.01" placeholder="Сумма, ₽" style="width:150px">
+            <input class="search" id="ddsDate" type="date" style="width:160px">
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <select class="search" id="ddsClient" style="width:220px"><option value="">Без привязки к клиенту</option></select>
+            <input class="search" id="ddsDescription" placeholder="Комментарий (необязательно)" style="flex:1;min-width:220px">
+          </div>
+          <button class="btn btn-primary" onclick="createDdsEntry()">Добавить операцию</button>
+        </div>
+        <div class="panel" style="padding:16px 20px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+          <div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:2px">Приход по хранению уже считается в системе</div>
+            <div style="font-size:12px;color:var(--ink-faint)">Возьмёт стоимость хранения по дням из раздела «Хранение» и добавит сюда как приход — повторный запуск не задвоит, только обновит суммы, если они изменились</div>
+          </div>
+          <button class="btn btn-accent" onclick="generateStorageIncome()">📥 Подтянуть приход по хранению</button>
+        </div>
+        <div class="stat-row" id="ddsStats" style="margin-bottom:16px"></div>
+        <div class="panel" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <input class="search" id="ddsSearch" placeholder="Поиск по комментарию, категории, клиенту…" style="flex:1;min-width:200px">
+          <select class="search" id="ddsFilterType" style="width:150px">
+            <option value="">Приход и расход</option>
+            <option value="income">Только приход</option>
+            <option value="expense">Только расход</option>
+          </select>
+        </div>
+        <div id="ddsTableWrap"></div>
+      </section>
+
       <!-- EMPLOYEES -->
       <section class="section" id="tab-employees">
         <div class="page-head">
@@ -723,6 +768,11 @@ let employeeCounter = 3;
 let currentUser = null;
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
+let ddsEntries = [];
+const DDS_CATEGORIES = {
+  income: ['Хранение', 'Приёмка', 'Упаковка/обработка коробов', 'Комиссия за услуги фулфилмента', 'Прочий доход'],
+  expense: ['Аренда склада', 'Зарплата сотрудникам', 'Расходные материалы (упаковка, скотч, этикетки)', 'Транспорт и логистика', 'Комиссии маркетплейсов', 'Программное обеспечение и сервисы', 'Налоги', 'Прочие расходы']
+};
 let editingEmployeeId = null;
 let editingRoleId = null;
 
@@ -935,6 +985,7 @@ function switchTab(tab){
   if(tab==='supplies') renderSuppliesTab();
   if(tab==='outbound') renderOutbound();
   if(tab==='fbs') renderFbsOrders();
+  if(tab==='dds') renderDds();
   if(tab==='employees') renderEmployeesTab();
   try{ localStorage.setItem('sklad42_active_tab', tab); }catch(e){}
 }
@@ -3034,6 +3085,136 @@ function printBoxLabels(supplyId){
   win.document.close();
 }
 
+// ---------- DDS (движение денежных средств) ----------
+async function loadDdsEntries(){
+  const { data, error } = await sb.from('dds_entries').select('*').order('date',{ascending:false});
+  if(error){ console.error(error); return; }
+  ddsEntries = data.map(d=>({
+    id:d.id, type:d.type, category:d.category, amount:Number(d.amount), description:d.description||'',
+    clientId:d.client_id, clientName:d.client_name||'', date:d.date, createdAt:d.created_at
+  }));
+}
+function updateDdsCategoryOptions(){
+  const typeSelect = document.getElementById('ddsType');
+  const catSelect = document.getElementById('ddsCategory');
+  if(!typeSelect || !catSelect) return;
+  const cats = DDS_CATEGORIES[typeSelect.value] || [];
+  catSelect.innerHTML = cats.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+}
+function renderDdsClientSelect(){
+  const select = document.getElementById('ddsClient');
+  if(!select) return;
+  const prev = select.value;
+  select.innerHTML = `<option value="">Без привязки к клиенту</option>` + clients.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  if(clients.find(c=>c.id===prev)) select.value = prev;
+}
+function renderDds(){
+  renderDdsClientSelect();
+  updateDdsCategoryOptions();
+  const dateInput = document.getElementById('ddsDate');
+  if(dateInput && !dateInput.value) dateInput.value = new Date().toISOString().slice(0,10);
+  renderDdsTable();
+}
+function createDdsEntry(){
+  const type = document.getElementById('ddsType').value;
+  const category = document.getElementById('ddsCategory').value;
+  const amount = Math.max(0, parseFloat(document.getElementById('ddsAmount').value) || 0);
+  const date = document.getElementById('ddsDate').value || new Date().toISOString().slice(0,10);
+  const clientId = document.getElementById('ddsClient').value;
+  const client = clients.find(c=>c.id===clientId);
+  const description = document.getElementById('ddsDescription').value.trim();
+  if(!amount){ toast('Укажите сумму'); return; }
+  const id = 'DDS-' + Date.now();
+  const entry = {id, type, category, amount, description, clientId: clientId||null, clientName: client?client.name:'', date, createdAt: new Date().toISOString()};
+  ddsEntries.unshift(entry);
+  document.getElementById('ddsAmount').value = '';
+  document.getElementById('ddsDescription').value = '';
+  toast(`${type==='income'?'Приход':'Расход'} добавлен: ${amount.toFixed(2)} ₽`);
+  renderDdsTable();
+  sb.from('dds_entries').insert({id, type, category, amount, description, client_id: clientId||null, client_name: client?client.name:null, date}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить операцию в базе'); }
+  });
+}
+function deleteDdsEntry(id){
+  if(!confirm('Удалить эту операцию?')) return;
+  ddsEntries = ddsEntries.filter(d=>d.id!==id);
+  toast('Операция удалена');
+  renderDdsTable();
+  sb.from('dds_entries').delete().eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить в базе'); }
+  });
+}
+function generateStorageIncome(){
+  let created = 0, updated = 0, skipped = 0;
+  storageHistoryRows.forEach(row=>{
+    const cost = Number(row.cost) || 0;
+    if(cost <= 0){ skipped++; return; }
+    const id = `STORAGE-${row.client_id}-${row.day}`;
+    const client = clients.find(c=>c.id===row.client_id);
+    const existing = ddsEntries.find(d=>d.id===id);
+    if(existing){
+      if(Math.abs(existing.amount - cost) > 0.01){
+        existing.amount = cost;
+        updated++;
+        sb.from('dds_entries').update({amount:cost}).eq('id', id).then(({error})=>{ if(error) console.error(error); });
+      }
+    } else {
+      const description = `Автоматически из «Хранения» за ${new Date(row.day).toLocaleDateString('ru-RU')}`;
+      const entry = {id, type:'income', category:'Хранение', amount:cost, description, clientId:row.client_id, clientName: client?client.name:'', date: row.day, createdAt:new Date().toISOString()};
+      ddsEntries.push(entry);
+      created++;
+      sb.from('dds_entries').insert({id, type:'income', category:'Хранение', amount:cost, description, client_id:row.client_id, client_name: client?client.name:null, date: row.day}).then(({error})=>{
+        if(error) console.error(error);
+      });
+    }
+  });
+  toast(`Приход по хранению: создано ${created}, обновлено ${updated}${skipped?`, пропущено (нулевая стоимость) ${skipped}`:''}`);
+  renderDdsTable();
+}
+function renderDdsTable(){
+  const q = (document.getElementById('ddsSearch').value || '').toLowerCase();
+  const typeFilter = document.getElementById('ddsFilterType').value;
+  const rows = ddsEntries.filter(d=>
+    (!typeFilter || d.type===typeFilter) &&
+    (!q || d.category.toLowerCase().includes(q) || d.description.toLowerCase().includes(q) || (d.clientName||'').toLowerCase().includes(q))
+  );
+  const income = rows.filter(d=>d.type==='income').reduce((a,d)=>a+d.amount,0);
+  const expense = rows.filter(d=>d.type==='expense').reduce((a,d)=>a+d.amount,0);
+  document.getElementById('ddsStats').innerHTML = `
+    <div class="stat"><div class="val" style="color:var(--ok)">+${income.toFixed(0)} ₽</div><div class="lbl">Приход</div></div>
+    <div class="stat"><div class="val" style="color:var(--warn)">−${expense.toFixed(0)} ₽</div><div class="lbl">Расход</div></div>
+    <div class="stat"><div class="val" style="color:${(income-expense)>=0?'var(--ok)':'var(--warn)'}">${(income-expense).toFixed(0)} ₽</div><div class="lbl">Баланс</div></div>
+  `;
+  const wrap = document.getElementById('ddsTableWrap');
+  if(!rows.length){
+    wrap.innerHTML = `<div class="panel empty">Операций пока нет</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="panel">
+      <table>
+        <thead><tr><th>Дата</th><th>Тип</th><th>Категория</th><th>Клиент</th><th>Комментарий</th><th>Сумма</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map(d=>`
+            <tr>
+              <td class="mono" style="font-size:12px">${new Date(d.date).toLocaleDateString('ru-RU')}</td>
+              <td><span class="status ${d.type==='income'?'assembled':'overdue'}">${d.type==='income'?'Приход':'Расход'}</span></td>
+              <td>${escapeHtml(d.category)}</td>
+              <td>${d.clientName?escapeHtml(d.clientName):'—'}</td>
+              <td style="color:var(--ink-soft);font-size:13px">${escapeHtml(d.description)||'—'}</td>
+              <td class="mono" style="font-weight:600;color:${d.type==='income'?'var(--ok)':'var(--warn)'}">${d.type==='income'?'+':'−'}${d.amount.toFixed(2)} ₽</td>
+              <td style="text-align:right"><button class="btn btn-ghost" style="padding:4px 10px" onclick="deleteDdsEntry('${d.id}')">Удалить</button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+document.getElementById('ddsType').addEventListener('change', updateDdsCategoryOptions);
+document.getElementById('ddsSearch').addEventListener('input', renderDdsTable);
+document.getElementById('ddsFilterType').addEventListener('change', renderDdsTable);
+
 // ---------- SUPPLIES (planned deliveries) ----------
 function renderSuppliesTab(){
   document.getElementById('viewPlannedBtn').className = 'btn ' + (currentSuppliesView==='planned' ? 'btn-accent' : 'btn-ghost');
@@ -3899,6 +4080,34 @@ function togglePermission(roleId, key){
     if(error){ console.error(error); toast('Не удалось сохранить права в базе'); }
   });
 }
+function createRole(){
+  const nameInput = document.getElementById('newRoleName');
+  const name = nameInput.value.trim();
+  if(!name){ toast('Укажите название роли'); return; }
+  const id = 'ROLE-' + Date.now();
+  const permissions = {inventory:true, clients:true, storage:true, supplies:true, outbound:true, fbs:true, dds:true, employees:true};
+  roles.push({id, name, permissions});
+  toast(`Роль «${name}» создана со всеми правами`);
+  renderEmployeesTab();
+  sb.from('roles').insert({id, name, permissions}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить роль в базе'); }
+  });
+}
+function deleteRole(roleId){
+  const role = roles.find(r=>r.id===roleId);
+  const inUse = employees.filter(e=>e.roleId===roleId);
+  if(inUse.length){
+    toast(`Нельзя удалить — роль назначена сотрудникам: ${inUse.map(e=>e.name).join(', ')}`);
+    return;
+  }
+  if(!confirm(`Удалить роль «${role.name}»?`)) return;
+  roles = roles.filter(r=>r.id!==roleId);
+  toast('Роль удалена');
+  renderEmployeesTab();
+  sb.from('roles').delete().eq('id', roleId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить роль в базе'); }
+  });
+}
 function renderEmployeesTab(){
   document.getElementById('viewEmployeesBtn').className = 'btn ' + (currentEmployeesView==='list' ? 'btn-accent' : 'btn-ghost');
   document.getElementById('viewRolesBtn').className = 'btn ' + (currentEmployeesView==='roles' ? 'btn-accent' : 'btn-ghost');
@@ -3906,10 +4115,21 @@ function renderEmployeesTab(){
   const body = document.getElementById('employeesBody');
 
   if(currentEmployeesView==='roles'){
-    const permLabels = [['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['employees','Сотрудники']];
-    body.innerHTML = roles.map(r=>`
+    const permLabels = [['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['outbound','Поставка на склад'],['fbs','Заказы FBS'],['dds','ДДС'],['employees','Сотрудники']];
+    body.innerHTML = `
+      <div class="panel" style="padding:18px;margin-bottom:18px">
+        <div class="eyebrow" style="margin-bottom:10px">Новая роль</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <input class="search" id="newRoleName" placeholder="Название роли, напр. Руководитель" style="flex:1;min-width:200px">
+          <button class="btn btn-primary" onclick="createRole()">Создать (со всеми правами)</button>
+        </div>
+      </div>
+    ` + roles.map(r=>`
       <div class="panel" style="padding:18px;margin-bottom:12px">
-        <div class="oid" style="margin-bottom:10px">${r.name}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div class="oid">${escapeHtml(r.name)}</div>
+          <button class="btn btn-ghost" style="padding:4px 10px;color:var(--warn)" onclick="deleteRole('${r.id}')">Удалить роль</button>
+        </div>
         <div style="display:flex;gap:18px;flex-wrap:wrap">
           ${permLabels.map(([key,label])=>`
             <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
@@ -4143,7 +4363,7 @@ async function initApp(){
     return;
   }
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders()]);
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries()]);
   }catch(err){
     console.error(err);
   }
