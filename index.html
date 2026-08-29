@@ -768,6 +768,7 @@ let employeeCounter = 3;
 let currentUser = null;
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
+let fbsTariffs = [];
 let ddsEntries = [];
 const DDS_CATEGORIES = {
   income: ['Хранение', 'Приёмка', 'Упаковка/обработка коробов', 'Комиссия за услуги фулфилмента', 'Прочий доход'],
@@ -1633,6 +1634,42 @@ function saveTariff(clientId){
   });
   recordStorageSnapshot(c);
 }
+async function loadFbsTariffs(){
+  const { data, error } = await sb.from('fbs_tariffs').select('*').order('max_liters');
+  if(error){ console.error(error); return; }
+  fbsTariffs = data.map(t=>({id:t.id, clientId:t.client_id, maxLiters:Number(t.max_liters), price:Number(t.price)}));
+}
+function addFbsTariff(clientId){
+  const litersInput = document.getElementById('newTariffLiters-'+clientId);
+  const priceInput = document.getElementById('newTariffPrice-'+clientId);
+  const maxLiters = parseFloat(litersInput.value);
+  const price = parseFloat(priceInput.value);
+  if(!maxLiters || maxLiters<=0){ toast('Укажите объём (до скольки литров)'); return; }
+  if(price===undefined || isNaN(price) || price<0){ toast('Укажите цену'); return; }
+  if(fbsTariffs.find(t=>t.clientId===clientId && t.maxLiters===maxLiters)){
+    toast('Такая ступень уже есть — удалите её сначала, если нужно изменить цену');
+    return;
+  }
+  sb.from('fbs_tariffs').insert({client_id:clientId, max_liters:maxLiters, price}).select().single().then(({data, error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить тариф в базе'); return; }
+    fbsTariffs.push({id:data.id, clientId, maxLiters, price});
+    toast('Ступень тарифа добавлена');
+    renderClients();
+  });
+}
+function removeFbsTariff(id){
+  fbsTariffs = fbsTariffs.filter(t=>t.id!==id);
+  renderClients();
+  sb.from('fbs_tariffs').delete().eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить тариф в базе'); }
+  });
+}
+function getFbsTariffPrice(clientId, liters){
+  const tiers = fbsTariffs.filter(t=>t.clientId===clientId).sort((a,b)=>a.maxLiters-b.maxLiters);
+  if(!tiers.length) return null;
+  const tier = tiers.find(t=>liters <= t.maxLiters);
+  return tier ? tier.price : tiers[tiers.length-1].price;
+}
 async function upsertStorageSnapshot(clientId, day, liters, cost){
   const { data: existing, error: selErr } = await sb.from('storage_history').select('id').eq('client_id', clientId).eq('day', day).limit(1);
   if(selErr){ console.error(selErr); return; }
@@ -1906,6 +1943,31 @@ function renderClientDetail(body){
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:baseline;gap:8px">
         <span style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700">${(liters*c.pricePerLiter).toFixed(2)} ₽</span>
         <span style="font-size:12px;color:var(--ink-soft)">в сутки, при текущем объёме</span>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:20px;margin-bottom:18px">
+      <h3 style="font-size:18px;margin-bottom:6px">Тариф на отгрузку FBS (по литражу)</h3>
+      <p style="font-size:12px;color:var(--ink-soft);margin:0 0 14px 0">Ступени по объёму товара: «до скольки литров — сколько стоит отгрузка одной единицы». При сборке заказа система сама возьмёт объём товара (габариты × 1 шт) и подставит нужную ступень.</p>
+      <div style="margin-bottom:14px">
+        ${fbsTariffs.filter(t=>t.clientId===c.id).sort((a,b)=>a.maxLiters-b.maxLiters).map(t=>`
+          <div class="pick-row" style="padding:8px 0">
+            <div><div class="sku-name">До ${t.maxLiters} л</div></div>
+            <div class="qty-need">${t.price.toFixed(2)} ₽/шт</div>
+            <button class="btn btn-ghost" style="padding:4px 8px" onclick="removeFbsTariff('${t.id}')">✕</button>
+          </div>
+        `).join('') || '<p style="font-size:13px;color:var(--ink-faint);margin:0">Тарифов пока нет — без них отгрузка не попадёт в ДДС автоматически</p>'}
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">До скольки литров</div>
+          <input class="search mono" id="newTariffLiters-${c.id}" type="number" min="0" step="0.1" placeholder="напр. 1" style="width:130px">
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Цена за отгрузку, ₽</div>
+          <input class="search mono" id="newTariffPrice-${c.id}" type="number" min="0" step="0.1" placeholder="напр. 25" style="width:150px">
+        </div>
+        <button class="btn btn-primary" onclick="addFbsTariff('${c.id}')">+ Добавить ступень</button>
       </div>
     </div>
 
@@ -2682,6 +2744,21 @@ function finishAssembleOrder(order, kizCode){
   }
   inv.qty -= 1;
   logMovement(inv.sku, inv.name, -1, `Сборка заказа FBS №${order.orderId}`, inv.client, inv.size);
+  if(inv.dims && inv.dims.l && inv.dims.w && inv.dims.h){
+    const liters = (inv.dims.l * inv.dims.w * inv.dims.h) / 1000;
+    const tariffPrice = getFbsTariffPrice(order.clientId, liters);
+    if(tariffPrice !== null){
+      const ddsId = 'FBS-SHIP-' + order.orderId;
+      if(!ddsEntries.find(d=>d.id===ddsId)){
+        const description = `Отгрузка FBS №${order.orderId} · ${liters.toFixed(2)} л`;
+        const entry = {id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, clientId:order.clientId, clientName:order.clientName, date:new Date().toISOString().slice(0,10), createdAt:new Date().toISOString()};
+        ddsEntries.unshift(entry);
+        sb.from('dds_entries').insert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, client_id:order.clientId, client_name:order.clientName, date:entry.date}).then(({error})=>{
+          if(error) console.error(error);
+        });
+      }
+    }
+  }
   if(kizCode){
     kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, size:inv.size||'', clientName:order.clientName, time:new Date().toISOString()});
     sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, size:inv.size||null, client_name:order.clientName}).then(({error})=>{
@@ -4363,7 +4440,7 @@ async function initApp(){
     return;
   }
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries()]);
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs()]);
   }catch(err){
     console.error(err);
   }
