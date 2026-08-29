@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>СКЛАД/42 — прототип</title>
+<title>ТелеПак — прототип</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -462,7 +462,7 @@
 
 <div id="loginScreen">
   <div class="login-card">
-    <div class="logo" style="padding:0 0 22px 0"><b>СКЛАД/42</b><span>WMS</span></div>
+    <div class="logo" style="padding:0 0 22px 0"><b>ТелеПак</b><span>WMS</span></div>
     <div id="loginLoading" style="text-align:center;padding:24px 0;color:var(--ink-faint);font-size:13px">Загрузка…</div>
     <div id="loginFormWrap" style="display:none">
       <div class="eyebrow" style="margin-bottom:16px">Вход в личный кабинет</div>
@@ -478,7 +478,7 @@
 
 <div class="app" id="appRoot" style="display:none">
   <div class="sidebar">
-    <div class="logo"><b>СКЛАД/42</b><span>WMS</span></div>
+    <div class="logo"><b>ТелеПак</b><span>WMS</span></div>
     <div class="nav-group-label">Склад</div>
     <div class="nav-item active" data-tab="inventory" style="padding-left:26px"><span class="num">01</span>Остатки</div>
     <div class="nav-item" data-tab="clients"><span class="num">02</span>Клиенты</div>
@@ -487,7 +487,7 @@
     <div class="nav-item" data-tab="outbound"><span class="num">05</span>Поставка на склад</div>
     <div class="nav-item" data-tab="fbs"><span class="num">06</span>Заказы FBS</div>
     <div class="nav-item" data-tab="employees"><span class="num">07</span>Сотрудники</div>
-    <div class="sidebar-foot" id="sidebarFoot">СКЛАД/42 · WMS</div>
+    <div class="sidebar-foot" id="sidebarFoot">ТелеПак · WMS</div>
   </div>
 
   <div class="main">
@@ -3196,7 +3196,7 @@ function getWarehouseInfo(){
 }
 function editWarehouseInfo(){
   const cur = getWarehouseInfo();
-  const name = prompt('Название организации-исполнителя (будет в актах):', cur.name || 'СКЛАД/42');
+  const name = prompt('Название организации-исполнителя (будет в актах):', cur.name || 'ТелеПак');
   if(name===null) return;
   const inn = prompt('ИНН исполнителя (можно оставить пустым):', cur.inn || '');
   try{ localStorage.setItem('sklad42_warehouse_info', JSON.stringify({name, inn: inn||''})); }catch(e){}
@@ -3257,7 +3257,7 @@ function generateSupplyActPdf(id){
   if(!wh.name){
     editWarehouseInfo();
     wh = getWarehouseInfo();
-    if(!wh.name) wh.name = 'СКЛАД/42';
+    if(!wh.name) wh.name = 'ТелеПак';
   }
 
   const today = new Date();
