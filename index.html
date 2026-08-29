@@ -723,6 +723,7 @@ let employeeCounter = 3;
 let currentUser = null;
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
+let editingEmployeeId = null;
 let editingRoleId = null;
 
 // ---------- HELPERS ----------
@@ -3843,7 +3844,7 @@ function logout(){
 }
 
 function setEmployeesView(view){ currentEmployeesView = view; renderEmployeesTab(); }
-function openNewEmployeeForm(){ showingNewEmployeeForm = true; renderEmployeesTab(); }
+function openNewEmployeeForm(){ showingNewEmployeeForm = true; editingEmployeeId = null; renderEmployeesTab(); }
 function closeNewEmployeeForm(){ showingNewEmployeeForm = false; renderEmployeesTab(); }
 function createEmployee(){
   const name = document.getElementById('newEmpName').value.trim();
@@ -3866,6 +3867,28 @@ function toggleEmployeeActive(id){
   renderEmployeesTab();
   sb.from('employees').update({active: emp.active}).eq('id', id).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
+  });
+}
+function startEditEmployee(id){ editingEmployeeId = id; showingNewEmployeeForm = false; renderEmployeesTab(); }
+function cancelEditEmployee(){ editingEmployeeId = null; renderEmployeesTab(); }
+function saveEmployee(id){
+  const emp = employees.find(e=>e.id===id);
+  const name = document.getElementById('editEmpName-'+id).value.trim();
+  const login = document.getElementById('editEmpLogin-'+id).value.trim();
+  const newPin = document.getElementById('editEmpPin-'+id).value.trim();
+  const roleId = document.getElementById('editEmpRole-'+id).value;
+  if(!name || !login){ toast('Укажите имя и логин'); return; }
+  emp.name = name;
+  emp.login = login;
+  emp.roleId = roleId;
+  if(newPin) emp.pin = newPin;
+  editingEmployeeId = null;
+  toast('Данные сотрудника сохранены');
+  renderEmployeesTab();
+  const update = {name, login, role_id: roleId};
+  if(newPin) update.pin = newPin;
+  sb.from('employees').update(update).eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить в базе (возможно, такой логин уже занят)'); }
   });
 }
 function togglePermission(roleId, key){
@@ -3923,13 +3946,30 @@ function renderEmployeesTab(){
         <tbody>
           ${employees.map(e=>{
             const role = roles.find(r=>r.id===e.roleId);
+            if(editingEmployeeId === e.id){
+              return `<tr>
+                <td colspan="5">
+                  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:8px 0">
+                    <input class="search" id="editEmpName-${escapeHtml(e.id)}" value="${escapeHtml(e.name)}" placeholder="ФИО" style="flex:1;min-width:160px">
+                    <input class="search" id="editEmpLogin-${escapeHtml(e.id)}" value="${escapeHtml(e.login)}" placeholder="Логин" style="width:140px">
+                    <input class="search" id="editEmpPin-${escapeHtml(e.id)}" placeholder="Новый пароль (оставить пустым — не менять)" style="width:260px">
+                    <select class="search" id="editEmpRole-${escapeHtml(e.id)}" style="width:190px">
+                      ${roles.map(r=>`<option value="${r.id}" ${e.roleId===r.id?'selected':''}>${r.name}</option>`).join('')}
+                    </select>
+                    <button class="btn btn-primary" style="padding:6px 12px" onclick="saveEmployee('${escapeHtml(e.id)}')">Сохранить</button>
+                    <button class="btn btn-ghost" style="padding:6px 12px" onclick="cancelEditEmployee()">Отмена</button>
+                  </div>
+                </td>
+              </tr>`;
+            }
             return `<tr>
               <td>${e.name}</td>
               <td class="mono">${e.login}</td>
               <td>${role?role.name:'—'}</td>
               <td>${e.active ? '<span class="status assembled">Активен</span>' : '<span class="status shipped">Отключён</span>'}</td>
-              <td style="text-align:right">
-                <button class="btn btn-ghost" style="padding:5px 10px" onclick="toggleEmployeeActive('${e.id}')">${e.active?'Отключить':'Включить'}</button>
+              <td style="text-align:right;white-space:nowrap">
+                <button class="btn btn-ghost" style="padding:5px 10px" onclick="startEditEmployee('${escapeHtml(e.id)}')">Изменить</button>
+                <button class="btn btn-ghost" style="padding:5px 10px" onclick="toggleEmployeeActive('${escapeHtml(e.id)}')">${e.active?'Отключить':'Включить'}</button>
               </td>
             </tr>`;
           }).join('')}
