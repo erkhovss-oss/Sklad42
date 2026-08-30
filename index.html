@@ -668,28 +668,7 @@
           </div>
           <button class="btn btn-accent" onclick="generateStorageIncome()">📥 Подтянуть приход по хранению</button>
         </div>
-        <div class="panel" style="padding:16px 20px;margin-bottom:18px">
-          <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleTochkaSettings()">
-            <div style="font-size:13px;font-weight:600">🏦 Точка Банк — подтянуть выписку</div>
-            <span style="font-size:12px;color:var(--ink-faint)">${tochkaSettingsOpen?'▲':'▼'}</span>
-          </div>
-          ${tochkaSettingsOpen ? `
-            <div style="margin-top:14px">
-              <div style="font-size:12px;color:var(--ink-faint);margin-bottom:10px">Токен выпускается в личном кабинете Точки (JWT для личного использования). CustomerCode и AccountId — тоже оттуда, либо через методы Get Customers List / Get Accounts List.</div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-                <input class="search" id="tochkaToken" type="password" placeholder="JWT-токен" style="flex:1;min-width:220px" value="${escapeHtml(tochkaSettings.token||'')}">
-                <input class="search mono" id="tochkaCustomerCode" placeholder="CustomerCode" style="width:150px" value="${escapeHtml(tochkaSettings.customerCode||'')}">
-                <input class="search mono" id="tochkaAccountId" placeholder="AccountId" style="width:220px" value="${escapeHtml(tochkaSettings.accountId||'')}">
-              </div>
-              <button class="btn btn-ghost" onclick="saveTochkaSettings()">Сохранить настройки</button>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line);align-items:flex-end">
-                <div><div class="eyebrow" style="margin-bottom:6px">С даты</div><input class="search" id="tochkaDateFrom" type="date" style="width:160px"></div>
-                <div><div class="eyebrow" style="margin-bottom:6px">По дату</div><input class="search" id="tochkaDateTo" type="date" style="width:160px"></div>
-                <button class="btn btn-accent" onclick="fetchTochkaStatement()">📥 Подтянуть выписку</button>
-              </div>
-            </div>
-          ` : ''}
-        </div>
+        <div id="tochkaPanelWrap"></div>
         <div class="stat-row" id="ddsStats" style="margin-bottom:16px"></div>
         <div class="panel" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <input class="search" id="ddsSearch" placeholder="Поиск по комментарию, категории, клиенту…" style="flex:1;min-width:200px">
@@ -890,13 +869,13 @@ function undoLastScan(){
   const info = lastScanInfo;
   const supply = supplies.find(s=>s.id===info.supplyId);
   if(!supply){ toast('Поставка не найдена'); return; }
-  const item = supply.items.find(i=>i.sku===info.sku);
+  const item = supply.items.find(i=>i.sku===info.sku && (i.size||'')===(info.size||''));
   if(!item){ toast('Позиция не найдена'); return; }
   item.receivedQty = Math.max(0, item.receivedQty - info.delta);
-  const inv = inventory.find(i=>i.sku===info.sku && (i.client||'')===(supply.clientName||''));
+  const inv = findInventoryItem(info.sku, supply.clientName, info.size||'');
   if(inv) inv.qty = Math.max(0, inv.qty - info.delta);
-  logMovement(info.sku, info.name, -info.delta, 'Отмена скана', supply.clientName);
-  sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', info.sku).then(({error})=>{
+  logMovement(info.sku, info.name, -info.delta, 'Отмена скана', supply.clientName, info.size);
+  sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', info.sku).eq('size', info.size||null).then(({error})=>{
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — отмена не сохранилась'); });
   pushRecentAction({name:info.name, sku:info.sku, qty:-info.delta, note:'отмена скана'});
@@ -3215,7 +3194,34 @@ function renderDds(){
   updateDdsCategoryOptions();
   const dateInput = document.getElementById('ddsDate');
   if(dateInput && !dateInput.value) dateInput.value = new Date().toISOString().slice(0,10);
+  document.getElementById('tochkaPanelWrap').innerHTML = renderTochkaPanel();
   renderDdsTable();
+}
+function renderTochkaPanel(){
+  return `
+    <div class="panel" style="padding:16px 20px;margin-bottom:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleTochkaSettings()">
+        <div style="font-size:13px;font-weight:600">🏦 Точка Банк — подтянуть выписку</div>
+        <span style="font-size:12px;color:var(--ink-faint)">${tochkaSettingsOpen?'▲':'▼'}</span>
+      </div>
+      ${tochkaSettingsOpen ? `
+        <div style="margin-top:14px">
+          <div style="font-size:12px;color:var(--ink-faint);margin-bottom:10px">Токен выпускается в личном кабинете Точки (JWT для личного использования). CustomerCode и AccountId — тоже оттуда, либо через методы Get Customers List / Get Accounts List.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <input class="search" id="tochkaToken" type="password" placeholder="JWT-токен" style="flex:1;min-width:220px" value="${escapeHtml(tochkaSettings.token||'')}">
+            <input class="search mono" id="tochkaCustomerCode" placeholder="CustomerCode" style="width:150px" value="${escapeHtml(tochkaSettings.customerCode||'')}">
+            <input class="search mono" id="tochkaAccountId" placeholder="AccountId" style="width:220px" value="${escapeHtml(tochkaSettings.accountId||'')}">
+          </div>
+          <button class="btn btn-ghost" onclick="saveTochkaSettings()">Сохранить настройки</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line);align-items:flex-end">
+            <div><div class="eyebrow" style="margin-bottom:6px">С даты</div><input class="search" id="tochkaDateFrom" type="date" style="width:160px"></div>
+            <div><div class="eyebrow" style="margin-bottom:6px">По дату</div><input class="search" id="tochkaDateTo" type="date" style="width:160px"></div>
+            <button class="btn btn-accent" onclick="fetchTochkaStatement()">📥 Подтянуть выписку</button>
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
 }
 function createDdsEntry(){
   const type = document.getElementById('ddsType').value;
@@ -4037,7 +4043,7 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   announceCell(cell);
   pushRecentAction({name:item.name + (size?` (${size})`:''), sku, qty:1, cell, note: isOver ? 'больше плана' : (kizCode ? 'КИЗ принят' : '')});
   lastScanInfo = {
-    supplyId: supply.id, sku, name:item.name + (size?` · ${size}`:''), barcode: barcode||'', cell, delta:1, canUndo:true,
+    supplyId: supply.id, sku, size, name:item.name + (size?` · ${size}`:''), barcode: barcode||'', cell, delta:1, canUndo:true,
     status: isOver ? 'over' : 'ok',
     message: isOver ? `Принято больше плана: ${item.receivedQty} из ${item.qty}` : `Принято ${item.receivedQty} из ${item.qty}`
   };
@@ -4049,7 +4055,7 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
     });
   }
   renderSuppliesTableWrap();
-  sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).then(({error})=>{
+  sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).eq('size', size||null).then(({error})=>{
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
 }
