@@ -668,6 +668,28 @@
           </div>
           <button class="btn btn-accent" onclick="generateStorageIncome()">📥 Подтянуть приход по хранению</button>
         </div>
+        <div class="panel" style="padding:16px 20px;margin-bottom:18px">
+          <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleTochkaSettings()">
+            <div style="font-size:13px;font-weight:600">🏦 Точка Банк — подтянуть выписку</div>
+            <span style="font-size:12px;color:var(--ink-faint)">${tochkaSettingsOpen?'▲':'▼'}</span>
+          </div>
+          ${tochkaSettingsOpen ? `
+            <div style="margin-top:14px">
+              <div style="font-size:12px;color:var(--ink-faint);margin-bottom:10px">Токен выпускается в личном кабинете Точки (JWT для личного использования). CustomerCode и AccountId — тоже оттуда, либо через методы Get Customers List / Get Accounts List.</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+                <input class="search" id="tochkaToken" type="password" placeholder="JWT-токен" style="flex:1;min-width:220px" value="${escapeHtml(tochkaSettings.token||'')}">
+                <input class="search mono" id="tochkaCustomerCode" placeholder="CustomerCode" style="width:150px" value="${escapeHtml(tochkaSettings.customerCode||'')}">
+                <input class="search mono" id="tochkaAccountId" placeholder="AccountId" style="width:220px" value="${escapeHtml(tochkaSettings.accountId||'')}">
+              </div>
+              <button class="btn btn-ghost" onclick="saveTochkaSettings()">Сохранить настройки</button>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line);align-items:flex-end">
+                <div><div class="eyebrow" style="margin-bottom:6px">С даты</div><input class="search" id="tochkaDateFrom" type="date" style="width:160px"></div>
+                <div><div class="eyebrow" style="margin-bottom:6px">По дату</div><input class="search" id="tochkaDateTo" type="date" style="width:160px"></div>
+                <button class="btn btn-accent" onclick="fetchTochkaStatement()">📥 Подтянуть выписку</button>
+              </div>
+            </div>
+          ` : ''}
+        </div>
         <div class="stat-row" id="ddsStats" style="margin-bottom:16px"></div>
         <div class="panel" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <input class="search" id="ddsSearch" placeholder="Поиск по комментарию, категории, клиенту…" style="flex:1;min-width:200px">
@@ -768,6 +790,8 @@ let employeeCounter = 3;
 let currentUser = null;
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
+let tochkaSettings = { token:'', customerCode:'', accountId:'' };
+let tochkaSettingsOpen = false;
 let fbsTariffs = [];
 let ddsEntries = [];
 const DDS_CATEGORIES = {
@@ -775,6 +799,7 @@ const DDS_CATEGORIES = {
   expense: ['Аренда склада', 'Зарплата сотрудникам', 'Расходные материалы (упаковка, скотч, этикетки)', 'Транспорт и логистика', 'Комиссии маркетплейсов', 'Программное обеспечение и сервисы', 'Налоги', 'Прочие расходы']
 };
 let editingEmployeeId = null;
+let deletingEmployeeId = null;
 let editingRoleId = null;
 
 // ---------- HELPERS ----------
@@ -3221,6 +3246,73 @@ function deleteDdsEntry(id){
     if(error){ console.error(error); toast('Не удалось удалить в базе'); }
   });
 }
+async function loadTochkaSettings(){
+  const { data, error } = await sb.from('bank_settings').select('*').eq('id','tochka').maybeSingle();
+  if(error){ console.error(error); return; }
+  if(data) tochkaSettings = { token:data.token||'', customerCode:data.customer_code||'', accountId:data.account_id||'' };
+}
+function toggleTochkaSettings(){
+  tochkaSettingsOpen = !tochkaSettingsOpen;
+  renderDds();
+}
+function saveTochkaSettings(){
+  const token = document.getElementById('tochkaToken').value.trim();
+  const customerCode = document.getElementById('tochkaCustomerCode').value.trim();
+  const accountId = document.getElementById('tochkaAccountId').value.trim();
+  tochkaSettings = { token, customerCode, accountId };
+  toast('Настройки Точка Банка сохранены');
+  sb.from('bank_settings').upsert({id:'tochka', token, customer_code:customerCode, account_id:accountId}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить настройки в базе'); }
+  });
+}
+async function fetchTochkaStatement(){
+  if(!tochkaSettings.token || !tochkaSettings.accountId){ toast('Сначала сохраните токен и AccountId'); return; }
+  const dateFrom = document.getElementById('tochkaDateFrom').value;
+  const dateTo = document.getElementById('tochkaDateTo').value;
+  if(!dateFrom || !dateTo){ toast('Укажите период выписки'); return; }
+  toast('Запрашиваем выписку у Точка Банка… это может занять до 10-15 секунд');
+  try{
+    const { data, error } = await sb.functions.invoke('tochka-bank-ts', { body: { dateFrom, dateTo } });
+    if(error){ toast('Точка: ' + await extractFnErrorMessage(error)); return; }
+    if(data && data.error){ toast('Точка: ' + data.error); return; }
+    const transactions = data.transactions || [];
+    let created = 0, skipped = 0;
+    transactions.forEach(t=>{
+      const id = 'BANK-' + t.id;
+      if(ddsEntries.find(d=>d.id===id)){ skipped++; return; }
+      const entry = {
+        id, type: t.isCredit ? 'income' : 'expense',
+        category: t.isCredit ? 'Банк (не разобрано)' : 'Прочие расходы',
+        amount: t.amount, description: t.description || t.counterparty || '',
+        clientId: null, clientName: t.counterparty || '', date: t.date, createdAt: new Date().toISOString()
+      };
+      ddsEntries.unshift(entry);
+      created++;
+      sb.from('dds_entries').insert({id, type:entry.type, category:entry.category, amount:entry.amount, description:entry.description, client_id:null, client_name:entry.clientName||null, date:entry.date}).then(({error})=>{
+        if(error) console.error(error);
+      });
+    });
+    toast(`Загружено из банка: ${created} новых операций${skipped?`, уже было ${skipped}`:''}`);
+    renderDdsTable();
+  }catch(e){
+    toast('Не удалось вызвать серверную функцию — она развёрнута в Supabase?');
+  }
+}
+function editDdsCategory(id){
+  const entry = ddsEntries.find(d=>d.id===id);
+  if(!entry) return;
+  const cats = DDS_CATEGORIES[entry.type] || [];
+  const options = cats.map((c,i)=>`${i+1}. ${c}`).join('\n');
+  const choice = prompt(`Выберите новую категорию для «${entry.description||entry.category}»:\n${options}\n\nВведите номер:`, '');
+  const idx = parseInt(choice) - 1;
+  if(idx>=0 && idx<cats.length){
+    entry.category = cats[idx];
+    renderDdsTable();
+    sb.from('dds_entries').update({category:entry.category}).eq('id', id).then(({error})=>{
+      if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
+    });
+  }
+}
 function generateStorageIncome(){
   let created = 0, updated = 0, skipped = 0;
   storageHistoryRows.forEach(row=>{
@@ -3276,7 +3368,7 @@ function renderDdsTable(){
             <tr>
               <td class="mono" style="font-size:12px">${new Date(d.date).toLocaleDateString('ru-RU')}</td>
               <td><span class="status ${d.type==='income'?'assembled':'overdue'}">${d.type==='income'?'Приход':'Расход'}</span></td>
-              <td>${escapeHtml(d.category)}</td>
+              <td style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" title="Нажмите, чтобы изменить категорию" onclick="editDdsCategory('${escapeHtml(d.id)}')">${escapeHtml(d.category)}</td>
               <td>${d.clientName?escapeHtml(d.clientName):'—'}</td>
               <td style="color:var(--ink-soft);font-size:13px">${escapeHtml(d.description)||'—'}</td>
               <td class="mono" style="font-weight:600;color:${d.type==='income'?'var(--ok)':'var(--warn)'}">${d.type==='income'?'+':'−'}${d.amount.toFixed(2)} ₽</td>
@@ -4102,7 +4194,7 @@ function logout(){
 }
 
 function setEmployeesView(view){ currentEmployeesView = view; renderEmployeesTab(); }
-function openNewEmployeeForm(){ showingNewEmployeeForm = true; editingEmployeeId = null; renderEmployeesTab(); }
+function openNewEmployeeForm(){ showingNewEmployeeForm = true; editingEmployeeId = null; deletingEmployeeId = null; renderEmployeesTab(); }
 function closeNewEmployeeForm(){ showingNewEmployeeForm = false; renderEmployeesTab(); }
 function createEmployee(){
   const name = document.getElementById('newEmpName').value.trim();
@@ -4127,7 +4219,26 @@ function toggleEmployeeActive(id){
     if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
   });
 }
-function startEditEmployee(id){ editingEmployeeId = id; showingNewEmployeeForm = false; renderEmployeesTab(); }
+function startEditEmployee(id){ editingEmployeeId = id; deletingEmployeeId = null; showingNewEmployeeForm = false; renderEmployeesTab(); }
+function openDeleteEmployee(id){ deletingEmployeeId = id; editingEmployeeId = null; renderEmployeesTab(); }
+function cancelDeleteEmployee(){ deletingEmployeeId = null; renderEmployeesTab(); }
+function confirmDeleteEmployee(id){
+  const emp = employees.find(e=>e.id===id);
+  if(!emp) return;
+  if(emp.id === currentUser?.id){
+    toast('Нельзя удалить сотрудника, под которым вы сейчас вошли');
+    deletingEmployeeId = null;
+    renderEmployeesTab();
+    return;
+  }
+  employees = employees.filter(e=>e.id!==id);
+  deletingEmployeeId = null;
+  toast(`Сотрудник «${emp.name}» удалён`);
+  renderEmployeesTab();
+  sb.from('employees').delete().eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить сотрудника в базе'); }
+  });
+}
 function cancelEditEmployee(){ editingEmployeeId = null; renderEmployeesTab(); }
 function saveEmployee(id){
   const emp = employees.find(e=>e.id===id);
@@ -4259,6 +4370,19 @@ function renderEmployeesTab(){
                 </td>
               </tr>`;
             }
+            if(deletingEmployeeId === e.id){
+              return `<tr>
+                <td colspan="5">
+                  <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:8px 0">
+                    <span style="font-size:13px;color:var(--warn)">Удалить сотрудника «${escapeHtml(e.name)}» без возможности восстановить?</span>
+                    <div style="white-space:nowrap">
+                      <button class="btn btn-accent" style="padding:5px 10px" onclick="confirmDeleteEmployee('${escapeHtml(e.id)}')">Да, удалить</button>
+                      <button class="btn btn-ghost" style="padding:5px 10px" onclick="cancelDeleteEmployee()">Отмена</button>
+                    </div>
+                  </div>
+                </td>
+              </tr>`;
+            }
             return `<tr>
               <td>${e.name}</td>
               <td class="mono">${e.login}</td>
@@ -4267,6 +4391,7 @@ function renderEmployeesTab(){
               <td style="text-align:right;white-space:nowrap">
                 <button class="btn btn-ghost" style="padding:5px 10px" onclick="startEditEmployee('${escapeHtml(e.id)}')">Изменить</button>
                 <button class="btn btn-ghost" style="padding:5px 10px" onclick="toggleEmployeeActive('${escapeHtml(e.id)}')">${e.active?'Отключить':'Включить'}</button>
+                <button class="btn btn-ghost" style="padding:5px 10px;color:var(--warn)" onclick="openDeleteEmployee('${escapeHtml(e.id)}')">Удалить</button>
               </td>
             </tr>`;
           }).join('')}
@@ -4440,7 +4565,7 @@ async function initApp(){
     return;
   }
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs()]);
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings()]);
   }catch(err){
     console.error(err);
   }
