@@ -875,7 +875,7 @@ function undoLastScan(){
   const inv = findInventoryItem(info.sku, supply.clientName, info.size||'');
   if(inv) inv.qty = Math.max(0, inv.qty - info.delta);
   logMovement(info.sku, info.name, -info.delta, 'Отмена скана', supply.clientName, info.size);
-  sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', info.sku).eq('size', info.size||null).then(({error})=>{
+  (info.size ? sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', info.sku).eq('size', info.size) : sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', info.sku).is('size', null)).then(({error})=>{
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — отмена не сохранилась'); });
   pushRecentAction({name:info.name, sku:info.sku, qty:-info.delta, note:'отмена скана'});
@@ -3516,7 +3516,7 @@ function adjustSupplyItem(supplyId, sku, delta, size){
   pushRecentAction({name:item.name + (size?` (${size})`:''), sku, qty:diff, cell:inv.cell, note:'вручную'});
   if(diff>0 && item.receivedQty>item.qty && !wasOver) toast(`«${item.name}»${size?` (${size})`:''}: принято больше, чем заказано (${item.receivedQty} из ${item.qty})`);
   renderSuppliesTableWrap();
-  sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supplyId).eq('sku', sku).eq('size', size||null).then(({error})=>{
+  (size ? sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supplyId).eq('sku', sku).eq('size', size) : sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supplyId).eq('sku', sku).is('size', null)).then(({error})=>{
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — количество не сохранилось, повторите'); });
 }
@@ -4055,7 +4055,7 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
     });
   }
   renderSuppliesTableWrap();
-  sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).eq('size', size||null).then(({error})=>{
+  (size ? sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).eq('size', size) : sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).is('size', null)).then(({error})=>{
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
 }
@@ -4092,7 +4092,7 @@ function removeKizScan(supplyId, kizCode, silent){
     const inv = findInventoryItem(scan.sku, supply.clientName, item.size);
     if(inv) inv.qty = Math.max(0, inv.qty-1);
     logMovement(scan.sku, scan.name, -1, 'Удаление КИЗ', supply.clientName, item.size);
-    sb.from('supply_items').update({received_qty:item.receivedQty}).eq('supply_id', supplyId).eq('sku', scan.sku).eq('size', item.size||null).then(({error})=>{
+    (item.size ? sb.from('supply_items').update({received_qty:item.receivedQty}).eq('supply_id', supplyId).eq('sku', scan.sku).eq('size', item.size) : sb.from('supply_items').update({received_qty:item.receivedQty}).eq('supply_id', supplyId).eq('sku', scan.sku).is('size', null)).then(({error})=>{
       if(error) console.error(error);
     });
   }
