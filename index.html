@@ -2439,6 +2439,9 @@ function renderOutboundDetail(s){
     `;
   }
 
+  const boxesForProgress = outboundBoxes.filter(b=>b.supplyId===s.id);
+  const packedQty = boxesForProgress.reduce((sum,b)=>sum + b.items.reduce((a,it)=>a+it.qty,0), 0);
+  const packPct = totalQty ? Math.min(100, Math.round(packedQty/totalQty*100)) : 0;
   return `
     <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
@@ -2449,6 +2452,15 @@ function renderOutboundDetail(s){
           ${s.status!=='shipped' ? `<button class="btn btn-ghost" onclick="markOutboundShipped('${s.id}')">Отметить отправленной</button>` : ''}
           <button class="btn btn-ghost" onclick="openEditOutbound('${s.id}')">Изменить</button>
           <button class="btn btn-ghost" style="color:var(--warn)" onclick="openDeleteOutbound('${s.id}')">Удалить</button>
+        </div>
+      </div>
+      <div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span class="mono" style="font-size:14px;font-weight:600">Собрано по коробам: ${packedQty} из ${totalQty}</span>
+          <span class="mono" style="font-size:14px;font-weight:700;color:${packPct>=100?'var(--ok)':'var(--accent)'}">${packPct}%</span>
+        </div>
+        <div class="progress-track" style="background:var(--line)">
+          <div class="progress-fill" style="width:${packPct}%;background:${packPct>=100?'var(--ok)':'var(--accent)'}"></div>
         </div>
       </div>
       ${activeBoxSupplyId===s.id ? renderBoxPanel(s) : ''}
