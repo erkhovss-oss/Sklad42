@@ -2469,12 +2469,15 @@ function renderOutboundDetail(s){
           <h3 style="font-size:14px;color:var(--ink-soft)">Позиции поставки (${s.items.length})</h3>
           <span style="font-size:12px;color:var(--ink-faint)">${outboundItemsCollapsed ? '▼' : '▲'}</span>
         </div>
-        ${outboundItemsCollapsed ? '' : s.items.slice().sort((a,b)=>(a.cell||999999)-(b.cell||999999)).map(it=>`
+        ${outboundItemsCollapsed ? '' : s.items.slice().sort((a,b)=>(a.cell||999999)-(b.cell||999999)).map(it=>{
+          const packedForItem = it.qty - getRemainingForItem(s, it.sku, it.size||'');
+          const doneForItem = packedForItem >= it.qty;
+          return `
           <div class="pick-row">
             <div><div class="sku-name">${it.name}${it.size?` · ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:''}</div></div>
-            <div class="qty-need">${it.cell?`яч. ${it.cell} · `:''}${it.qty} шт</div>
+            <div class="qty-need" style="${doneForItem?'color:var(--ok);font-weight:700':''}">${it.cell?`яч. ${it.cell} · `:''}${it.qty} шт <span style="color:var(--ink-faint);font-weight:400">(упаковано ${packedForItem}/${it.qty})</span></div>
           </div>
-        `).join('')}
+        `;}).join('')}
       </div>
     </div>
   `;
@@ -2953,6 +2956,10 @@ function addItemToBox(supply, boxId, sku, size, qty){
   if(existing) existing.qty += qty;
   else box.items.push({sku, name:planItem.name, size:size||'', barcode:planItem.barcode||'', qty});
   syncBoxItems(boxId);
+  if(remaining - qty <= 0){
+    playBeep('ok');
+    toast(`✅ Всё добавлено: «${planItem.name}»${size?` (${size})`:''}`);
+  }
   return true;
 }
 function removeItemFromBox(boxId, sku, size){
@@ -3022,13 +3029,17 @@ function renderBoxCard(supply, box){
       </div>
       ${isOpen ? `
         <div style="padding:12px 14px">
-          ${box.items.length ? box.items.map(it=>`
+          ${box.items.length ? box.items.map(it=>{
+            const planTotal = supply.items.filter(i=>i.sku===it.sku && (i.size||'')===(it.size||'')).reduce((a,i)=>a+i.qty,0);
+            const packedTotal = planTotal - getRemainingForItem(supply, it.sku, it.size||'');
+            const done = packedTotal >= planTotal;
+            return `
             <div class="pick-row" style="padding:6px 0">
-              <div><div class="sku-name" style="font-size:13px">${it.name}${it.size?` · ${it.size}`:''}</div><div class="sku-code mono">${it.sku}</div></div>
-              <div class="qty-need">${it.qty} шт</div>
+              <div><div class="sku-name" style="font-size:13px">${it.name}${it.size?` · ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${done?' · ✅ упаковано полностью':''}</div></div>
+              <div class="qty-need" style="${done?'color:var(--ok);font-weight:700':''}">${it.qty} шт <span style="color:var(--ink-faint);font-weight:400">(всего ${packedTotal}/${planTotal})</span></div>
               <button class="btn btn-ghost" style="padding:3px 8px" onclick="removeItemFromBox('${box.id}','${escapeHtml(it.sku)}','${escapeHtml(it.size||'')}')">✕</button>
             </div>
-          `).join('') : `<p style="font-size:12px;color:var(--ink-faint);margin:4px 0">Короб пока пуст</p>`}
+          `;}).join('') : `<p style="font-size:12px;color:var(--ink-faint);margin:4px 0">Короб пока пуст</p>`}
           <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
             <div class="eyebrow" style="margin-bottom:6px">Сканер</div>
             <input class="search" id="boxScanInput-${box.id}" placeholder="Штрихкод товара…" style="width:100%;margin-bottom:10px" autocomplete="off">
