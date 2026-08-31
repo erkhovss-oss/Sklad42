@@ -1639,7 +1639,7 @@ function saveTariff(clientId){
   recordStorageSnapshot(c);
 }
 async function loadFbsTariffs(){
-  const { data, error } = await sb.from('fbs_tariffs').select('*').order('max_liters');
+  const { data, error } = await sb.from('fbs_tariffs').select('*').order('max_liters').limit(50000);
   if(error){ console.error(error); return; }
   fbsTariffs = data.map(t=>({id:t.id, clientId:t.client_id, maxLiters:Number(t.max_liters), price:Number(t.price)}));
 }
@@ -2858,7 +2858,7 @@ document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsS
 async function loadOutboundBoxes(){
   const { data: boxRows, error: err1 } = await sb.from('outbound_boxes').select('*').order('box_number');
   if(err1){ console.error(err1); return; }
-  const { data: itemRows, error: err2 } = await sb.from('outbound_box_items').select('*');
+  const { data: itemRows, error: err2 } = await sb.from('outbound_box_items').select('*').limit(50000);
   if(err2){ console.error(err2); return; }
   outboundBoxes = boxRows.map(b=>({
     id: b.id, supplyId: b.supply_id, boxNumber: b.box_number,
@@ -2934,12 +2934,21 @@ function toggleBoxExpand(boxId){
 function syncBoxItems(boxId){
   const box = outboundBoxes.find(b=>b.id===boxId);
   if(!box) return;
-  sb.from('outbound_box_items').delete().eq('box_id', boxId).then(({error})=>{
+  const currentKeys = box.items.map(it=>`${it.sku}~~${it.size||''}`);
+  sb.from('outbound_box_items').select('sku,size').eq('box_id', boxId).then(({data, error})=>{
     if(error){ console.error(error); return; }
-    if(box.items.length){
-      const rows = box.items.map(it=>({box_id:boxId, sku:it.sku, name:it.name, size:it.size||null, barcode:it.barcode||null, qty:it.qty}));
-      sb.from('outbound_box_items').insert(rows).then(({error})=>{ if(error) console.error(error); });
-    }
+    const toDelete = (data||[]).filter(row => !currentKeys.includes(`${row.sku}~~${row.size||''}`));
+    const deletions = toDelete.map(row =>
+      sb.from('outbound_box_items').delete().eq('box_id', boxId).eq('sku', row.sku).eq('size', row.size||'')
+    );
+    Promise.all(deletions).then(()=>{
+      if(box.items.length){
+        const rows = box.items.map(it=>({box_id:boxId, sku:it.sku, name:it.name, size:it.size||'', barcode:it.barcode||null, qty:it.qty}));
+        sb.from('outbound_box_items').upsert(rows, { onConflict: 'box_id,sku,size' }).then(({error})=>{
+          if(error) console.error(error);
+        });
+      }
+    });
   });
 }
 function addItemToBox(supply, boxId, sku, size, qty){
@@ -3196,7 +3205,7 @@ function printBoxLabels(supplyId){
 
 // ---------- DDS (движение денежных средств) ----------
 async function loadDdsEntries(){
-  const { data, error } = await sb.from('dds_entries').select('*').order('date',{ascending:false});
+  const { data, error } = await sb.from('dds_entries').select('*').order('date',{ascending:false}).limit(50000);
   if(error){ console.error(error); return; }
   ddsEntries = data.map(d=>({
     id:d.id, type:d.type, category:d.category, amount:Number(d.amount), description:d.description||'',
@@ -4449,22 +4458,22 @@ function formatLogDateTime(iso){
   return `${dd}.${mm} ${formatLogTime(iso)}`;
 }
 async function loadRoles(){
-  const { data, error } = await sb.from('roles').select('*').order('id');
+  const { data, error } = await sb.from('roles').select('*').order('id').limit(50000);
   if(error){ console.error(error); return; }
   roles = data.map(r=>({id:r.id, name:r.name, permissions:r.permissions||{}}));
 }
 async function loadEmployees(){
-  const { data, error } = await sb.from('employees').select('*').order('id');
+  const { data, error } = await sb.from('employees').select('*').order('id').limit(50000);
   if(error){ console.error(error); return; }
   employees = data.map(e=>({id:e.id, name:e.name, login:e.login, pin:e.pin, roleId:e.role_id, active:e.active}));
 }
 async function loadInventory(){
-  const { data, error } = await sb.from('inventory').select('*').order('sku');
+  const { data, error } = await sb.from('inventory').select('*').order('sku').limit(50000);
   if(error){ console.error(error); return; }
   inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null}));
 }
 async function loadInventoryBarcodes(){
-  const { data, error } = await sb.from('inventory_barcodes').select('*');
+  const { data, error } = await sb.from('inventory_barcodes').select('*').limit(50000);
   if(error){ console.error(error); return; }
   inventoryBarcodes = data.map(b=>({barcode:b.barcode, sku:b.sku, clientName:b.client_name, size:b.size||''}));
 }
@@ -4517,7 +4526,7 @@ async function loadReceivingLog(){
   receivingLog = data.map(r=>({sku:r.sku, name:r.name, qty:r.qty, time: formatLogTime(r.created_at)}));
 }
 async function loadClients(){
-  const { data, error } = await sb.from('clients').select('*').order('name');
+  const { data, error } = await sb.from('clients').select('*').order('name').limit(50000);
   if(error){ console.error(error); return; }
   clients = data.map(c=>({
     id:c.id, name:c.name, contact:c.contact||'—', telegram:c.telegram||'', wbKey:c.wb_key||'', wbConnected:c.wb_connected||false,
@@ -4525,14 +4534,14 @@ async function loadClients(){
   }));
 }
 async function loadStorageHistory(){
-  const { data, error } = await sb.from('storage_history').select('*').order('day',{ascending:true});
+  const { data, error } = await sb.from('storage_history').select('*').order('day',{ascending:true}).limit(50000);
   if(error){ console.error(error); return; }
   storageHistoryRows = data;
 }
 async function loadSupplies(){
-  const { data: supplyRows, error: err1 } = await sb.from('supplies').select('*').order('created_at',{ascending:false});
+  const { data: supplyRows, error: err1 } = await sb.from('supplies').select('*').order('created_at',{ascending:false}).limit(50000);
   if(err1){ console.error(err1); return; }
-  const { data: itemRows, error: err2 } = await sb.from('supply_items').select('*');
+  const { data: itemRows, error: err2 } = await sb.from('supply_items').select('*').limit(50000);
   if(err2){ console.error(err2); return; }
   supplies = supplyRows.map(s=>({
     id: s.id,
@@ -4548,9 +4557,9 @@ async function loadSupplies(){
   }));
 }
 async function loadOutboundSupplies(){
-  const { data: rows, error: err1 } = await sb.from('outbound_supplies').select('*').order('created_at',{ascending:false});
+  const { data: rows, error: err1 } = await sb.from('outbound_supplies').select('*').order('created_at',{ascending:false}).limit(50000);
   if(err1){ console.error(err1); return; }
-  const { data: itemRows, error: err2 } = await sb.from('outbound_supply_items').select('*');
+  const { data: itemRows, error: err2 } = await sb.from('outbound_supply_items').select('*').limit(50000);
   if(err2){ console.error(err2); return; }
   outboundSupplies = rows.map(s=>({
     id: s.id,
@@ -4563,7 +4572,7 @@ async function loadOutboundSupplies(){
   }));
 }
 async function loadKizScans(){
-  const { data, error } = await sb.from('kiz_scans').select('*').order('created_at',{ascending:true});
+  const { data, error } = await sb.from('kiz_scans').select('*').order('created_at',{ascending:true}).limit(50000);
   if(error){ console.error(error); return; }
   kizScans = data.map(k=>({kizCode:k.kiz_code, supplyId:k.supply_id, sku:k.sku, name:k.name, size:k.size||'', clientName:k.client_name, time:k.created_at}));
 }
