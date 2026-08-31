@@ -3006,7 +3006,7 @@ function renderBoxScanHandler(supplyId, boxId){
     const planItem = supply.items.find(i=>i.barcode && i.barcode===code);
     if(!planItem){
       playBeep('error');
-      toast('Штрихкод не найден среди товаров этой поставки');
+      alert(`⚠ Штрихкод ${code} не найден среди товаров этой поставки.\n\nПроверьте, туда ли отсканирован товар.`);
       return;
     }
     if(addItemToBox(supply, boxId, planItem.sku, planItem.size||'', 1)){
