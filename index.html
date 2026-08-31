@@ -2247,7 +2247,8 @@ function handleOutboundExcelUpload(inputEl){
       const workbook = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
-      let added = 0, skipped = 0;
+      let added = 0;
+      const skippedList = [];
       for(let i=1;i<rows.length;i++){
         const row = rows[i];
         if(!row || !row.length) continue;
@@ -2255,7 +2256,7 @@ function handleOutboundExcelUpload(inputEl){
         const qty = parseInt(row[1]) || 0;
         if(!barcode || qty<=0) continue;
         const item = findInventoryItemByBarcode(barcode, client.name);
-        if(!item){ skipped++; continue; }
+        if(!item){ skippedList.push({barcode, reason:`такого штрихкода нет у клиента «${client.name}»`}); continue; }
         const sku = item.sku;
         const size = item.size || '';
         const already = draftOutboundItems.find(d=>d.sku===sku && (d.size||'')===size && (d.barcode||'')===(item.barcode||''));
@@ -2263,7 +2264,7 @@ function handleOutboundExcelUpload(inputEl){
         if(usedQty + qty > item.qty){
           toast(`«${item.name}»: на складе только ${item.qty} шт, взято максимум возможное`);
           const addQty = Math.max(0, item.qty - usedQty);
-          if(addQty<=0){ skipped++; continue; }
+          if(addQty<=0){ skippedList.push({barcode, reason:`«${item.name}» — нет остатка (0 шт свободно)`}); continue; }
           if(already) already.qty += addQty; else draftOutboundItems.push({sku, name:item.name, size, qty:addQty, barcode:item.barcode||barcode, cell:item.cell||null});
           added++;
           continue;
@@ -2273,7 +2274,11 @@ function handleOutboundExcelUpload(inputEl){
         added++;
       }
       if(added===0){ toast('Не найдено подходящих позиций в остатках этого клиента — проверьте штрихкоды'); }
-      else toast(`Загружено из файла: ${added} поз.${skipped?`, пропущено (штрихкод не найден у клиента/нет остатка): ${skipped}`:''}`);
+      else toast(`Загружено из файла: ${added} поз.${skippedList.length?`, пропущено: ${skippedList.length}`:''}`);
+      if(skippedList.length){
+        const details = skippedList.map(s=>`ШК ${s.barcode} — ${s.reason}`).join('\n');
+        alert(`Пропущенные строки (${skippedList.length}):\n\n${details}`);
+      }
       renderOutboundCreatePanel();
     }catch(err){
       toast('Не удалось прочитать файл — проверьте формат Excel');
