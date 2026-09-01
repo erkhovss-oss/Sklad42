@@ -744,6 +744,7 @@ let outboundDraftCollapsed = false;
 let outboundBoxes = [];
 let activeBoxSupplyId = null;
 let expandedBoxId = null;
+let lastBoxScanInfo = null;
 let outboundItemsCollapsed = true;
 let activeOutboundId = null;
 let editingOutboundId = null;
@@ -2868,11 +2869,27 @@ async function loadOutboundBoxes(){
 function toggleBoxPanel(supplyId){
   activeBoxSupplyId = activeBoxSupplyId===supplyId ? null : supplyId;
   expandedBoxId = null;
+  lastBoxScanInfo = null;
   renderOutboundTableWrap();
 }
 function toggleOutboundItemsCollapse(){
   outboundItemsCollapsed = !outboundItemsCollapsed;
   renderOutboundTableWrap();
+}
+function saveWithRetry(promiseFactory, attemptsLeft){
+  attemptsLeft = attemptsLeft===undefined ? 3 : attemptsLeft;
+  return promiseFactory().then(({error})=>{
+    if(!error) return { success:true };
+    if(attemptsLeft > 1){
+      return new Promise(resolve=>setTimeout(resolve, 1200)).then(()=>saveWithRetry(promiseFactory, attemptsLeft-1));
+    }
+    return { success:false, error };
+  }).catch(e=>{
+    if(attemptsLeft > 1){
+      return new Promise(resolve=>setTimeout(resolve, 1200)).then(()=>saveWithRetry(promiseFactory, attemptsLeft-1));
+    }
+    return { success:false, error:e };
+  });
 }
 function getRemainingForItem(supply, sku, size){
   const planned = supply.items.filter(i=>i.sku===sku && (i.size||'')===(size||'')).reduce((a,i)=>a+i.qty,0);
@@ -2917,6 +2934,22 @@ function addSingleOutboundBox(supplyId){
     if(error){ console.error(error); toast('Не удалось сохранить короб в базе'); }
   });
 }
+function closeBoxAndAddNext(supplyId, currentBoxId){
+  const currentBox = outboundBoxes.find(b=>b.id===currentBoxId);
+  const closedNumber = currentBox ? currentBox.boxNumber : '?';
+  expandedBoxId = null;
+  lastBoxScanInfo = null;
+  const existing = outboundBoxes.filter(b=>b.supplyId===supplyId);
+  const nextNumber = existing.length ? Math.max(...existing.map(b=>b.boxNumber)) + 1 : 1;
+  const newBox = { id: 'BOX-'+Date.now(), supplyId, boxNumber: nextNumber, items: [] };
+  outboundBoxes.push(newBox);
+  expandedBoxId = newBox.id;
+  toast(`Короб №${closedNumber} закрыт, открыт короб №${nextNumber}`);
+  renderOutboundTableWrap();
+  saveWithRetry(()=>sb.from('outbound_boxes').insert({id:newBox.id, supply_id:supplyId, box_number:newBox.boxNumber})).then(({success, error})=>{
+    if(!success){ console.error(error); toast('Не удалось сохранить новый короб в базе'); }
+  });
+}
 function deleteOutboundBox(boxId){
   if(!confirm('Удалить этот короб? Все его позиции вернутся в «не распределено».')) return;
   outboundBoxes = outboundBoxes.filter(b=>b.id!==boxId);
@@ -2945,11 +2978,12 @@ function addItemToBox(supply, boxId, sku, size, qty){
   const newQty = (existing ? existing.qty : 0) + qty;
   if(existing) existing.qty = newQty;
   else box.items.push({sku, name:planItem.name, size:size||'', barcode:planItem.barcode||'', qty:newQty});
-  sb.from('outbound_box_items').upsert(
+  lastBoxScanInfo = {boxId, sku, size:size||'', name:planItem.name, delta:qty};
+  saveWithRetry(()=>sb.from('outbound_box_items').upsert(
     {box_id:boxId, sku, name:planItem.name, size:size||'', barcode:planItem.barcode||null, qty:newQty},
     { onConflict: 'box_id,sku,size' }
-  ).then(({error})=>{
-    if(error){ console.error(error); toast('Не удалось сохранить в базе — попробуйте отсканировать ещё раз'); }
+  )).then(({success, error})=>{
+    if(!success){ console.error(error); toast('Не удалось сохранить в базе даже после повторных попыток — проверьте интернет и отсканируйте ещё раз'); }
   });
   if(remaining - qty <= 0){
     playBeep('ok');
@@ -2957,14 +2991,40 @@ function addItemToBox(supply, boxId, sku, size, qty){
   }
   return true;
 }
+function undoLastBoxScan(){
+  if(!lastBoxScanInfo){ toast('Нечего отменять'); return; }
+  const info = lastBoxScanInfo;
+  const box = outboundBoxes.find(b=>b.id===info.boxId);
+  if(!box){ toast('Короб не найден'); lastBoxScanInfo = null; return; }
+  const item = box.items.find(it=>it.sku===info.sku && (it.size||'')===(info.size||''));
+  if(!item){ toast('Эта позиция уже не найдена в коробе'); lastBoxScanInfo = null; return; }
+  const newQty = Math.max(0, item.qty - info.delta);
+  if(newQty === 0){
+    box.items = box.items.filter(it=>!(it.sku===info.sku && (it.size||'')===(info.size||'')));
+    saveWithRetry(()=>sb.from('outbound_box_items').delete().eq('box_id', info.boxId).eq('sku', info.sku).eq('size', info.size||'')).then(({success, error})=>{
+      if(!success){ console.error(error); toast('Не удалось сохранить отмену в базе'); }
+    });
+  } else {
+    item.qty = newQty;
+    saveWithRetry(()=>sb.from('outbound_box_items').upsert(
+      {box_id:info.boxId, sku:info.sku, name:item.name, size:info.size||'', barcode:item.barcode||null, qty:newQty},
+      { onConflict: 'box_id,sku,size' }
+    )).then(({success, error})=>{
+      if(!success){ console.error(error); toast('Не удалось сохранить отмену в базе'); }
+    });
+  }
+  toast(`Отменено: ${info.name} −${info.delta} шт`);
+  lastBoxScanInfo = null;
+  renderOutboundTableWrap();
+}
 function removeItemFromBox(boxId, sku, size){
   const box = outboundBoxes.find(b=>b.id===boxId);
   if(!box) return;
   box.items = box.items.filter(it=>!(it.sku===sku && (it.size||'')===(size||'')));
   toast('Позиция убрана из короба');
   renderOutboundTableWrap();
-  sb.from('outbound_box_items').delete().eq('box_id', boxId).eq('sku', sku).eq('size', size||'').then(({error})=>{
-    if(error){ console.error(error); toast('Не удалось удалить в базе'); }
+  saveWithRetry(()=>sb.from('outbound_box_items').delete().eq('box_id', boxId).eq('sku', sku).eq('size', size||'')).then(({success, error})=>{
+    if(!success){ console.error(error); toast('Не удалось сохранить в базе даже после повторных попыток'); }
   });
 }
 function manualAddToBox(supplyId, boxId){
@@ -3049,8 +3109,10 @@ function renderBoxCard(supply, box){
               <button class="btn btn-ghost" onclick="manualAddToBox('${supply.id}','${box.id}')">+ Добавить</button>
             </div>
             <button class="btn btn-accent" style="margin-top:10px;width:100%;justify-content:center" onclick="addAllRemainingToBox('${supply.id}','${box.id}')">📥 Добавить весь товар</button>
+            <button class="btn btn-ghost" style="margin-top:8px;width:100%;justify-content:center" ${(lastBoxScanInfo && lastBoxScanInfo.boxId===box.id)?'':'disabled'} onclick="undoLastBoxScan()">↩ Отменить скан${(lastBoxScanInfo && lastBoxScanInfo.boxId===box.id)?` (${lastBoxScanInfo.name})`:''}</button>
           </div>
-          <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn-primary" style="margin-top:10px;width:100%;justify-content:center" onclick="closeBoxAndAddNext('${supply.id}','${box.id}')">✅ Закрыть короб и добавить следующий</button>
+          <div style="display:flex;gap:8px;margin-top:8px">
             <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="downloadBoxExcel('${supply.id}','${box.id}')">📊 Скачать состав (Excel)</button>
             <button class="btn btn-ghost" style="flex:1;justify-content:center;color:var(--warn)" onclick="deleteOutboundBox('${box.id}')">Удалить короб</button>
           </div>
