@@ -2931,26 +2931,6 @@ function toggleBoxExpand(boxId){
   expandedBoxId = expandedBoxId===boxId ? null : boxId;
   renderOutboundTableWrap();
 }
-function syncBoxItems(boxId){
-  const box = outboundBoxes.find(b=>b.id===boxId);
-  if(!box) return;
-  const currentKeys = box.items.map(it=>`${it.sku}~~${it.size||''}`);
-  sb.from('outbound_box_items').select('sku,size').eq('box_id', boxId).then(({data, error})=>{
-    if(error){ console.error(error); return; }
-    const toDelete = (data||[]).filter(row => !currentKeys.includes(`${row.sku}~~${row.size||''}`));
-    const deletions = toDelete.map(row =>
-      sb.from('outbound_box_items').delete().eq('box_id', boxId).eq('sku', row.sku).eq('size', row.size||'')
-    );
-    Promise.all(deletions).then(()=>{
-      if(box.items.length){
-        const rows = box.items.map(it=>({box_id:boxId, sku:it.sku, name:it.name, size:it.size||'', barcode:it.barcode||null, qty:it.qty}));
-        sb.from('outbound_box_items').upsert(rows, { onConflict: 'box_id,sku,size' }).then(({error})=>{
-          if(error) console.error(error);
-        });
-      }
-    });
-  });
-}
 function addItemToBox(supply, boxId, sku, size, qty){
   const box = outboundBoxes.find(b=>b.id===boxId);
   if(!box) return false;
@@ -2962,9 +2942,15 @@ function addItemToBox(supply, boxId, sku, size, qty){
     return false;
   }
   const existing = box.items.find(it=>it.sku===sku && (it.size||'')===(size||''));
-  if(existing) existing.qty += qty;
-  else box.items.push({sku, name:planItem.name, size:size||'', barcode:planItem.barcode||'', qty});
-  syncBoxItems(boxId);
+  const newQty = (existing ? existing.qty : 0) + qty;
+  if(existing) existing.qty = newQty;
+  else box.items.push({sku, name:planItem.name, size:size||'', barcode:planItem.barcode||'', qty:newQty});
+  sb.from('outbound_box_items').upsert(
+    {box_id:boxId, sku, name:planItem.name, size:size||'', barcode:planItem.barcode||null, qty:newQty},
+    { onConflict: 'box_id,sku,size' }
+  ).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить в базе — попробуйте отсканировать ещё раз'); }
+  });
   if(remaining - qty <= 0){
     playBeep('ok');
     toast(`✅ Всё добавлено: «${planItem.name}»${size?` (${size})`:''}`);
@@ -2977,7 +2963,9 @@ function removeItemFromBox(boxId, sku, size){
   box.items = box.items.filter(it=>!(it.sku===sku && (it.size||'')===(size||'')));
   toast('Позиция убрана из короба');
   renderOutboundTableWrap();
-  syncBoxItems(boxId);
+  sb.from('outbound_box_items').delete().eq('box_id', boxId).eq('sku', sku).eq('size', size||'').then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить в базе'); }
+  });
 }
 function manualAddToBox(supplyId, boxId){
   const supply = outboundSupplies.find(s=>s.id===supplyId);
