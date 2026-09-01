@@ -2680,7 +2680,7 @@ function renderFbsBody(){
       </div>
       <div class="panel">${rows.map(o=>`
         <div class="pick-row">
-          <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · заказ №${o.orderId}${o.kizCode?' · КИЗ принят ✓':(o.requiresKiz?' · КИЗ не прикреплён ⚠':'')}</div></div>
+          <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${o.kizCode?' · КИЗ принят ✓':(o.requiresKiz?' · КИЗ не прикреплён ⚠':'')}</div></div>
           <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
         </div>
       `).join('')}</div>
@@ -2688,7 +2688,7 @@ function renderFbsBody(){
   } else {
     body.innerHTML = `<div class="panel">${rows.map(o=>`
       <div class="pick-row">
-        <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · заказ №${o.orderId} · поставка ${o.wbSupplyId||'—'}</div></div>
+        <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId} · поставка ${o.wbSupplyId||'—'}</div></div>
         <span class="status shipped">В доставке</span>
       </div>
     `).join('')}</div>`;
@@ -3092,7 +3092,7 @@ function renderBoxCard(supply, box){
             const done = packedTotal >= planTotal;
             return `
             <div class="pick-row" style="padding:6px 0">
-              <div><div class="sku-name" style="font-size:13px">${it.name}${it.size?` · ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${done?' · ✅ упаковано полностью':''}</div></div>
+              <div><div class="sku-name" style="font-size:13px">${it.name}${it.size?` · ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:''}${done?' · ✅ упаковано полностью':''}</div></div>
               <div class="qty-need" style="${done?'color:var(--ok);font-weight:700':''}">${it.qty} шт <span style="color:var(--ink-faint);font-weight:400">(всего ${packedTotal}/${planTotal})</span></div>
               <button class="btn btn-ghost" style="padding:3px 8px" onclick="removeItemFromBox('${box.id}','${escapeHtml(it.sku)}','${escapeHtml(it.size||'')}')">✕</button>
             </div>
@@ -3218,33 +3218,45 @@ function printBoxLabels(supplyId){
     <!DOCTYPE html><html><head><meta charset="utf-8"><title>Этикетки коробов — ${supply.id}</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
     <style>
-      body{font-family:Arial,sans-serif;padding:20px;color:#111}
-      .box-label{page-break-after:always;border:2px solid #333;border-radius:10px;padding:24px;max-width:520px;margin:0 auto 20px auto}
+      @page{ size: 75mm 120mm; margin: 0; }
+      *{ box-sizing:border-box; }
+      body{font-family:Arial,sans-serif;color:#111;margin:0;padding:0}
+      .box-label{
+        width:75mm; height:120mm; padding:4mm;
+        page-break-after:always;
+        display:flex; flex-direction:column; align-items:center;
+        overflow:hidden;
+      }
       .box-label:last-child{page-break-after:avoid}
-      h1{font-size:20px;text-align:center;margin-bottom:4px}
-      .sub{text-align:center;color:#555;margin-bottom:16px;font-size:13px}
-      .qr-wrap{display:flex;justify-content:center;margin-bottom:16px}
-      table{width:100%;border-collapse:collapse;margin-top:10px}
-      th,td{border:1px solid #333;padding:6px;font-size:12px;text-align:left}
-      @media print{ body{padding:10px} }
+      h1{font-size:22pt;margin:0 0 2mm 0;text-align:center}
+      .sub{text-align:center;color:#333;margin-bottom:3mm;font-size:9pt;line-height:1.4}
+      .qr-wrap{display:flex;justify-content:center;margin-bottom:3mm}
+      .totals{font-size:11pt;font-weight:bold;text-align:center;margin-bottom:2mm}
+      table{width:100%;border-collapse:collapse;font-size:6pt;margin-top:1mm}
+      th,td{border:1px solid #333;padding:1mm;text-align:left;word-break:break-all}
+      th{background:#eee}
+      @media print{ body{padding:0} }
     </style></head><body>
-      ${boxes.map(box=>`
+      ${boxes.map(box=>{
+        const totalQty = box.items.reduce((a,it)=>a+it.qty,0);
+        return `
         <div class="box-label">
           <h1>КОРОБ №${box.boxNumber}</h1>
-          <div class="sub">Поставка ${supply.id} · ${supply.clientName} · ${supply.destination}</div>
+          <div class="sub">Поставка ${supply.id}<br>${supply.clientName}<br>Куда: ${supply.destination}</div>
           <div class="qr-wrap"><div id="qr-${box.id}"></div></div>
+          <div class="totals">${box.items.length} поз. · ${totalQty} шт</div>
           <table>
-            <thead><tr><th>Артикул</th><th>Наименование</th><th>Размер</th><th>Кол-во</th></tr></thead>
+            <thead><tr><th>Артикул</th><th>ШК</th><th>Разм.</th><th>Кол</th></tr></thead>
             <tbody>
-              ${box.items.map(it=>`<tr><td>${it.sku}</td><td>${it.name}</td><td>${it.size||'—'}</td><td>${it.qty}</td></tr>`).join('')}
+              ${box.items.map(it=>`<tr><td>${it.sku}</td><td>${it.barcode||'—'}</td><td>${it.size||'—'}</td><td>${it.qty}</td></tr>`).join('')}
             </tbody>
           </table>
         </div>
-      `).join('')}
+      `;}).join('')}
       <script>
         ${boxes.map(box=>{
           const payload = JSON.stringify({box:box.boxNumber, supply:supply.id, client:supply.clientName, destination:supply.destination, items:box.items.map(it=>({sku:it.sku,size:it.size||'',qty:it.qty}))});
-          return `new QRCode(document.getElementById('qr-${box.id}'), {text: ${JSON.stringify(payload)}, width:180, height:180});`;
+          return `new QRCode(document.getElementById('qr-${box.id}'), {text: ${JSON.stringify(payload)}, width:100, height:100});`;
         }).join('\n')}
         window.onload = function(){ setTimeout(function(){ window.print(); }, 500); };
       <\/script>
@@ -3816,7 +3828,7 @@ function renderSupplyReceivingPanel(s){
             const diff = it.receivedQty - it.qty;
             const mismatch = diff !== 0;
             return `<div class="pick-row" ${mismatch?'style="background:var(--warn-bg)"':''}>
-              <div><div class="sku-name">${it.name}${it.size?` · размер ${it.size}`:''}</div><div class="sku-code mono">${it.sku}</div></div>
+              <div><div class="sku-name">${it.name}${it.size?` · размер ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:''}</div></div>
               <div class="qty-need">план ${it.qty} / факт ${it.receivedQty}${mismatch ? `<span style="color:var(--warn);font-weight:700;margin-left:8px">${diff>0?'+':''}${diff}</span>` : ''}</div>
             </div>`;
           }).join('')}
