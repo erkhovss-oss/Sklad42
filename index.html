@@ -90,6 +90,8 @@
       background:rgba(0,0,0,0.45);
     }
     .main{ width:100%; }
+    body{ overflow-x:hidden; }
+    .page-head{ flex-wrap:wrap; }
 
     /* Таблицы -> карточки на узких экранах */
     .content table.card-table{ width:100%; }
@@ -560,14 +562,14 @@
         </div>
 
         <div id="inventoryStockView">
-          <div style="display:flex;gap:8px;margin-bottom:16px">
-            <select class="search" id="invClientFilter" style="width:200px">
+          <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+            <select class="search" id="invClientFilter" style="width:200px;max-width:100%">
               <option value="">Все клиенты</option>
             </select>
-            <select class="search" id="invCellFilter" style="width:170px">
+            <select class="search" id="invCellFilter" style="width:170px;max-width:100%">
               <option value="">Все ячейки</option>
             </select>
-            <input class="search" id="invSearch" placeholder="Поиск по названию, артикулу или штрихкоду (можно частично)…" style="flex:1">
+            <input class="search" id="invSearch" placeholder="Поиск по названию, артикулу или штрихкоду (можно частично)…" style="flex:1;min-width:220px">
           </div>
           <div class="stat-row" id="invStats"></div>
           <div class="panel">
@@ -641,8 +643,8 @@
         </div>
         <div id="suppliesBody">
           <div id="supplyCreatePanel"></div>
-          <div class="panel" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
-            <input class="search" id="supplySearch" placeholder="Поиск по ID, клиенту, статусу…" style="flex:1">
+          <div class="panel" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <input class="search" id="supplySearch" placeholder="Поиск по ID, клиенту, статусу…" style="flex:1;min-width:200px">
             <span class="mono" id="supplyCount" style="font-size:12px;color:var(--ink-soft);white-space:nowrap"></span>
           </div>
           <div id="suppliesTableWrap"></div>
@@ -660,8 +662,8 @@
         </div>
         <div id="outboundBody">
           <div id="outboundCreatePanel"></div>
-          <div class="panel" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
-            <input class="search" id="outboundSearch" placeholder="Поиск по ID, клиенту, складу…" style="flex:1">
+          <div class="panel" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <input class="search" id="outboundSearch" placeholder="Поиск по ID, клиенту, складу…" style="flex:1;min-width:200px">
             <span class="mono" id="outboundCount" style="font-size:12px;color:var(--ink-soft);white-space:nowrap"></span>
           </div>
           <div id="outboundTableWrap"></div>
