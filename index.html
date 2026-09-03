@@ -541,7 +541,8 @@
     <div class="nav-item" data-tab="outbound"><span class="num">05</span>Поставка на склад</div>
     <div class="nav-item" data-tab="fbs"><span class="num">06</span>Заказы FBS</div>
     <div class="nav-item" data-tab="dds"><span class="num">07</span>ДДС</div>
-    <div class="nav-item" data-tab="employees"><span class="num">08</span>Сотрудники</div>
+    <div class="nav-item" data-tab="warehouses"><span class="num">08</span>Склады</div>
+    <div class="nav-item" data-tab="employees"><span class="num">09</span>Сотрудники</div>
     <div class="sidebar-foot" id="sidebarFoot">ТелеПак · WMS</div>
   </div>
 
@@ -566,6 +567,9 @@
             <select class="search" id="invClientFilter" style="width:200px;max-width:100%">
               <option value="">Все клиенты</option>
             </select>
+            <select class="search" id="invWarehouseFilter" style="width:170px;max-width:100%">
+              <option value="">Все склады</option>
+            </select>
             <select class="search" id="invCellFilter" style="width:170px;max-width:100%">
               <option value="">Все ячейки</option>
             </select>
@@ -575,7 +579,7 @@
           <div class="panel">
             <div style="overflow-x:auto">
               <table class="card-table">
-              <thead><tr><th>Артикул</th><th>Товар</th><th>Размер</th><th>Штрихкод</th><th>Клиент</th><th>Остаток</th><th></th></tr></thead>
+              <thead><tr><th>Артикул</th><th>Товар</th><th>Размер</th><th>Штрихкод</th><th>Клиент</th><th>Склад</th><th>Остаток</th><th></th></tr></thead>
               <tbody id="invBody"></tbody>
             </table>
             </div>
@@ -735,6 +739,24 @@
         <div id="ddsTableWrap"></div>
       </section>
 
+      <!-- WAREHOUSES -->
+      <section class="section" id="tab-warehouses">
+        <div class="page-head">
+          <div>
+            <h1>Склады</h1>
+            <p>Собственные региональные склады — используются в остатках и при перемещении товара</p>
+          </div>
+        </div>
+        <div class="panel" style="padding:20px;margin-bottom:18px">
+          <div class="eyebrow" style="margin-bottom:10px">Новый склад</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <input class="search" id="newWarehouseName" placeholder="Название, напр. Склад Казань" style="flex:1;min-width:200px">
+            <button class="btn btn-primary" onclick="createWarehouse()">+ Добавить склад</button>
+          </div>
+        </div>
+        <div id="warehousesListWrap"></div>
+      </section>
+
       <!-- EMPLOYEES -->
       <section class="section" id="tab-employees">
         <div class="page-head">
@@ -793,6 +815,8 @@ let supplies = [];
 
 let outboundSupplies = [];
 let draftOutboundClientId = '';
+let draftOutboundWarehouseId = 'MAIN';
+let draftOutboundIsInternalTransfer = false;
 let draftOutboundItems = [];
 let outboundDraftCollapsed = false;
 let outboundBoxes = [];
@@ -813,6 +837,7 @@ let fbsAutoPollTimer = null;
 let supplyCounter = 0;
 let draftSupplyItems = [];
 let draftSupplyClientId = '';
+let draftSupplyWarehouseId = 'MAIN';
 let draftSupplyFileName = '';
 let currentSuppliesView = 'planned';
 let activeSupplyId = null;
@@ -824,6 +849,8 @@ let employeeCounter = 3;
 let currentUser = null;
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
+let warehouses = [];
+let companySettings = { name:'', inn:'', kpp:'', legalAddress:'', bankDetails:'', directorName:'' };
 let tochkaSettings = { token:'', customerCode:'', accountId:'' };
 let tochkaSettingsOpen = false;
 let fbsTariffs = [];
@@ -1046,6 +1073,7 @@ function switchTab(tab){
   if(tab==='outbound') renderOutbound();
   if(tab==='fbs') renderFbsOrders();
   if(tab==='dds') renderDds();
+  if(tab==='warehouses') renderWarehouses();
   if(tab==='employees') renderEmployeesTab();
   try{ localStorage.setItem('sklad42_active_tab', tab); }catch(e){}
 }
@@ -1112,16 +1140,17 @@ document.getElementById('writeoffSearch').addEventListener('input', renderWriteo
 document.getElementById('writeoffReasonFilter').addEventListener('change', renderWriteoffsView);
 
 function itemKey(item){
-  return item.sku + '~~' + (item.client||'') + '~~' + (item.size||'');
+  return item.sku + '~~' + (item.client||'') + '~~' + (item.size||'') + '~~' + (item.warehouseId||'MAIN');
 }
 function parseItemKey(key){
   const parts = key.split('~~');
-  return {sku:parts[0], client:parts[1], size:parts[2]};
+  return {sku:parts[0], client:parts[1], size:parts[2], warehouseId:parts[3]||'MAIN'};
 }
 function renderInventory(){
   const q = (document.getElementById('invSearch').value || '').toLowerCase();
   const clientFilter = document.getElementById('invClientFilter').value;
   const cellFilter = document.getElementById('invCellFilter').value;
+  const warehouseFilter = document.getElementById('invWarehouseFilter') ? document.getElementById('invWarehouseFilter').value : '';
   const body = document.getElementById('invBody');
   const readOnly = !!clientViewMode;
 
@@ -1137,10 +1166,18 @@ function renderInventory(){
   cellSelect.innerHTML = `<option value="">Все ячейки</option>` + cellNumbers.map(c=>`<option value="${c}">Ячейка ${c}</option>`).join('');
   cellSelect.value = cellNumbers.map(String).includes(prevCellValue) ? prevCellValue : '';
 
+  const warehouseSelect = document.getElementById('invWarehouseFilter');
+  if(warehouseSelect){
+    const prevWh = warehouseSelect.value;
+    warehouseSelect.innerHTML = `<option value="">Все склады</option>` + warehouses.map(w=>`<option value="${w.id}">${escapeHtml(w.name)}</option>`).join('');
+    warehouseSelect.value = warehouses.some(w=>w.id===prevWh) ? prevWh : '';
+  }
+
   const rows = inventory.filter(i =>
     (i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q) || (i.barcode||'').toLowerCase().includes(q)) &&
     (readOnly ? i.client === clientViewMode.name : (!clientFilter || i.client === clientFilter)) &&
-    (!cellFilter || String(i.cell)===cellFilter)
+    (!cellFilter || String(i.cell)===cellFilter) &&
+    (!warehouseFilter || (i.warehouseId||'MAIN')===warehouseFilter)
   ).sort((a,b)=>{
     if(a.sku !== b.sku) return a.sku < b.sku ? -1 : 1;
     return (a.size||'').localeCompare(b.size||'');
@@ -1165,6 +1202,13 @@ function renderInventory(){
             <input class="search" style="width:100px" id="editSize-${escapeHtml(key)}" value="${escapeHtml(i.size||'')}" placeholder="Размер">
             <input class="search mono" style="width:160px" id="editBarcode-${escapeHtml(key)}" value="${escapeHtml(i.barcode||'')}" placeholder="Штрихкод" autocomplete="off">
             <input class="search" style="flex:1;min-width:140px" id="editClient-${escapeHtml(key)}" value="${escapeHtml(i.client||'')}" placeholder="Клиент">
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <div style="flex:1;min-width:160px"><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Склад</div>
+              <select class="search" id="editWarehouse-${escapeHtml(key)}" style="width:100%">
+                ${warehouses.map(w=>`<option value="${w.id}" ${(i.warehouseId||'MAIN')===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')}
+              </select>
+            </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
             <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Кол-во</div><input class="search" type="number" min="0" style="width:90px" id="editQty-${escapeHtml(key)}" value="${i.qty}"></div>
@@ -1238,6 +1282,7 @@ function renderInventory(){
       <td data-label="Размер">${i.size||'—'}</td>
       <td class="mono" data-label="Штрихкод">${i.barcode||'—'}${i.barcode?`<div style="color:var(--ink-faint);font-size:11px">яч. ${i.cell||'—'}</div>`:''}</td>
       <td data-label="Клиент">${i.client||'—'}</td>
+      <td data-label="Склад">${escapeHtml(warehouseName(i.warehouseId))}</td>
       <td data-label="Остаток" class="${i.qty<=3?'qty-low':''}">${i.qty} шт${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}</td>
       <td style="text-align:right;white-space:nowrap">
         ${readOnly ? `
@@ -1297,12 +1342,13 @@ function adjustQty(key, delta){
 function startEdit(key){ editingSku = key; writeOffSku = null; deletingSku = null; historySku = null; renderInventory(); }
 function cancelEdit(){ editingSku = null; renderInventory(); }
 async function saveEdit(key){
-  const {sku, client, size} = parseItemKey(key);
-  const item = findInventoryItem(sku, client, size);
+  const {sku, client, size, warehouseId} = parseItemKey(key);
+  const item = findInventoryItem(sku, client, size, warehouseId);
   const name = document.getElementById('editName-'+key).value.trim();
   const newSize = document.getElementById('editSize-'+key).value.trim();
   const barcode = document.getElementById('editBarcode-'+key).value.trim();
   const newClient = document.getElementById('editClient-'+key).value.trim();
+  const newWarehouseId = document.getElementById('editWarehouse-'+key).value;
   const qty = Math.max(0, parseInt(document.getElementById('editQty-'+key).value) || 0);
   const cellRaw = document.getElementById('editCell-'+key).value.trim();
   const newCell = cellRaw ? Math.max(1, parseInt(cellRaw) || 0) : null;
@@ -1318,12 +1364,13 @@ async function saveEdit(key){
     }
   }
   const qtyDelta = qty - item.qty;
-  const oldSku = item.sku, oldClient = item.client, oldSize = item.size;
+  const oldSku = item.sku, oldClient = item.client, oldSize = item.size, oldWarehouseId = item.warehouseId||'MAIN';
   const hadCellBefore = !!item.cell;
   item.name = name;
   item.size = newSize || '';
   item.barcode = barcode || '';
   item.client = newClient || '—';
+  item.warehouseId = newWarehouseId || 'MAIN';
   item.qty = qty;
   item.dims = (l>0 && w>0 && h>0) ? {l, w, h, weight:(item.dims&&item.dims.weight)||0} : null;
   if(newCell !== null){
@@ -1333,12 +1380,12 @@ async function saveEdit(key){
     item.cell = null;
   }
   if(!item.cell && !hadCellBefore) await ensureCellAssigned(item);
-  if(newSize!==oldSize || newClient!==oldClient){
-    sb.from('inventory').delete().eq('sku', oldSku).eq('client_name', oldClient||'').eq('size', oldSize||'').then(({error})=>{
+  if(newSize!==oldSize || newClient!==oldClient || item.warehouseId!==oldWarehouseId){
+    sb.from('inventory').delete().eq('sku', oldSku).eq('client_name', oldClient||'').eq('size', oldSize||'').eq('warehouse_id', oldWarehouseId).then(({error})=>{
       if(error) console.error(error);
     });
   }
-  syncInventoryRow(item.sku, item.client, item.size);
+  syncInventoryRow(item.sku, item.client, item.size, item.warehouseId);
   if(qtyDelta!==0) logMovement(item.sku, name, qtyDelta, 'Изменение карточки', item.client, item.size);
   editingSku = null;
   toast('Изменения сохранены');
@@ -1390,33 +1437,34 @@ function confirmDelete(key){
 }
 function openHistory(key){ historySku = historySku===key ? null : key; editingSku=null; writeOffSku=null; deletingSku=null; renderInventory(); }
 function closeHistory(){ historySku = null; renderInventory(); }
-function findInventoryItem(sku, client, size){
+function findInventoryItem(sku, client, size, warehouseId){
   return inventory.find(i=>{
     if(i.sku!==sku) return false;
     if(client!==undefined && (i.client||'')!==(client||'')) return false;
     if(size!==undefined && (i.size||'')!==(size||'')) return false;
+    if(warehouseId!==undefined && (i.warehouseId||'MAIN')!==(warehouseId||'MAIN')) return false;
     return true;
   });
 }
 let inventoryBarcodes = []; // {barcode, sku, clientName, size} — доп. штрихкоды сверх основного
-function findInventoryItemByBarcode(barcode, client){
+function findInventoryItemByBarcode(barcode, client, warehouseId){
   if(!barcode) return null;
-  let item = inventory.find(i=> i.barcode===barcode && (client===undefined || (i.client||'')===(client||'')) );
+  let item = inventory.find(i=> i.barcode===barcode && (client===undefined || (i.client||'')===(client||'')) && (warehouseId===undefined || (i.warehouseId||'MAIN')===(warehouseId||'MAIN')) );
   if(item) return item;
   const extra = inventoryBarcodes.find(b=> b.barcode===barcode && (client===undefined || (b.clientName||'')===(client||'')) );
-  if(extra) return findInventoryItem(extra.sku, extra.clientName, extra.size);
+  if(extra) return findInventoryItem(extra.sku, extra.clientName, extra.size, warehouseId);
   return null;
 }
-function resolveDraftItem(d, clientName){
+function resolveDraftItem(d, clientName, warehouseId){
   if(d.cell){
     const byCell = inventory.find(i=>i.cell===d.cell);
     if(byCell) return byCell;
   }
   if(d.barcode){
-    const byBarcode = findInventoryItemByBarcode(d.barcode, clientName);
+    const byBarcode = findInventoryItemByBarcode(d.barcode, clientName, warehouseId);
     if(byBarcode) return byBarcode;
   }
-  return findInventoryItem(d.sku, clientName, d.size||'');
+  return findInventoryItem(d.sku, clientName, d.size||'', warehouseId);
 }
 function logMovement(sku, name, delta, type, client, size){
   const now = new Date();
@@ -1427,14 +1475,15 @@ function logMovement(sku, name, delta, type, client, size){
     .catch(e=>{ console.error(e); toast('Нет связи с базой — запись истории не сохранилась'); });
   syncInventoryRow(sku, client, size);
 }
-async function syncInventoryRow(sku, client, size){
-  const item = findInventoryItem(sku, client, size);
+async function syncInventoryRow(sku, client, size, warehouseId){
+  const item = findInventoryItem(sku, client, size, warehouseId);
   if(!item) return;
   try{
     const { error } = await sb.from('inventory').upsert({
       sku: item.sku, name: item.name, qty: item.qty,
       client_name: item.client || '',
       size: item.size || '',
+      warehouse_id: item.warehouseId || 'MAIN',
       vendor_code: item.vendorCode || null,
       barcode: item.barcode || null,
       dims: item.dims || null,
@@ -1469,6 +1518,7 @@ async function pushStocksToWbSilent(clientId){
 document.getElementById('invSearch').addEventListener('input', renderInventory);
 document.getElementById('invClientFilter').addEventListener('change', renderInventory);
 document.getElementById('invCellFilter').addEventListener('change', renderInventory);
+document.getElementById('invWarehouseFilter').addEventListener('change', renderInventory);
 
 // ---------- RECEIVING ----------
 function renderReceiving(mode){
@@ -1689,6 +1739,20 @@ async function confirmDeleteClient(id){
   activeClientId = null;
   toast(`Клиент «${c.name}» удалён${affected ? `, ${affected} товарных позиций остались на складе без привязки к клиенту` : ''}`);
   renderClients();
+}
+function saveClientLegalInfo(clientId){
+  const c = clients.find(x=>x.id===clientId);
+  if(!c) return;
+  const inn = document.getElementById('clientInn-'+clientId).value.trim();
+  const kpp = document.getElementById('clientKpp-'+clientId).value.trim();
+  const legalAddress = document.getElementById('clientLegalAddress-'+clientId).value.trim();
+  const bankDetails = document.getElementById('clientBankDetails-'+clientId).value.trim();
+  const directorName = document.getElementById('clientDirectorName-'+clientId).value.trim();
+  c.inn = inn; c.kpp = kpp; c.legalAddress = legalAddress; c.bankDetails = bankDetails; c.directorName = directorName;
+  toast('Реквизиты клиента сохранены');
+  sb.from('clients').update({inn, kpp, legal_address:legalAddress, bank_details:bankDetails, director_name:directorName}).eq('id', clientId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить реквизиты в базе'); }
+  });
 }
 function saveTariff(clientId){
   const c = clients.find(x=>x.id===clientId);
@@ -2014,6 +2078,28 @@ function renderClientDetail(body){
     </div>
 
     <div class="panel" style="padding:20px;margin-bottom:18px">
+      <h3 style="font-size:18px;margin-bottom:6px">Юридические реквизиты (для УПД)</h3>
+      <p style="font-size:12px;color:var(--ink-soft);margin:0 0 14px 0">Нужны, чтобы формировать УПД по плановым поставкам этого клиента.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div style="flex:1;min-width:160px"><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">ИНН</div><input class="search mono" id="clientInn-${c.id}" value="${escapeHtml(c.inn||'')}" style="width:100%"></div>
+        <div style="flex:1;min-width:160px"><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">КПП</div><input class="search mono" id="clientKpp-${c.id}" value="${escapeHtml(c.kpp||'')}" style="width:100%"></div>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Юридический адрес</div>
+        <input class="search" id="clientLegalAddress-${c.id}" value="${escapeHtml(c.legalAddress||'')}" style="width:100%">
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Банковские реквизиты (р/с, банк, БИК, к/с)</div>
+        <textarea class="search" id="clientBankDetails-${c.id}" rows="2" style="width:100%;resize:vertical">${escapeHtml(c.bankDetails||'')}</textarea>
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">ФИО руководителя</div>
+        <input class="search" id="clientDirectorName-${c.id}" value="${escapeHtml(c.directorName||'')}" style="width:100%">
+      </div>
+      <button class="btn btn-primary" onclick="saveClientLegalInfo('${c.id}')">Сохранить реквизиты</button>
+    </div>
+
+    <div class="panel" style="padding:20px;margin-bottom:18px">
       <h3 style="font-size:18px;margin-bottom:6px">Тариф на отгрузку FBS (по литражу)</h3>
       <p style="font-size:12px;color:var(--ink-soft);margin:0 0 14px 0">Ступени по объёму товара: «до скольки литров — сколько стоит отгрузка одной единицы». При сборке заказа система сама возьмёт объём товара (габариты × 1 шт) и подставит нужную ступень.</p>
       <div style="margin-bottom:14px">
@@ -2184,7 +2270,8 @@ function renderOutbound(){
 function renderOutboundCreatePanel(){
   const panel = document.getElementById('outboundCreatePanel');
   const client = clients.find(c=>c.id===draftOutboundClientId);
-  const clientItems = client ? inventory.filter(i=>i.client===client.name && i.qty>0) : [];
+  const sourceWarehouseId = draftOutboundWarehouseId || 'MAIN';
+  const clientItems = client ? inventory.filter(i=>i.client===client.name && i.qty>0 && (i.warehouseId||'MAIN')===sourceWarehouseId) : [];
   const totalQty = draftOutboundItems.reduce((s,d)=>s+d.qty,0);
   const destinations = [...new Set(outboundSupplies.map(s=>s.destination).filter(Boolean))];
 
@@ -2201,12 +2288,34 @@ function renderOutboundCreatePanel(){
             ${clients.map(c=>`<option value="${c.id}" ${draftOutboundClientId===c.id?'selected':''}>${c.name}</option>`).join('')}
           </select>
         </div>
-        <div style="flex:1;min-width:220px">
+        <div style="flex:1;min-width:180px">
+          <div class="eyebrow" style="margin-bottom:6px">Списываем со склада</div>
+          <select class="search" id="outboundWarehouseSelect" style="width:100%" onchange="setDraftOutboundWarehouse(this.value)">
+            ${warehouses.map(w=>`<option value="${w.id}" ${sourceWarehouseId===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;color:var(--ink-soft);cursor:pointer">
+        <input type="checkbox" id="outboundIsInternalTransfer" ${draftOutboundIsInternalTransfer?'checked':''} onchange="toggleOutboundInternalTransfer(this.checked)">
+        Это перемещение на наш склад в другом регионе (не клиенту/не на маркетплейс)
+      </label>
+
+      ${draftOutboundIsInternalTransfer ? `
+        <div style="margin-bottom:14px">
+          <div class="eyebrow" style="margin-bottom:6px">Куда перемещаем (наш склад)</div>
+          <select class="search" id="outboundDestWarehouseSelect" style="width:100%;max-width:400px">
+            ${warehouses.filter(w=>w.id!==sourceWarehouseId).map(w=>`<option value="${w.id}">${escapeHtml(w.name)}</option>`).join('') || '<option value="">нет других складов — создайте в разделе «Склады»</option>'}
+          </select>
+          <p style="font-size:12px;color:var(--ink-faint);margin-top:6px">После сборки и отметки «Отправлено» на складе назначения автоматически появится плановая поставка — останется её принять там как обычно.</p>
+        </div>
+      ` : `
+        <div style="margin-bottom:14px">
           <div class="eyebrow" style="margin-bottom:6px">Куда отправляем (склад назначения)</div>
           <input class="search" id="outboundDestination" list="outboundDestList" placeholder="напр. Региональный склад — Казань" style="width:100%">
           <datalist id="outboundDestList">${destinations.map(d=>`<option value="${escapeHtml(d)}">`).join('')}</datalist>
         </div>
-      </div>
+      `}
 
       ${client ? `
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;padding:12px;background:var(--bg);border-radius:10px">
@@ -2263,6 +2372,15 @@ function cancelOutboundDraft(){
 function setDraftOutboundClient(clientId){
   if(draftOutboundClientId !== clientId) draftOutboundItems = [];
   draftOutboundClientId = clientId;
+  renderOutboundCreatePanel();
+}
+function setDraftOutboundWarehouse(warehouseId){
+  if(draftOutboundWarehouseId !== warehouseId) draftOutboundItems = [];
+  draftOutboundWarehouseId = warehouseId;
+  renderOutboundCreatePanel();
+}
+function toggleOutboundInternalTransfer(checked){
+  draftOutboundIsInternalTransfer = checked;
   renderOutboundCreatePanel();
 }
 function addDraftOutboundItem(){
@@ -2352,13 +2470,17 @@ function handleOutboundExcelUpload(inputEl){
 }
 function createOutboundSupply(){
   const client = clients.find(c=>c.id===draftOutboundClientId);
-  const destination = document.getElementById('outboundDestination').value.trim();
+  const sourceWarehouseId = draftOutboundWarehouseId || 'MAIN';
+  const isInternal = draftOutboundIsInternalTransfer;
+  const destWarehouseId = isInternal ? document.getElementById('outboundDestWarehouseSelect').value : null;
+  const destination = isInternal ? warehouseName(destWarehouseId) : document.getElementById('outboundDestination').value.trim();
   if(!client){ toast('Выберите клиента'); return; }
-  if(!destination){ toast('Укажите склад назначения'); return; }
+  if(isInternal && !destWarehouseId){ toast('Выберите склад назначения'); return; }
+  if(!isInternal && !destination){ toast('Укажите склад назначения'); return; }
   if(!draftOutboundItems.length){ toast('Добавьте хотя бы одну позицию'); return; }
 
   for(const d of draftOutboundItems){
-    const item = resolveDraftItem(d, client.name);
+    const item = resolveDraftItem(d, client.name, sourceWarehouseId);
     if(!item || item.qty < d.qty){
       toast(`Недостаточно на складе: «${d.name}» (нужно ${d.qty}, есть ${item?item.qty:0})`);
       return;
@@ -2370,17 +2492,21 @@ function createOutboundSupply(){
   const items = draftOutboundItems.map(d=>({...d}));
 
   draftOutboundItems.forEach(d=>{
-    const item = resolveDraftItem(d, client.name);
+    const item = resolveDraftItem(d, client.name, sourceWarehouseId);
     item.qty -= d.qty;
     logMovement(item.sku, item.name, -d.qty, `Отгрузка на склад: ${destination}`, client.name, item.size);
   });
 
   outboundSupplies.unshift({
     id, clientId: client.id, clientName: client.name, destination,
-    status: 'created', createdAt, items
+    status: 'created', createdAt, items,
+    isInternalTransfer: isInternal, sourceWarehouseId, destWarehouseId
   });
 
-  sb.from('outbound_supplies').insert({id, client_id: client.id, client_name: client.name, destination, status:'created', created_at: createdAt.toISOString()}).then(({error})=>{
+  sb.from('outbound_supplies').insert({
+    id, client_id: client.id, client_name: client.name, destination, status:'created', created_at: createdAt.toISOString(),
+    is_internal_transfer: isInternal, source_warehouse_id: sourceWarehouseId, dest_warehouse_id: destWarehouseId
+  }).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить поставку в базе'); return; }
     const rows = items.map(it=>({supply_id:id, sku:it.sku, name:it.name, qty:it.qty, barcode:it.barcode||null, cell:it.cell||null, size:it.size||null}));
     sb.from('outbound_supply_items').insert(rows).then(({error})=>{
@@ -2390,6 +2516,7 @@ function createOutboundSupply(){
 
   draftOutboundItems = [];
   draftOutboundClientId = '';
+  draftOutboundIsInternalTransfer = false;
   outboundDraftCollapsed = false;
   toast(`Поставка ${id} создана`);
   renderOutbound();
@@ -2403,8 +2530,27 @@ function toggleOutboundDetail(id){
 function markOutboundShipped(id){
   const s = outboundSupplies.find(x=>x.id===id);
   s.status = 'shipped';
-  toast(`Поставка ${id} отмечена как отправленная`);
   sb.from('outbound_supplies').update({status:'shipped'}).eq('id', id).then(({error})=>{ if(error) console.error(error); });
+
+  if(s.isInternalTransfer && s.destWarehouseId && !s.createdPlannedSupplyId){
+    const newId = 'ПС-' + Date.now();
+    const createdAt = new Date();
+    const items = s.items.map(it=>({sku:it.sku, name:it.name, size:it.size||'', barcode:it.barcode||'', qty:it.qty, receivedQty:0}));
+    supplies.unshift({
+      id:newId, clientId:s.clientId, clientName:s.clientName, createdAt, items,
+      status:'planned', requiresKiz:false, warehouseId:s.destWarehouseId
+    });
+    s.createdPlannedSupplyId = newId;
+    sb.from('supplies').insert({id:newId, client_id:s.clientId, client_name:s.clientName, status:'planned', created_at:createdAt.toISOString(), requires_kiz:false, warehouse_id:s.destWarehouseId}).then(({error})=>{
+      if(error){ console.error(error); toast('Не удалось создать плановую поставку на складе назначения'); return; }
+      const rows = items.map(it=>({supply_id:newId, sku:it.sku, name:it.name, qty:it.qty, received_qty:0, barcode:it.barcode||null, size:it.size||null}));
+      sb.from('supply_items').insert(rows).then(({error})=>{ if(error) console.error(error); });
+      sb.from('outbound_supplies').update({created_planned_supply_id:newId}).eq('id', id).then(({error})=>{ if(error) console.error(error); });
+    });
+    toast(`Поставка ${id} отправлена. На складе «${warehouseName(s.destWarehouseId)}» создана плановая поставка ${newId} — примите её там как обычно`);
+  } else {
+    toast(`Поставка ${id} отмечена как отправленная`);
+  }
   renderOutboundTableWrap();
 }
 function formatOutboundDate(d){
@@ -2560,7 +2706,7 @@ function saveOutboundEdit(id){
     const newQty = Math.max(0, parseInt(inputEl.value)||0);
     const diff = newQty - it.qty;
     if(diff===0) continue;
-    const inv = resolveDraftItem(it, s.clientName);
+    const inv = resolveDraftItem(it, s.clientName, s.sourceWarehouseId);
     if(diff>0 && (!inv || inv.qty < diff)){
       toast(`Недостаточно на складе для «${it.name}» — есть ${inv?inv.qty:0}, нужно ещё ${diff}`);
       return;
@@ -2597,7 +2743,7 @@ function confirmDeleteOutbound(id){
   const s = outboundSupplies.find(x=>x.id===id);
   if(!s) return;
   s.items.forEach(it=>{
-    const inv = resolveDraftItem(it, s.clientName);
+    const inv = resolveDraftItem(it, s.clientName, s.sourceWarehouseId);
     if(inv){
       inv.qty += it.qty;
       logMovement(inv.sku, inv.name, it.qty, `Отмена поставки на склад: ${s.destination}`, inv.client, inv.size);
@@ -3551,6 +3697,115 @@ document.getElementById('ddsType').addEventListener('change', updateDdsCategoryO
 document.getElementById('ddsSearch').addEventListener('input', renderDdsTable);
 document.getElementById('ddsFilterType').addEventListener('change', renderDdsTable);
 
+// ---------- WAREHOUSES ----------
+async function loadWarehouses(){
+  const { data, error } = await sb.from('warehouses').select('*').order('name').limit(1000);
+  if(error){ console.error(error); return; }
+  warehouses = data.map(w=>({id:w.id, name:w.name}));
+}
+function renderWarehouses(){
+  const wrap = document.getElementById('warehousesListWrap');
+  if(!warehouses.length){
+    wrap.innerHTML = `<div class="panel empty">Складов пока нет</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="panel">
+      <table>
+        <thead><tr><th>Название</th><th></th></tr></thead>
+        <tbody>
+          ${warehouses.map(w=>`
+            <tr>
+              <td>${escapeHtml(w.name)}${w.id==='MAIN'?' <span style="color:var(--ink-faint);font-size:12px">(основной, нельзя удалить)</span>':''}</td>
+              <td style="text-align:right">
+                ${w.id!=='MAIN' ? `<button class="btn btn-ghost" style="padding:4px 10px;color:var(--warn)" onclick="deleteWarehouse('${w.id}')">Удалить</button>` : ''}
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+function createWarehouse(){
+  const input = document.getElementById('newWarehouseName');
+  const name = input.value.trim();
+  if(!name){ toast('Укажите название склада'); return; }
+  const id = 'WH-' + Date.now();
+  warehouses.push({id, name});
+  input.value = '';
+  toast(`Склад «${name}» добавлен`);
+  renderWarehouses();
+  sb.from('warehouses').insert({id, name}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить склад в базе'); }
+  });
+}
+function deleteWarehouse(id){
+  const inUse = inventory.some(i=>(i.warehouseId||'MAIN')===id);
+  if(inUse){ toast('На этом складе ещё числится товар — сначала переместите или спишите его'); return; }
+  const w = warehouses.find(x=>x.id===id);
+  if(!confirm(`Удалить склад «${w?w.name:id}»?`)) return;
+  warehouses = warehouses.filter(x=>x.id!==id);
+  toast('Склад удалён');
+  renderWarehouses();
+  sb.from('warehouses').delete().eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить склад в базе'); }
+  });
+}
+function warehouseName(id){
+  const w = warehouses.find(x=>x.id===(id||'MAIN'));
+  return w ? w.name : 'Основной склад';
+}
+
+// ---------- COMPANY SETTINGS (реквизиты исполнителя) ----------
+async function loadCompanySettings(){
+  const { data, error } = await sb.from('company_settings').select('*').eq('id','main').maybeSingle();
+  if(error){ console.error(error); return; }
+  if(data) companySettings = {
+    name:data.name||'', inn:data.inn||'', kpp:data.kpp||'', legalAddress:data.legal_address||'',
+    bankDetails:data.bank_details||'', directorName:data.director_name||''
+  };
+}
+function getWarehouseInfo(){ return { name: companySettings.name || 'ТелеПак', inn: companySettings.inn || '' }; }
+function editWarehouseInfo(){
+  const win = window.open('', '_blank', 'width=480,height=560');
+  if(!win){ toast('Браузер заблокировал открытие окна'); return; }
+  win.document.write(`
+    <!DOCTYPE html><html><head><meta charset="utf-8"><title>Реквизиты организации</title>
+    <style>
+      body{font-family:Arial,sans-serif;padding:20px;color:#111}
+      label{display:block;font-size:12px;color:#666;margin:12px 0 4px 0}
+      input,textarea{width:100%;padding:8px;font-size:14px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box;font-family:inherit}
+      button{margin-top:18px;padding:10px 18px;background:#FF5B1F;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer}
+    </style></head><body>
+      <h2>Реквизиты организации-исполнителя</h2>
+      <p style="font-size:12px;color:#888">Используются в актах приёмки и УПД. Общие для всех сотрудников.</p>
+      <label>Название организации</label><input id="fName" value="${escapeHtml(companySettings.name||'ТелеПак')}">
+      <label>ИНН</label><input id="fInn" value="${escapeHtml(companySettings.inn||'')}">
+      <label>КПП</label><input id="fKpp" value="${escapeHtml(companySettings.kpp||'')}">
+      <label>Юридический адрес</label><input id="fAddr" value="${escapeHtml(companySettings.legalAddress||'')}">
+      <label>Банковские реквизиты (р/с, банк, БИК, к/с)</label><textarea id="fBank" rows="3">${escapeHtml(companySettings.bankDetails||'')}</textarea>
+      <label>ФИО руководителя</label><input id="fDir" value="${escapeHtml(companySettings.directorName||'')}">
+      <button onclick="window.opener.saveCompanySettingsFromPopup(
+        document.getElementById('fName').value,
+        document.getElementById('fInn').value,
+        document.getElementById('fKpp').value,
+        document.getElementById('fAddr').value,
+        document.getElementById('fBank').value,
+        document.getElementById('fDir').value
+      ); window.close();">Сохранить</button>
+    </body></html>
+  `);
+  win.document.close();
+}
+function saveCompanySettingsFromPopup(name, inn, kpp, legalAddress, bankDetails, directorName){
+  companySettings = { name, inn, kpp, legalAddress, bankDetails, directorName };
+  toast('Реквизиты организации сохранены');
+  sb.from('company_settings').upsert({id:'main', name, inn, kpp, legal_address:legalAddress, bank_details:bankDetails, director_name:directorName}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить реквизиты в базе'); }
+  });
+}
+
 // ---------- SUPPLIES (planned deliveries) ----------
 function renderSuppliesTab(){
   document.getElementById('viewPlannedBtn').className = 'btn ' + (currentSuppliesView==='planned' ? 'btn-accent' : 'btn-ghost');
@@ -3630,19 +3885,20 @@ function createSupply(){
   if(!client){ toast('Выберите клиента склада / ИП'); return; }
   if(draftSupplyItems.length===0){ toast('Загрузите Excel-файл с позициями поставки'); return; }
   const requiresKiz = document.getElementById('draftSupplyRequiresKiz').checked;
+  const warehouseId = document.getElementById('supplyWarehouseSelect').value || 'MAIN';
   const id = 'ПС-' + Date.now();
   const createdAt = new Date();
   const items = draftSupplyItems.map(d=>({...d, receivedQty:0}));
   supplies.unshift({
     id, clientId: client.id, clientName: client.name,
-    createdAt, items, status: 'planned', requiresKiz
+    createdAt, items, status: 'planned', requiresKiz, warehouseId
   });
   draftSupplyItems = [];
   draftSupplyClientId = '';
   draftSupplyFileName = '';
-  toast(`Поставка создана — статус «Едет»`);
+  toast(`Поставка создана — статус «Едет» (склад: ${warehouseName(warehouseId)})`);
   renderSupplies();
-  sb.from('supplies').insert({id, client_id: client.id, client_name: client.name, status:'planned', created_at: createdAt.toISOString(), requires_kiz: requiresKiz}).then(({error})=>{
+  sb.from('supplies').insert({id, client_id: client.id, client_name: client.name, status:'planned', created_at: createdAt.toISOString(), requires_kiz: requiresKiz, warehouse_id: warehouseId}).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить поставку в базе'); return; }
     const rows = items.map(it=>({supply_id:id, sku:it.sku, name:it.name, qty:it.qty, received_qty:0, barcode: it.barcode || null, size: it.size || null}));
     sb.from('supply_items').insert(rows).then(({error})=>{
@@ -3660,15 +3916,16 @@ function toggleSupplyReceiving(id){
 function adjustSupplyItem(supplyId, sku, delta, size){
   size = size || '';
   const supply = supplies.find(s=>s.id===supplyId);
+  const warehouseId = supply.warehouseId || 'MAIN';
   const item = supply.items.find(i=>i.sku===sku && (i.size||'')===size);
   const newVal = Math.max(0, item.receivedQty + delta);
   const diff = newVal - item.receivedQty;
   if(diff===0) return;
   const wasOver = item.receivedQty > item.qty;
   item.receivedQty = newVal;
-  let inv = item.barcode ? findInventoryItemByBarcode(item.barcode, supply.clientName) : findInventoryItem(sku, supply.clientName, size);
+  let inv = item.barcode ? findInventoryItemByBarcode(item.barcode, supply.clientName, warehouseId) : findInventoryItem(sku, supply.clientName, size, warehouseId);
   if(!inv){
-    inv = {sku, name: item.name, qty:0, client: supply.clientName, size, barcode: item.barcode||''};
+    inv = {sku, name: item.name, qty:0, client: supply.clientName, size, barcode: item.barcode||'', warehouseId};
     inventory.push(inv);
   }
   inv.qty += diff;
@@ -3702,22 +3959,6 @@ function saveUpdNumber(id){
   sb.from('supplies').update({upd_number: val}).eq('id', id).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить номер УПД в базе'); }
   });
-}
-function getWarehouseInfo(){
-  let info = {name:'', inn:''};
-  try{
-    const raw = localStorage.getItem('sklad42_warehouse_info');
-    if(raw) info = JSON.parse(raw);
-  }catch(e){}
-  return info;
-}
-function editWarehouseInfo(){
-  const cur = getWarehouseInfo();
-  const name = prompt('Название организации-исполнителя (будет в актах):', cur.name || 'ТелеПак');
-  if(name===null) return;
-  const inn = prompt('ИНН исполнителя (можно оставить пустым):', cur.inn || '');
-  try{ localStorage.setItem('sklad42_warehouse_info', JSON.stringify({name, inn: inn||''})); }catch(e){}
-  toast('Реквизиты сохранены в этом браузере');
 }
 function buildActRows(s){
   return s.items.map((it, idx)=>({
@@ -3763,6 +4004,111 @@ function downloadSupplyActExcel(id){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Акт приёмки');
   XLSX.writeFile(wb, `Akt_priemki_${actNumber}.xlsx`);
+}
+function generateUpd(id){
+  const s = supplies.find(x=>x.id===id);
+  const client = clients.find(c=>c.id===s.clientId);
+  if(!client){ toast('Клиент не найден'); return; }
+  const docNumber = document.getElementById('updDocNumber-'+id).value.trim() || id;
+  const pricePerUnit = parseFloat(document.getElementById('updPricePerUnit-'+id).value) || 0;
+  const vatRate = parseInt(document.getElementById('updVatRate-'+id).value) || 0;
+  if(!pricePerUnit){ toast('Укажите цену за единицу товара'); return; }
+  s.updDocNumber = docNumber; s.updPricePerUnit = pricePerUnit; s.updVatRate = vatRate;
+  sb.from('supplies').update({upd_doc_number:docNumber, upd_price_per_unit:pricePerUnit, upd_vat_rate:vatRate}).eq('id', id).then(({error})=>{ if(error) console.error(error); });
+
+  const seller = companySettings;
+  const today = new Date().toLocaleDateString('ru-RU');
+  const rows = s.items.map((it,idx)=>{
+    const qty = it.receivedQty;
+    const sumNoVat = qty * pricePerUnit;
+    const vatSum = vatRate ? sumNoVat * vatRate / 100 : 0;
+    const sumWithVat = sumNoVat + vatSum;
+    return {n:idx+1, name: it.name + (it.size?` (${it.size})`:''), sku:it.sku, qty, price:pricePerUnit, sumNoVat, vatRate, vatSum, sumWithVat};
+  });
+  const totalNoVat = rows.reduce((a,r)=>a+r.sumNoVat,0);
+  const totalVat = rows.reduce((a,r)=>a+r.vatSum,0);
+  const totalWithVat = rows.reduce((a,r)=>a+r.sumWithVat,0);
+
+  const win = window.open('', '_blank');
+  if(!win){ toast('Браузер заблокировал открытие окна — разрешите всплывающие окна для этого сайта'); return; }
+  win.document.write(`
+    <!DOCTYPE html><html><head><meta charset="utf-8"><title>УПД № ${docNumber}</title>
+    <style>
+      body{font-family:Arial,sans-serif;font-size:11px;padding:20px;color:#111}
+      h1{font-size:15px;text-align:center;margin-bottom:2px}
+      .sub{text-align:center;font-size:11px;margin-bottom:14px}
+      .parties{display:flex;gap:20px;margin-bottom:14px}
+      .party{flex:1;border:1px solid #333;padding:8px;font-size:10px}
+      .party b{display:block;margin-bottom:4px;font-size:11px}
+      table{width:100%;border-collapse:collapse;margin-bottom:14px}
+      th,td{border:1px solid #333;padding:4px 6px;font-size:10px;text-align:left}
+      th{background:#f2f2f2;text-align:center}
+      td.num{text-align:right}
+      .totals-row td{font-weight:bold;background:#f7f7f7}
+      .sign{display:flex;justify-content:space-between;gap:30px;margin-top:40px}
+      .sign > div{flex:1}
+      .line{border-bottom:1px solid #333;margin-top:34px;margin-bottom:4px}
+      .small{font-size:9px;color:#666}
+      @media print{ body{padding:8px} }
+    </style></head><body>
+      <h1>УНИВЕРСАЛЬНЫЙ ПЕРЕДАТОЧНЫЙ ДОКУМЕНТ</h1>
+      <div class="sub">№ ${escapeHtml(docNumber)} от ${today} · Статус документа: 2 (передаточный документ)</div>
+
+      <div class="parties">
+        <div class="party">
+          <b>Продавец / Исполнитель (грузоотправитель)</b>
+          ${escapeHtml(seller.name||'—')}<br>
+          ИНН ${escapeHtml(seller.inn||'—')} ${seller.kpp?`КПП ${escapeHtml(seller.kpp)}`:''}<br>
+          Адрес: ${escapeHtml(seller.legalAddress||'—')}<br>
+          ${seller.bankDetails?`Банк: ${escapeHtml(seller.bankDetails)}<br>`:''}
+          Руководитель: ${escapeHtml(seller.directorName||'—')}
+        </div>
+        <div class="party">
+          <b>Покупатель (грузополучатель)</b>
+          ${escapeHtml(client.name||'—')}<br>
+          ИНН ${escapeHtml(client.inn||'—')} ${client.kpp?`КПП ${escapeHtml(client.kpp)}`:''}<br>
+          Адрес: ${escapeHtml(client.legalAddress||'—')}<br>
+          ${client.bankDetails?`Банк: ${escapeHtml(client.bankDetails)}<br>`:''}
+          Руководитель: ${escapeHtml(client.directorName||'—')}
+        </div>
+      </div>
+
+      <p style="font-size:10px">Основание передачи: приёмка товара на склад по поставке № ${s.id} от ${new Date(s.createdAt).toLocaleDateString('ru-RU')}. Склад: ${escapeHtml(warehouseName(s.warehouseId))}.</p>
+
+      <table>
+        <thead><tr>
+          <th>№</th><th>Наименование товара</th><th>Артикул</th><th>Ед. изм.</th><th>Кол-во</th>
+          <th>Цена, ₽</th><th>Сумма без НДС, ₽</th><th>Ставка НДС</th><th>Сумма НДС, ₽</th><th>Сумма с НДС, ₽</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r=>`
+            <tr>
+              <td>${r.n}</td><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.sku)}</td><td>шт</td>
+              <td class="num">${r.qty}</td><td class="num">${r.price.toFixed(2)}</td><td class="num">${r.sumNoVat.toFixed(2)}</td>
+              <td class="num">${r.vatRate?r.vatRate+'%':'Без НДС'}</td><td class="num">${r.vatSum.toFixed(2)}</td><td class="num">${r.sumWithVat.toFixed(2)}</td>
+            </tr>
+          `).join('')}
+          <tr class="totals-row">
+            <td colspan="6">Итого:</td>
+            <td class="num">${totalNoVat.toFixed(2)}</td><td></td><td class="num">${totalVat.toFixed(2)}</td><td class="num">${totalWithVat.toFixed(2)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="sign">
+        <div>
+          Товар (груз) передал / Услуги, результаты работ сдал<div class="line"></div>
+          <span class="small">${escapeHtml(seller.directorName||'подпись / расшифровка подписи')}</span>
+        </div>
+        <div>
+          Товар (груз) получил / Услуги, результаты работ принял<div class="line"></div>
+          <span class="small">${escapeHtml(client.directorName||'подпись / расшифровка подписи')}</span>
+        </div>
+      </div>
+      <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 300); };<\/script>
+    </body></html>
+  `);
+  win.document.close();
 }
 function generateSupplyActPdf(id){
   const s = supplies.find(x=>x.id===id);
@@ -3862,6 +4208,8 @@ function renderSupplyReceivingPanel(s){
     const totalQty = s.items.reduce((a,i)=>a+i.qty,0);
     const totalReceived = s.items.reduce((a,i)=>a+i.receivedQty,0);
     const mismatches = s.items.filter(i=>i.receivedQty !== i.qty);
+    const supplyClient = clients.find(c=>c.id===s.clientId);
+    const clientHasLegalInfo = supplyClient && supplyClient.inn;
     return `
       <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
@@ -3907,6 +4255,20 @@ function renderSupplyReceivingPanel(s){
             <button class="btn btn-ghost" onclick="downloadSupplyActExcel('${s.id}')">📊 Скачать Excel</button>
             <button class="btn btn-accent" onclick="generateSupplyActPdf('${s.id}')">📄 Скачать PDF</button>
           </div>
+        </div>
+        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line)">
+          <div class="eyebrow" style="margin-bottom:10px">УПД (универсальный передаточный документ)</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+            <input class="search mono" id="updDocNumber-${s.id}" placeholder="№ УПД" value="${s.updDocNumber || s.id}" style="width:160px">
+            <input class="search" id="updPricePerUnit-${s.id}" type="number" min="0" step="0.01" placeholder="Цена за ед., ₽ (без НДС)" value="${s.updPricePerUnit||''}" style="width:220px">
+            <select class="search" id="updVatRate-${s.id}" style="width:150px">
+              <option value="0" ${(s.updVatRate||0)==0?'selected':''}>Без НДС</option>
+              <option value="10" ${s.updVatRate==10?'selected':''}>НДС 10%</option>
+              <option value="20" ${s.updVatRate==20?'selected':''}>НДС 20%</option>
+            </select>
+          </div>
+          ${clientHasLegalInfo ? '' : `<p style="font-size:12px;color:var(--warn);margin:0 0 10px 0">⚠ У клиента «${s.clientName}» не заполнены юридические реквизиты (ИНН и т.д.) — откройте карточку клиента и заполните, иначе в УПД эти поля останутся пустыми</p>`}
+          <button class="btn btn-accent" onclick="generateUpd('${s.id}')">📄 Сформировать УПД</button>
         </div>
       </div>
     `;
@@ -4038,11 +4400,21 @@ function renderSuppliesCreatePanel(){
       <h3 style="font-size:18px;margin-bottom:4px">Создать плановую поставку</h3>
       <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px 0">Скачайте шаблон Excel (артикул, наименование, размер, ШК, количество), выберите клиента и загрузите — поставка появится в приёмке со статусом «Едет». Разные размеры одного артикула — отдельные строки в файле, у каждой свой ШК.</p>
 
-      <div class="eyebrow" style="margin-bottom:6px">Клиент склада / ИП</div>
-      <select class="search" id="supplyClientSelect" style="width:100%;max-width:360px;margin-bottom:16px" onchange="setDraftSupplyClient(this.value)">
-        <option value="">— выберите —</option>
-        ${clients.map(c=>`<option value="${c.id}" ${draftSupplyClientId===c.id?'selected':''}>${c.name}</option>`).join('')}
-      </select>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Клиент склада / ИП</div>
+          <select class="search" id="supplyClientSelect" style="width:280px;max-width:100%" onchange="setDraftSupplyClient(this.value)">
+            <option value="">— выберите —</option>
+            ${clients.map(c=>`<option value="${c.id}" ${draftSupplyClientId===c.id?'selected':''}>${c.name}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">На какой склад принимаем</div>
+          <select class="search" id="supplyWarehouseSelect" style="width:220px;max-width:100%">
+            ${warehouses.map(w=>`<option value="${w.id}" ${(draftSupplyWarehouseId||'MAIN')===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-ghost" onclick="downloadSupplyTemplate()">Скачать шаблон</button>
@@ -4187,17 +4559,18 @@ function renderSuppliesTableWrap(){
 async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   const sku = item.sku;
   const size = item.size || '';
+  const warehouseId = supply.warehouseId || 'MAIN';
   const wasOver = item.receivedQty > item.qty;
   item.receivedQty++;
-  let inv = barcode ? findInventoryItemByBarcode(barcode, supply.clientName) : findInventoryItem(sku, supply.clientName, size);
+  let inv = barcode ? findInventoryItemByBarcode(barcode, supply.clientName, warehouseId) : findInventoryItem(sku, supply.clientName, size, warehouseId);
   if(!inv){
-    inv = {sku, name: item.name, qty:0, client: supply.clientName, size, barcode: barcode||''};
+    inv = {sku, name: item.name, qty:0, client: supply.clientName, size, barcode: barcode||'', warehouseId};
     inventory.push(inv);
   }
   inv.qty++;
   logReceipt(inv.sku, inv.name, 1, inv.client, inv.size);
   const cell = await ensureCellAssigned(inv);
-  syncInventoryRow(inv.sku, inv.client, inv.size);
+  syncInventoryRow(inv.sku, inv.client, inv.size, inv.warehouseId);
   const isOver = item.receivedQty>item.qty && !wasOver;
   if(isOver){ playBeep('warn'); toast(`«${item.name}»${size?` (${size})`:''}: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
   else { playBeep('ok'); toast(`«${item.name}»${size?` (${size})`:''} → Ячейка ${cell}`); }
@@ -4594,7 +4967,7 @@ async function loadEmployees(){
 async function loadInventory(){
   const { data, error } = await sb.from('inventory').select('*').order('sku').limit(50000);
   if(error){ console.error(error); return; }
-  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null}));
+  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', warehouseId:i.warehouse_id||'MAIN', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null}));
 }
 async function loadInventoryBarcodes(){
   const { data, error } = await sb.from('inventory_barcodes').select('*').limit(50000);
@@ -4654,7 +5027,8 @@ async function loadClients(){
   if(error){ console.error(error); return; }
   clients = data.map(c=>({
     id:c.id, name:c.name, contact:c.contact||'—', telegram:c.telegram||'', wbKey:c.wb_key||'', wbConnected:c.wb_connected||false,
-    wbWarehouseId:c.wb_warehouse_id||'', wbAutoSync: c.wb_auto_sync!==false, wbProducts:[], storageLiters:c.storage_liters||0, pricePerLiter:c.price_per_liter||0
+    wbWarehouseId:c.wb_warehouse_id||'', wbAutoSync: c.wb_auto_sync!==false, wbProducts:[], storageLiters:c.storage_liters||0, pricePerLiter:c.price_per_liter||0,
+    inn:c.inn||'', kpp:c.kpp||'', legalAddress:c.legal_address||'', bankDetails:c.bank_details||'', directorName:c.director_name||''
   }));
 }
 async function loadStorageHistory(){
@@ -4676,6 +5050,8 @@ async function loadSupplies(){
     actNumber: s.act_number || '',
     actPricePerUnit: s.act_price || 0,
     requiresKiz: s.requires_kiz || false,
+    warehouseId: s.warehouse_id || 'MAIN',
+    updDocNumber: s.upd_doc_number||'', updPricePerUnit: s.upd_price_per_unit||0, updVatRate: s.upd_vat_rate||0,
     createdAt: new Date(s.created_at),
     items: itemRows.filter(it=>it.supply_id===s.id).map(it=>({sku:it.sku, name:it.name, qty:it.qty, receivedQty:it.received_qty, barcode:it.barcode||'', size:it.size||''}))
   }));
@@ -4690,6 +5066,7 @@ async function loadOutboundSupplies(){
     clientId: s.client_id,
     clientName: s.client_name,
     destination: s.destination,
+    isInternalTransfer: s.is_internal_transfer||false, sourceWarehouseId: s.source_warehouse_id||'MAIN', destWarehouseId: s.dest_warehouse_id||null, createdPlannedSupplyId: s.created_planned_supply_id||null,
     status: s.status,
     createdAt: new Date(s.created_at),
     items: itemRows.filter(it=>it.supply_id===s.id).map(it=>({sku:it.sku, name:it.name, qty:it.qty, barcode:it.barcode||'', cell:it.cell||null, size:it.size||''}))
@@ -4732,7 +5109,7 @@ async function initApp(){
     return;
   }
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings()]);
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings()]);
   }catch(err){
     console.error(err);
   }
