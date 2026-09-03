@@ -64,6 +64,53 @@
     flex-direction:column;
     padding:20px 14px;
   }
+  .mobile-topbar{ display:none; }
+  .sidebar-overlay{ display:none; }
+  .hamburger-btn{
+    background:none; border:none; color:#EDE9DD; font-size:22px; cursor:pointer;
+    padding:4px 8px; line-height:1;
+  }
+  @media (max-width: 860px){
+    .mobile-topbar{
+      display:flex; align-items:center; gap:12px;
+      padding:12px 16px; background:var(--ink); color:#EDE9DD;
+      position:sticky; top:0; z-index:50;
+    }
+    .app{ flex-direction:column; }
+    .sidebar{
+      position:fixed; top:0; left:0; bottom:0; z-index:100;
+      width:240px; max-width:80vw;
+      transform:translateX(-100%);
+      transition:transform 0.2s ease;
+      box-shadow:2px 0 12px rgba(0,0,0,0.3);
+    }
+    .sidebar.open{ transform:translateX(0); }
+    .sidebar-overlay.open{
+      display:block; position:fixed; inset:0; z-index:90;
+      background:rgba(0,0,0,0.45);
+    }
+    .main{ width:100%; }
+
+    /* Таблицы -> карточки на узких экранах */
+    .content table.card-table{ width:100%; }
+    .content table.card-table thead{ display:none; }
+    .content table.card-table, .content table.card-table tbody,
+    .content table.card-table tr{ display:block; width:100%; }
+    .content table.card-table tr{
+      border:1px solid var(--line); border-radius:10px; margin-bottom:10px;
+      padding:10px 12px; background:var(--panel);
+    }
+    .content table.card-table td{
+      display:block; border:none !important; padding:4px 0 !important; text-align:left !important;
+      white-space:normal !important;
+    }
+    .content table.card-table td[data-label]::before{
+      content: attr(data-label);
+      display:block; font-size:10px; letter-spacing:0.04em; text-transform:uppercase;
+      color:var(--ink-faint); margin-bottom:2px;
+    }
+    .content table.card-table td[colspan]{ padding:0 !important; }
+  }
   .logo{
     display:flex;
     align-items:baseline;
@@ -477,7 +524,12 @@
 </div>
 
 <div class="app" id="appRoot" style="display:none">
-  <div class="sidebar">
+  <div class="mobile-topbar" id="mobileTopbar">
+    <button class="hamburger-btn" onclick="toggleMobileSidebar()">☰</button>
+    <div class="logo" style="padding:0"><b>ТелеПак</b><span>WMS</span></div>
+  </div>
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeMobileSidebar()"></div>
+  <div class="sidebar" id="sidebarEl">
     <div class="logo"><b>ТелеПак</b><span>WMS</span></div>
     <div class="nav-group-label">Склад</div>
     <div class="nav-item active" data-tab="inventory" style="padding-left:26px"><span class="num">01</span>Остатки</div>
@@ -520,7 +572,7 @@
           <div class="stat-row" id="invStats"></div>
           <div class="panel">
             <div style="overflow-x:auto">
-              <table>
+              <table class="card-table">
               <thead><tr><th>Артикул</th><th>Товар</th><th>Размер</th><th>Штрихкод</th><th>Клиент</th><th>Остаток</th><th></th></tr></thead>
               <tbody id="invBody"></tbody>
             </table>
@@ -996,8 +1048,16 @@ function switchTab(tab){
   try{ localStorage.setItem('sklad42_active_tab', tab); }catch(e){}
 }
 document.querySelectorAll('.nav-item').forEach(n=>{
-  n.addEventListener('click', ()=>switchTab(n.dataset.tab));
+  n.addEventListener('click', ()=>{ switchTab(n.dataset.tab); closeMobileSidebar(); });
 });
+function toggleMobileSidebar(){
+  document.getElementById('sidebarEl').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('open');
+}
+function closeMobileSidebar(){
+  document.getElementById('sidebarEl').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('open');
+}
 
 // ---------- INVENTORY ----------
 let currentInventoryView = 'stock';
@@ -1171,12 +1231,12 @@ function renderInventory(){
       </tr>`;
     }
     let rowsHtml = `<tr>
-      <td class="mono">${i.sku}</td>
-      <td>${i.name}</td>
-      <td>${i.size||'—'}</td>
-      <td class="mono">${i.barcode||'—'}${i.barcode?`<div style="color:var(--ink-faint);font-size:11px">яч. ${i.cell||'—'}</div>`:''}</td>
-      <td>${i.client||'—'}</td>
-      <td class="${i.qty<=3?'qty-low':''}">${i.qty} шт${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}</td>
+      <td class="mono" data-label="Артикул">${i.sku}</td>
+      <td data-label="Товар">${i.name}</td>
+      <td data-label="Размер">${i.size||'—'}</td>
+      <td class="mono" data-label="Штрихкод">${i.barcode||'—'}${i.barcode?`<div style="color:var(--ink-faint);font-size:11px">яч. ${i.cell||'—'}</div>`:''}</td>
+      <td data-label="Клиент">${i.client||'—'}</td>
+      <td data-label="Остаток" class="${i.qty<=3?'qty-low':''}">${i.qty} шт${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}</td>
       <td style="text-align:right;white-space:nowrap">
         ${readOnly ? `
         <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="openHistory" data-key="${escapeHtml(key)}">История</button>
@@ -2371,7 +2431,7 @@ function renderOutboundTableWrap(){
 
   wrap.innerHTML = `
     <div class="panel">
-      <table>
+      <table class="card-table">
         <thead><tr><th>ID</th><th>Клиент</th><th>Куда</th><th>Статус</th><th>Кол-во</th><th>SKU</th><th>Создана</th></tr></thead>
         <tbody>
           ${filtered.map(s=>{
@@ -2381,13 +2441,13 @@ function renderOutboundTableWrap(){
             const statusClass = s.status==='shipped' ? 'shipped' : 'planned';
             let rowsHtml = `
               <tr style="cursor:pointer" onclick="toggleOutboundDetail('${s.id}')">
-                <td class="mono">${s.id}</td>
-                <td>${s.clientName}</td>
-                <td>${s.destination}</td>
-                <td><span class="status ${statusClass}">${statusLabel}</span></td>
-                <td>${totalQty}</td>
-                <td>${s.items.length}</td>
-                <td class="mono" style="font-size:12px">${formatOutboundDate(s.createdAt)}</td>
+                <td class="mono" data-label="ID">${s.id}</td>
+                <td data-label="Клиент">${s.clientName}</td>
+                <td data-label="Куда">${s.destination}</td>
+                <td data-label="Статус"><span class="status ${statusClass}">${statusLabel}</span></td>
+                <td data-label="Кол-во">${totalQty}</td>
+                <td data-label="SKU">${s.items.length}</td>
+                <td class="mono" data-label="Создана" style="font-size:12px">${formatOutboundDate(s.createdAt)}</td>
               </tr>
             `;
             if(isOpen){
@@ -3466,17 +3526,17 @@ function renderDdsTable(){
   }
   wrap.innerHTML = `
     <div class="panel">
-      <table>
+      <table class="card-table">
         <thead><tr><th>Дата</th><th>Тип</th><th>Категория</th><th>Клиент</th><th>Комментарий</th><th>Сумма</th><th></th></tr></thead>
         <tbody>
           ${rows.map(d=>`
             <tr>
-              <td class="mono" style="font-size:12px">${new Date(d.date).toLocaleDateString('ru-RU')}</td>
-              <td><span class="status ${d.type==='income'?'assembled':'overdue'}">${d.type==='income'?'Приход':'Расход'}</span></td>
-              <td style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" title="Нажмите, чтобы изменить категорию" onclick="editDdsCategory('${escapeHtml(d.id)}')">${escapeHtml(d.category)}</td>
-              <td>${d.clientName?escapeHtml(d.clientName):'—'}</td>
-              <td style="color:var(--ink-soft);font-size:13px">${escapeHtml(d.description)||'—'}</td>
-              <td class="mono" style="font-weight:600;color:${d.type==='income'?'var(--ok)':'var(--warn)'}">${d.type==='income'?'+':'−'}${d.amount.toFixed(2)} ₽</td>
+              <td class="mono" data-label="Дата" style="font-size:12px">${new Date(d.date).toLocaleDateString('ru-RU')}</td>
+              <td data-label="Тип"><span class="status ${d.type==='income'?'assembled':'overdue'}">${d.type==='income'?'Приход':'Расход'}</span></td>
+              <td data-label="Категория" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" title="Нажмите, чтобы изменить категорию" onclick="editDdsCategory('${escapeHtml(d.id)}')">${escapeHtml(d.category)}</td>
+              <td data-label="Клиент">${d.clientName?escapeHtml(d.clientName):'—'}</td>
+              <td data-label="Комментарий" style="color:var(--ink-soft);font-size:13px">${escapeHtml(d.description)||'—'}</td>
+              <td class="mono" data-label="Сумма" style="font-weight:600;color:${d.type==='income'?'var(--ok)':'var(--warn)'}">${d.type==='income'?'+':'−'}${d.amount.toFixed(2)} ₽</td>
               <td style="text-align:right"><button class="btn btn-ghost" style="padding:4px 10px" onclick="deleteDdsEntry('${d.id}')">Удалить</button></td>
             </tr>
           `).join('')}
@@ -4019,7 +4079,7 @@ function renderSuppliesTableWrap(){
 
   wrap.innerHTML = `
     <div class="panel">
-      <table>
+      <table class="card-table">
         <thead><tr>
           <th>ID</th><th>Поставщик / ИП</th><th>Статус</th><th>Расхождения</th><th>Кол-во</th><th>SKU</th><th>Создана</th>
         </tr></thead>
@@ -4035,13 +4095,13 @@ function renderSuppliesTableWrap(){
               : `${info.totalQty}`;
             let rowsHtml = `
               <tr style="cursor:pointer;${info.hasMismatch?'background:var(--warn-bg)':''}" onclick="toggleSupplyReceiving('${s.id}')">
-                <td class="mono">${s.id}</td>
-                <td>${s.clientName}</td>
-                <td><span class="status ${info.cls}">${info.label}</span></td>
-                <td>${discHtml}</td>
-                <td>${qtyHtml}</td>
-                <td>${s.items.length}</td>
-                <td class="mono" style="font-size:12px">${formatSupplyDate(s.createdAt)}</td>
+                <td class="mono" data-label="ID">${s.id}</td>
+                <td data-label="Поставщик / ИП">${s.clientName}</td>
+                <td data-label="Статус"><span class="status ${info.cls}">${info.label}</span></td>
+                <td data-label="Расхождения">${discHtml}</td>
+                <td data-label="Кол-во">${qtyHtml}</td>
+                <td data-label="SKU">${s.items.length}</td>
+                <td class="mono" data-label="Создана" style="font-size:12px">${formatSupplyDate(s.createdAt)}</td>
               </tr>
             `;
             if(isOpen){
@@ -4454,7 +4514,7 @@ function renderEmployeesTab(){
 
   const listHtml = `
     <div class="panel">
-      <table>
+      <table class="card-table">
         <thead><tr><th>Сотрудник</th><th>Логин</th><th>Роль</th><th>Статус</th><th></th></tr></thead>
         <tbody>
           ${employees.map(e=>{
@@ -4489,10 +4549,10 @@ function renderEmployeesTab(){
               </tr>`;
             }
             return `<tr>
-              <td>${e.name}</td>
-              <td class="mono">${e.login}</td>
-              <td>${role?role.name:'—'}</td>
-              <td>${e.active ? '<span class="status assembled">Активен</span>' : '<span class="status shipped">Отключён</span>'}</td>
+              <td data-label="Сотрудник">${e.name}</td>
+              <td class="mono" data-label="Логин">${e.login}</td>
+              <td data-label="Роль">${role?role.name:'—'}</td>
+              <td data-label="Статус">${e.active ? '<span class="status assembled">Активен</span>' : '<span class="status shipped">Отключён</span>'}</td>
               <td style="text-align:right;white-space:nowrap">
                 <button class="btn btn-ghost" style="padding:5px 10px" onclick="startEditEmployee('${escapeHtml(e.id)}')">Изменить</button>
                 <button class="btn btn-ghost" style="padding:5px 10px" onclick="toggleEmployeeActive('${escapeHtml(e.id)}')">${e.active?'Отключить':'Включить'}</button>
