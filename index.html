@@ -2640,6 +2640,7 @@ function renderOutboundDetail(s){
   }
 
   if(editingOutboundId === s.id){
+    const availableItems = inventory.filter(i=>i.client===s.clientName && i.qty>0 && (i.warehouseId||'MAIN')===(s.sourceWarehouseId||'MAIN') && !s.items.find(it=>it.sku===i.sku && (it.size||'')===(i.size||'')));
     return `
       <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
         <div class="eyebrow" style="margin-bottom:4px">Изменить поставку ${s.id}</div>
@@ -2656,6 +2657,17 @@ function renderOutboundDetail(s){
           `).join('')}
         </div>
         <p style="font-size:12px;color:var(--ink-faint);margin:0 0 14px 0">Поставьте 0, чтобы убрать позицию целиком. Увеличение количества списывает разницу со склада ещё раз, уменьшение — возвращает.</p>
+
+        <div class="eyebrow" style="margin-bottom:6px">Добавить новый товар в поставку</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+          <select class="search" id="editOutNewItemSelect-${s.id}" style="flex:1;min-width:220px">
+            <option value="">${availableItems.length ? '— выберите товар —' : 'нет доступных товаров на этом складе'}</option>
+            ${availableItems.map(i=>`<option value="${escapeHtml(i.sku+'~~'+(i.size||''))}">${escapeHtml(i.sku)}${i.size?` (${i.size})`:''} — ${escapeHtml(i.name)} (в наличии: ${i.qty})</option>`).join('')}
+          </select>
+          <input class="search mono" id="editOutNewItemQty-${s.id}" type="number" min="1" value="1" style="width:90px">
+          <button class="btn btn-ghost" onclick="addItemToOutboundEdit('${s.id}')">+ Добавить</button>
+        </div>
+
         <button class="btn btn-accent" onclick="saveOutboundEdit('${s.id}')">Сохранить изменения</button>
         <button class="btn btn-ghost" onclick="cancelEditOutbound()">Отмена</button>
       </div>
@@ -2707,6 +2719,23 @@ function renderOutboundDetail(s){
 }
 function openEditOutbound(id){ editingOutboundId = id; deletingOutboundId = null; renderOutboundTableWrap(); }
 function cancelEditOutbound(){ editingOutboundId = null; renderOutboundTableWrap(); }
+function addItemToOutboundEdit(id){
+  const s = outboundSupplies.find(x=>x.id===id);
+  if(!s) return;
+  const select = document.getElementById('editOutNewItemSelect-'+id);
+  const key = select.value;
+  if(!key){ toast('Выберите товар'); return; }
+  const [sku, size] = key.split('~~');
+  const qty = Math.max(1, parseInt(document.getElementById('editOutNewItemQty-'+id).value) || 1);
+  const inv = findInventoryItem(sku, s.clientName, size, s.sourceWarehouseId);
+  if(!inv){ toast('Товар не найден на складе'); return; }
+  if(qty > inv.qty){ toast(`На складе только ${inv.qty} шт «${inv.name}»`); return; }
+  const already = s.items.find(it=>it.sku===sku && (it.size||'')===(size||''));
+  if(already){ toast('Этот товар уже есть в поставке — измените его количество выше'); return; }
+  s.items.push({sku, name:inv.name, size:size||'', barcode:inv.barcode||'', qty, cell:inv.cell||null, _isNew:true});
+  toast(`Добавлено: «${inv.name}» — не забудьте нажать «Сохранить изменения»`);
+  renderOutboundTableWrap();
+}
 function saveOutboundEdit(id){
   const s = outboundSupplies.find(x=>x.id===id);
   if(!s) return;
@@ -2718,8 +2747,9 @@ function saveOutboundEdit(id){
     const inputEl = document.getElementById(`editOutQty-${id}-${it.sku}-${it.size||''}`);
     if(!inputEl) continue;
     const newQty = Math.max(0, parseInt(inputEl.value)||0);
-    const diff = newQty - it.qty;
-    if(diff===0) continue;
+    const baseQty = it._isNew ? 0 : it.qty;
+    const diff = newQty - baseQty;
+    if(diff===0){ if(it._isNew) it.qty = newQty; continue; }
     const inv = resolveDraftItem(it, s.clientName, s.sourceWarehouseId);
     if(diff>0 && (!inv || inv.qty < diff)){
       toast(`Недостаточно на складе для «${it.name}» — есть ${inv?inv.qty:0}, нужно ещё ${diff}`);
@@ -2736,6 +2766,7 @@ function saveOutboundEdit(id){
     it.qty = newQty;
   });
   s.items = s.items.filter(it=>it.qty>0);
+  s.items.forEach(it=>{ delete it._isNew; });
   s.destination = newDest;
   editingOutboundId = null;
   toast('Изменения сохранены');
