@@ -715,6 +715,7 @@
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
             <select class="search" id="ddsClient" style="width:220px"><option value="">Без привязки к клиенту</option></select>
+            <select class="search" id="ddsWarehouse" style="width:180px"></select>
             <input class="search" id="ddsDescription" placeholder="Комментарий (необязательно)" style="flex:1;min-width:220px">
           </div>
           <button class="btn btn-primary" onclick="createDdsEntry()">Добавить операцию</button>
@@ -847,6 +848,8 @@ let roles = []; // загружается из базы (loadRoles)
 let employees = []; // загружается из базы (loadEmployees)
 let employeeCounter = 3;
 let currentUser = null;
+function myWarehouseId(){ return currentUser ? (currentUser.warehouseId || null) : null; }
+function hasFullWarehouseAccess(){ return !myWarehouseId(); }
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
 let warehouses = [];
@@ -1150,7 +1153,9 @@ function renderInventory(){
   const q = (document.getElementById('invSearch').value || '').toLowerCase();
   const clientFilter = document.getElementById('invClientFilter').value;
   const cellFilter = document.getElementById('invCellFilter').value;
-  const warehouseFilter = document.getElementById('invWarehouseFilter') ? document.getElementById('invWarehouseFilter').value : '';
+  const warehouseFilter = hasFullWarehouseAccess()
+    ? (document.getElementById('invWarehouseFilter') ? document.getElementById('invWarehouseFilter').value : '')
+    : myWarehouseId();
   const body = document.getElementById('invBody');
   const readOnly = !!clientViewMode;
 
@@ -1168,9 +1173,15 @@ function renderInventory(){
 
   const warehouseSelect = document.getElementById('invWarehouseFilter');
   if(warehouseSelect){
-    const prevWh = warehouseSelect.value;
-    warehouseSelect.innerHTML = `<option value="">Все склады</option>` + warehouses.map(w=>`<option value="${w.id}">${escapeHtml(w.name)}</option>`).join('');
-    warehouseSelect.value = warehouses.some(w=>w.id===prevWh) ? prevWh : '';
+    if(!hasFullWarehouseAccess()){
+      warehouseSelect.innerHTML = `<option value="${myWarehouseId()}">${escapeHtml(warehouseName(myWarehouseId()))}</option>`;
+      warehouseSelect.value = myWarehouseId();
+      warehouseSelect.disabled = true;
+    } else {
+      const prevWh = warehouseSelect.value;
+      warehouseSelect.innerHTML = `<option value="">Все склады</option>` + warehouses.map(w=>`<option value="${w.id}">${escapeHtml(w.name)}</option>`).join('');
+      warehouseSelect.value = warehouses.some(w=>w.id===prevWh) ? prevWh : '';
+    }
   }
 
   const rows = inventory.filter(i =>
@@ -2270,7 +2281,7 @@ function renderOutbound(){
 function renderOutboundCreatePanel(){
   const panel = document.getElementById('outboundCreatePanel');
   const client = clients.find(c=>c.id===draftOutboundClientId);
-  const sourceWarehouseId = draftOutboundWarehouseId || 'MAIN';
+  const sourceWarehouseId = hasFullWarehouseAccess() ? (draftOutboundWarehouseId || 'MAIN') : myWarehouseId();
   const clientItems = client ? inventory.filter(i=>i.client===client.name && i.qty>0 && (i.warehouseId||'MAIN')===sourceWarehouseId) : [];
   const totalQty = draftOutboundItems.reduce((s,d)=>s+d.qty,0);
   const destinations = [...new Set(outboundSupplies.map(s=>s.destination).filter(Boolean))];
@@ -2290,8 +2301,10 @@ function renderOutboundCreatePanel(){
         </div>
         <div style="flex:1;min-width:180px">
           <div class="eyebrow" style="margin-bottom:6px">Списываем со склада</div>
-          <select class="search" id="outboundWarehouseSelect" style="width:100%" onchange="setDraftOutboundWarehouse(this.value)">
-            ${warehouses.map(w=>`<option value="${w.id}" ${sourceWarehouseId===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')}
+          <select class="search" id="outboundWarehouseSelect" style="width:100%" onchange="setDraftOutboundWarehouse(this.value)" ${hasFullWarehouseAccess()?'':'disabled'}>
+            ${hasFullWarehouseAccess()
+              ? warehouses.map(w=>`<option value="${w.id}" ${sourceWarehouseId===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')
+              : `<option value="${myWarehouseId()}" selected>${escapeHtml(warehouseName(myWarehouseId()))}</option>`}
           </select>
         </div>
       </div>
@@ -2470,7 +2483,7 @@ function handleOutboundExcelUpload(inputEl){
 }
 function createOutboundSupply(){
   const client = clients.find(c=>c.id===draftOutboundClientId);
-  const sourceWarehouseId = draftOutboundWarehouseId || 'MAIN';
+  const sourceWarehouseId = hasFullWarehouseAccess() ? (draftOutboundWarehouseId || 'MAIN') : myWarehouseId();
   const isInternal = draftOutboundIsInternalTransfer;
   const destWarehouseId = isInternal ? document.getElementById('outboundDestWarehouseSelect').value : null;
   const destination = isInternal ? warehouseName(destWarehouseId) : document.getElementById('outboundDestination').value.trim();
@@ -2562,13 +2575,14 @@ function formatOutboundDate(d){
 }
 function renderOutboundTableWrap(){
   const q = (document.getElementById('outboundSearch').value || '').toLowerCase();
-  const filtered = outboundSupplies.filter(s=>
+  const visibleOutbound = hasFullWarehouseAccess() ? outboundSupplies : outboundSupplies.filter(s=>(s.sourceWarehouseId||'MAIN')===myWarehouseId());
+  const filtered = visibleOutbound.filter(s=>
     !q || s.id.toLowerCase().includes(q) || s.clientName.toLowerCase().includes(q) || (s.destination||'').toLowerCase().includes(q)
   );
-  document.getElementById('outboundCount').textContent = `${filtered.length} из ${outboundSupplies.length}`;
+  document.getElementById('outboundCount').textContent = `${filtered.length} из ${visibleOutbound.length}`;
   const wrap = document.getElementById('outboundTableWrap');
 
-  if(!outboundSupplies.length){
+  if(!visibleOutbound.length){
     wrap.innerHTML = `<div class="panel empty"><span class="eyebrow">Поставок пока нет</span>Заполните форму выше, чтобы создать первую</div>`;
     return;
   }
@@ -2984,9 +2998,9 @@ function finishAssembleOrder(order, kizCode){
       const ddsId = 'FBS-SHIP-' + order.orderId;
       if(!ddsEntries.find(d=>d.id===ddsId)){
         const description = `Отгрузка FBS №${order.orderId} · ${liters.toFixed(2)} л`;
-        const entry = {id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, clientId:order.clientId, clientName:order.clientName, date:new Date().toISOString().slice(0,10), createdAt:new Date().toISOString()};
+        const entry = {id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, clientId:order.clientId, clientName:order.clientName, date:new Date().toISOString().slice(0,10), warehouseId: inv.warehouseId||'MAIN', createdAt:new Date().toISOString()};
         ddsEntries.unshift(entry);
-        sb.from('dds_entries').insert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, client_id:order.clientId, client_name:order.clientName, date:entry.date}).then(({error})=>{
+        sb.from('dds_entries').insert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, client_id:order.clientId, client_name:order.clientName, date:entry.date, warehouse_id: inv.warehouseId||'MAIN'}).then(({error})=>{
           if(error) console.error(error);
         });
       }
@@ -3479,7 +3493,7 @@ async function loadDdsEntries(){
   if(error){ console.error(error); return; }
   ddsEntries = data.map(d=>({
     id:d.id, type:d.type, category:d.category, amount:Number(d.amount), description:d.description||'',
-    clientId:d.client_id, clientName:d.client_name||'', date:d.date, createdAt:d.created_at
+    clientId:d.client_id, clientName:d.client_name||'', date:d.date, warehouseId:d.warehouse_id||'MAIN', createdAt:d.created_at
   }));
 }
 function updateDdsCategoryOptions(){
@@ -3496,8 +3510,22 @@ function renderDdsClientSelect(){
   select.innerHTML = `<option value="">Без привязки к клиенту</option>` + clients.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
   if(clients.find(c=>c.id===prev)) select.value = prev;
 }
+function renderDdsWarehouseSelect(){
+  const select = document.getElementById('ddsWarehouse');
+  if(!select) return;
+  if(!hasFullWarehouseAccess()){
+    select.innerHTML = `<option value="${myWarehouseId()}">${escapeHtml(warehouseName(myWarehouseId()))}</option>`;
+    select.value = myWarehouseId();
+    select.disabled = true;
+  } else {
+    const prev = select.value;
+    select.innerHTML = warehouses.map(w=>`<option value="${w.id}">${escapeHtml(w.name)}</option>`).join('');
+    if(warehouses.some(w=>w.id===prev)) select.value = prev;
+  }
+}
 function renderDds(){
   renderDdsClientSelect();
+  renderDdsWarehouseSelect();
   updateDdsCategoryOptions();
   const dateInput = document.getElementById('ddsDate');
   if(dateInput && !dateInput.value) dateInput.value = new Date().toISOString().slice(0,10);
@@ -3537,16 +3565,17 @@ function createDdsEntry(){
   const date = document.getElementById('ddsDate').value || new Date().toISOString().slice(0,10);
   const clientId = document.getElementById('ddsClient').value;
   const client = clients.find(c=>c.id===clientId);
+  const warehouseId = document.getElementById('ddsWarehouse').value || myWarehouseId() || 'MAIN';
   const description = document.getElementById('ddsDescription').value.trim();
   if(!amount){ toast('Укажите сумму'); return; }
   const id = 'DDS-' + Date.now();
-  const entry = {id, type, category, amount, description, clientId: clientId||null, clientName: client?client.name:'', date, createdAt: new Date().toISOString()};
+  const entry = {id, type, category, amount, description, clientId: clientId||null, clientName: client?client.name:'', date, warehouseId, createdAt: new Date().toISOString()};
   ddsEntries.unshift(entry);
   document.getElementById('ddsAmount').value = '';
   document.getElementById('ddsDescription').value = '';
   toast(`${type==='income'?'Приход':'Расход'} добавлен: ${amount.toFixed(2)} ₽`);
   renderDdsTable();
-  sb.from('dds_entries').insert({id, type, category, amount, description, client_id: clientId||null, client_name: client?client.name:null, date}).then(({error})=>{
+  sb.from('dds_entries').insert({id, type, category, amount, description, client_id: clientId||null, client_name: client?client.name:null, date, warehouse_id: warehouseId}).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить операцию в базе'); }
   });
 }
@@ -3656,7 +3685,8 @@ function generateStorageIncome(){
 function renderDdsTable(){
   const q = (document.getElementById('ddsSearch').value || '').toLowerCase();
   const typeFilter = document.getElementById('ddsFilterType').value;
-  const rows = ddsEntries.filter(d=>
+  const visibleDds = hasFullWarehouseAccess() ? ddsEntries : ddsEntries.filter(d=>(d.warehouseId||'MAIN')===myWarehouseId());
+  const rows = visibleDds.filter(d=>
     (!typeFilter || d.type===typeFilter) &&
     (!q || d.category.toLowerCase().includes(q) || d.description.toLowerCase().includes(q) || (d.clientName||'').toLowerCase().includes(q))
   );
@@ -3982,6 +4012,59 @@ function saveActNumber(id){
   });
   return actNumber;
 }
+function downloadMx1Excel(id){
+  const s = supplies.find(x=>x.id===id);
+  const client = clients.find(c=>c.id===s.clientId);
+  if(!client){ toast('Клиент не найден'); return; }
+  const seller = companySettings;
+  const pricePerUnit = s.updPricePerUnit || 0;
+  const actDate = new Date(s.createdAt).toLocaleDateString('ru-RU');
+
+  const data = [];
+  data.push(['', '', '', '', '', '', '', 'Унифицированная форма № МХ-1']);
+  data.push(['', '', '', '', '', '', '', 'Утверждена постановлением Госкомстата России от 09.08.99 № 66']);
+  data.push([]);
+  data.push([`Организация-хранитель: ${seller.name||'—'}`, '', '', '', '', 'ИНН', seller.inn||'—']);
+  data.push([`Адрес: ${seller.legalAddress||'—'}`]);
+  data.push([]);
+  data.push([`Поклажедатель: ${client.name||'—'}`, '', '', '', '', 'ИНН', client.inn||'—']);
+  data.push([`Адрес: ${client.legalAddress||'—'}`]);
+  data.push([]);
+  data.push([`АКТ № ${s.id}`, '', '', `Дата составления: ${actDate}`]);
+  data.push(['О ПРИЕМЕ-ПЕРЕДАЧЕ ТОВАРНО-МАТЕРИАЛЬНЫХ ЦЕННОСТЕЙ НА ХРАНЕНИЕ']);
+  data.push([]);
+  data.push([`Склад ответственного хранения: ${warehouseName(s.warehouseId)}`]);
+  data.push(['Срок хранения: по договору']);
+  data.push([]);
+  data.push(['№ п/п','Наименование, вид упаковки','Код (артикул)','Ед. изм.','Код ОКЕИ','Количество','Цена, руб.коп.','Стоимость, руб.коп.']);
+  let totalQty = 0, totalSum = 0;
+  s.items.forEach((it,idx)=>{
+    const qty = it.receivedQty;
+    totalQty += qty;
+    const sum = pricePerUnit ? qty*pricePerUnit : '';
+    if(pricePerUnit) totalSum += qty*pricePerUnit;
+    data.push([idx+1, it.name + (it.size?` (${it.size})`:''), it.sku, 'шт', '796', qty, pricePerUnit||'', sum]);
+  });
+  data.push(['', '', '', '', 'Всего по акту:', totalQty, 'Х', pricePerUnit?totalSum.toFixed(2):'']);
+  data.push([]);
+  data.push(['Условия хранения:', '']);
+  data.push([]);
+  data.push(['Особые отметки:', '']);
+  data.push([]);
+  data.push([]);
+  data.push(['Товарно-материальные ценности на хранение']);
+  data.push(['Сдал', '(должность)', '', '(подпись)', '', client.directorName||'(расшифровка подписи)']);
+  data.push(['М.П.']);
+  data.push([]);
+  data.push(['Принял', '(должность)', '', '(подпись)', '', seller.directorName||'(расшифровка подписи)']);
+  data.push(['М.П.']);
+
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:6},{wch:42},{wch:14},{wch:8},{wch:8},{wch:10},{wch:12},{wch:14}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'МХ-1');
+  XLSX.writeFile(wb, `MX1_${s.id}.xlsx`);
+}
 function downloadSupplyActExcel(id){
   const s = supplies.find(x=>x.id===id);
   const actNumber = saveActNumber(id);
@@ -4012,7 +4095,7 @@ function generateUpd(id){
   const docNumber = document.getElementById('updDocNumber-'+id).value.trim() || id;
   const pricePerUnit = parseFloat(document.getElementById('updPricePerUnit-'+id).value) || 0;
   const vatRate = parseInt(document.getElementById('updVatRate-'+id).value) || 0;
-  if(!pricePerUnit){ toast('Укажите цену за единицу товара'); return; }
+  // цена необязательна — если не указана, суммы в документе останутся пустыми/нулевыми
   s.updDocNumber = docNumber; s.updPricePerUnit = pricePerUnit; s.updVatRate = vatRate;
   sb.from('supplies').update({upd_doc_number:docNumber, upd_price_per_unit:pricePerUnit, upd_vat_rate:vatRate}).eq('id', id).then(({error})=>{ if(error) console.error(error); });
 
@@ -4260,7 +4343,7 @@ function renderSupplyReceivingPanel(s){
           <div class="eyebrow" style="margin-bottom:10px">УПД (универсальный передаточный документ)</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
             <input class="search mono" id="updDocNumber-${s.id}" placeholder="№ УПД" value="${s.updDocNumber || s.id}" style="width:160px">
-            <input class="search" id="updPricePerUnit-${s.id}" type="number" min="0" step="0.01" placeholder="Цена за ед., ₽ (без НДС)" value="${s.updPricePerUnit||''}" style="width:220px">
+            <input class="search" id="updPricePerUnit-${s.id}" type="number" min="0" step="0.01" placeholder="Цена за ед., ₽ (необязательно)" value="${s.updPricePerUnit||''}" style="width:220px">
             <select class="search" id="updVatRate-${s.id}" style="width:150px">
               <option value="0" ${(s.updVatRate||0)==0?'selected':''}>Без НДС</option>
               <option value="10" ${s.updVatRate==10?'selected':''}>НДС 10%</option>
@@ -4269,6 +4352,11 @@ function renderSupplyReceivingPanel(s){
           </div>
           ${clientHasLegalInfo ? '' : `<p style="font-size:12px;color:var(--warn);margin:0 0 10px 0">⚠ У клиента «${s.clientName}» не заполнены юридические реквизиты (ИНН и т.д.) — откройте карточку клиента и заполните, иначе в УПД эти поля останутся пустыми</p>`}
           <button class="btn btn-accent" onclick="generateUpd('${s.id}')">📄 Сформировать УПД</button>
+        </div>
+        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line)">
+          <div class="eyebrow" style="margin-bottom:4px">МХ-1 (акт приёма-передачи ТМЦ на хранение)</div>
+          <p style="font-size:12px;color:var(--ink-soft);margin:0 0 10px 0">Более подходящий документ для фулфилмента — вы указаны как хранитель, клиент как поклажедатель. Цена в этой форме не обязательна.</p>
+          <button class="btn btn-ghost" onclick="downloadMx1Excel('${s.id}')">📊 Скачать МХ-1 (Excel)</button>
         </div>
       </div>
     `;
@@ -4410,8 +4498,10 @@ function renderSuppliesCreatePanel(){
         </div>
         <div>
           <div class="eyebrow" style="margin-bottom:6px">На какой склад принимаем</div>
-          <select class="search" id="supplyWarehouseSelect" style="width:220px;max-width:100%">
-            ${warehouses.map(w=>`<option value="${w.id}" ${(draftSupplyWarehouseId||'MAIN')===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')}
+          <select class="search" id="supplyWarehouseSelect" style="width:220px;max-width:100%" ${hasFullWarehouseAccess()?'':'disabled'}>
+            ${hasFullWarehouseAccess()
+              ? warehouses.map(w=>`<option value="${w.id}" ${(draftSupplyWarehouseId||'MAIN')===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')
+              : `<option value="${myWarehouseId()}" selected>${escapeHtml(warehouseName(myWarehouseId()))}</option>`}
           </select>
         </div>
       </div>
@@ -4434,12 +4524,13 @@ function renderSuppliesCreatePanel(){
 }
 function renderSuppliesTableWrap(){
   const q = (document.getElementById('supplySearch').value || '').toLowerCase();
-  const filtered = supplies.filter(s=>{
+  const visibleSupplies = hasFullWarehouseAccess() ? supplies : supplies.filter(s=>(s.warehouseId||'MAIN')===myWarehouseId());
+  const filtered = visibleSupplies.filter(s=>{
     if(!q) return true;
     const info = supplyStatusInfo(s);
     return s.id.toLowerCase().includes(q) || (s.clientName||'').toLowerCase().includes(q) || info.label.toLowerCase().includes(q);
   });
-  document.getElementById('supplyCount').textContent = `${filtered.length} из ${supplies.length}`;
+  document.getElementById('supplyCount').textContent = `${filtered.length} из ${visibleSupplies.length}`;
 
   const wrap = document.getElementById('suppliesTableWrap');
   if(!supplies.length){
@@ -4741,13 +4832,14 @@ function createEmployee(){
   const login = document.getElementById('newEmpLogin').value.trim();
   const pin = document.getElementById('newEmpPin').value.trim() || '1234';
   const roleId = document.getElementById('newEmpRole').value;
+  const warehouseId = document.getElementById('newEmpWarehouse').value || null;
   if(!name || !login){ toast('Укажите имя и логин'); return; }
   const id = 'EMP-' + Date.now();
-  employees.push({id, name, login, pin, roleId, active:true});
+  employees.push({id, name, login, pin, roleId, active:true, warehouseId});
   showingNewEmployeeForm = false;
   toast('Сотрудник добавлен');
   renderEmployeesTab();
-  sb.from('employees').insert({id, name, login, pin, role_id: roleId, active:true}).then(({error})=>{
+  sb.from('employees').insert({id, name, login, pin, role_id: roleId, active:true, warehouse_id: warehouseId}).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить сотрудника в базе (возможно, такой логин уже есть)'); }
   });
 }
@@ -4786,15 +4878,17 @@ function saveEmployee(id){
   const login = document.getElementById('editEmpLogin-'+id).value.trim();
   const newPin = document.getElementById('editEmpPin-'+id).value.trim();
   const roleId = document.getElementById('editEmpRole-'+id).value;
+  const warehouseId = document.getElementById('editEmpWarehouse-'+id).value || null;
   if(!name || !login){ toast('Укажите имя и логин'); return; }
   emp.name = name;
   emp.login = login;
   emp.roleId = roleId;
+  emp.warehouseId = warehouseId;
   if(newPin) emp.pin = newPin;
   editingEmployeeId = null;
   toast('Данные сотрудника сохранены');
   renderEmployeesTab();
-  const update = {name, login, role_id: roleId};
+  const update = {name, login, role_id: roleId, warehouse_id: warehouseId};
   if(newPin) update.pin = newPin;
   sb.from('employees').update(update).eq('id', id).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить в базе (возможно, такой логин уже занят)'); }
@@ -4881,6 +4975,10 @@ function renderEmployeesTab(){
         <select class="search" id="newEmpRole" style="width:200px">
           ${roles.map(r=>`<option value="${r.id}">${r.name}</option>`).join('')}
         </select>
+        <select class="search" id="newEmpWarehouse" style="width:180px">
+          <option value="">Все склады</option>
+          ${warehouses.map(w=>`<option value="${w.id}">${escapeHtml(w.name)}</option>`).join('')}
+        </select>
       </div>
       <button class="btn btn-primary" onclick="createEmployee()">Создать</button>
       <button class="btn btn-ghost" onclick="closeNewEmployeeForm()">Отмена</button>
@@ -4890,19 +4988,23 @@ function renderEmployeesTab(){
   const listHtml = `
     <div class="panel">
       <table class="card-table">
-        <thead><tr><th>Сотрудник</th><th>Логин</th><th>Роль</th><th>Статус</th><th></th></tr></thead>
+        <thead><tr><th>Сотрудник</th><th>Логин</th><th>Роль</th><th>Склад</th><th>Статус</th><th></th></tr></thead>
         <tbody>
           ${employees.map(e=>{
             const role = roles.find(r=>r.id===e.roleId);
             if(editingEmployeeId === e.id){
               return `<tr>
-                <td colspan="5">
+                <td colspan="6">
                   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:8px 0">
                     <input class="search" id="editEmpName-${escapeHtml(e.id)}" value="${escapeHtml(e.name)}" placeholder="ФИО" style="flex:1;min-width:160px">
                     <input class="search" id="editEmpLogin-${escapeHtml(e.id)}" value="${escapeHtml(e.login)}" placeholder="Логин" style="width:140px">
                     <input class="search" id="editEmpPin-${escapeHtml(e.id)}" placeholder="Новый пароль (оставить пустым — не менять)" style="width:260px">
                     <select class="search" id="editEmpRole-${escapeHtml(e.id)}" style="width:190px">
                       ${roles.map(r=>`<option value="${r.id}" ${e.roleId===r.id?'selected':''}>${r.name}</option>`).join('')}
+                    </select>
+                    <select class="search" id="editEmpWarehouse-${escapeHtml(e.id)}" style="width:170px">
+                      <option value="" ${!e.warehouseId?'selected':''}>Все склады</option>
+                      ${warehouses.map(w=>`<option value="${w.id}" ${e.warehouseId===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')}
                     </select>
                     <button class="btn btn-primary" style="padding:6px 12px" onclick="saveEmployee('${escapeHtml(e.id)}')">Сохранить</button>
                     <button class="btn btn-ghost" style="padding:6px 12px" onclick="cancelEditEmployee()">Отмена</button>
@@ -4912,7 +5014,7 @@ function renderEmployeesTab(){
             }
             if(deletingEmployeeId === e.id){
               return `<tr>
-                <td colspan="5">
+                <td colspan="6">
                   <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:8px 0">
                     <span style="font-size:13px;color:var(--warn)">Удалить сотрудника «${escapeHtml(e.name)}» без возможности восстановить?</span>
                     <div style="white-space:nowrap">
@@ -4927,6 +5029,7 @@ function renderEmployeesTab(){
               <td data-label="Сотрудник">${e.name}</td>
               <td class="mono" data-label="Логин">${e.login}</td>
               <td data-label="Роль">${role?role.name:'—'}</td>
+              <td data-label="Склад">${e.warehouseId ? escapeHtml(warehouseName(e.warehouseId)) : '<span style="color:var(--ink-faint)">Все склады</span>'}</td>
               <td data-label="Статус">${e.active ? '<span class="status assembled">Активен</span>' : '<span class="status shipped">Отключён</span>'}</td>
               <td style="text-align:right;white-space:nowrap">
                 <button class="btn btn-ghost" style="padding:5px 10px" onclick="startEditEmployee('${escapeHtml(e.id)}')">Изменить</button>
@@ -4962,7 +5065,7 @@ async function loadRoles(){
 async function loadEmployees(){
   const { data, error } = await sb.from('employees').select('*').order('id').limit(50000);
   if(error){ console.error(error); return; }
-  employees = data.map(e=>({id:e.id, name:e.name, login:e.login, pin:e.pin, roleId:e.role_id, active:e.active}));
+  employees = data.map(e=>({id:e.id, name:e.name, login:e.login, pin:e.pin, roleId:e.role_id, active:e.active, warehouseId:e.warehouse_id||null}));
 }
 async function loadInventory(){
   const { data, error } = await sb.from('inventory').select('*').order('sku').limit(50000);
