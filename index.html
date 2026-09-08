@@ -880,6 +880,7 @@ function myWarehouseId(){ return currentUser ? (currentUser.warehouseId || null)
 function hasFullWarehouseAccess(){ return !myWarehouseId(); }
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
+let ddsSelected = [];
 let stocktakes = [];
 let activeStocktakeId = null;
 let stocktakeFinishing = false;
@@ -1903,8 +1904,10 @@ function saveWbWarehouseId(clientId){
   const c = clients.find(x=>x.id===clientId);
   const val = document.getElementById('wbWarehouseId-'+clientId).value.trim();
   c.wbWarehouseId = val;
-  toast('ID склада сохранён');
-  sb.from('clients').update({wb_warehouse_id: val}).eq('id', clientId).then(({error})=>{
+  c.wbAutoSync = false;
+  toast('ID склада сохранён. Автосинхронизация выключена — включите её отдельно, когда будете готовы');
+  renderClients();
+  sb.from('clients').update({wb_warehouse_id: val, wb_auto_sync: false}).eq('id', clientId).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить ID склада в базе'); }
   });
 }
@@ -1997,6 +2000,39 @@ async function addWbProductToInventory(clientId, nmId, size){
   syncInventoryRow(newItem.sku, newItem.client, newItem.size);
   toast(`«${p.name}»${size?` (${size})`:''} добавлен в остатки (0 шт, ячейка ${cell} — укажите количество)`);
   renderClients();
+}
+async function addWbProductsBatch(clientId, products){
+  const client = clients.find(c=>c.id===clientId);
+  if(!client || !products.length) return;
+  let added = 0;
+  for(const p of products){
+    const size = p.size || '';
+    const sku = 'WB-' + p.nmId;
+    if(findInventoryItem(sku, client.name, size)) continue;
+    const newItem = { sku, name:p.name, qty:0, client:client.name, size, vendorCode:p.vendorCode, barcode:p.barcode||'', dims:p.dims };
+    inventory.push(newItem);
+    await ensureCellAssigned(newItem);
+    syncInventoryRow(newItem.sku, newItem.client, newItem.size);
+    added++;
+  }
+  toast(`Добавлено в остатки: ${added} поз. (0 шт — укажите количество)`);
+  renderClients();
+}
+function addAllWbProducts(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  if(!client) return;
+  const toAdd = client.wbProducts.filter(p=>!findInventoryItem('WB-'+p.nmId, client.name, p.size||''));
+  if(!toAdd.length){ toast('Все карточки уже в остатках'); return; }
+  addWbProductsBatch(clientId, toAdd);
+}
+function addSelectedWbProducts(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  if(!client) return;
+  const checks = document.querySelectorAll(`.wb-product-check[data-client="${clientId}"]:checked`);
+  if(!checks.length){ toast('Отметьте галочками, что добавить'); return; }
+  const selectedKeys = Array.from(checks).map(el=>el.dataset.key);
+  const toAdd = client.wbProducts.filter(p=>selectedKeys.includes(p.nmId+'~~'+(p.size||'')));
+  addWbProductsBatch(clientId, toAdd);
 }
 
 function renderClients(){
@@ -2188,11 +2224,19 @@ function renderClientDetail(body){
       ${c.wbConnected ? `
         <div class="barcode-rule"></div>
         <button class="btn btn-accent" onclick="loadWbProducts('${c.id}')">↓ Загрузить карточки товаров</button>
-        <div style="margin-top:14px">
+        ${c.wbProducts.length ? `
+          <div style="display:flex;gap:8px;margin-top:14px;margin-bottom:4px">
+            <button class="btn btn-ghost" onclick="addAllWbProducts('${c.id}')">+ Добавить все в остатки</button>
+            <button class="btn btn-ghost" onclick="addSelectedWbProducts('${c.id}')">+ Добавить выбранные</button>
+          </div>
+        ` : ''}
+        <div style="margin-top:10px">
           ${c.wbProducts.length ? c.wbProducts.map(p=>{
             const already = findInventoryItem('WB-'+p.nmId, c.name, p.size||'');
+            const checkKey = p.nmId+'~~'+(p.size||'');
             return `
             <div class="pick-row" style="align-items:flex-start">
+              ${!already ? `<input type="checkbox" class="wb-product-check" data-client="${c.id}" data-key="${escapeHtml(checkKey)}" style="margin-top:4px">` : `<span style="width:16px;display:inline-block"></span>`}
               <div class="wb-thumb"><span>📦</span></div>
               <div>
                 <div class="sku-name">${p.name}${p.size?` · размер ${p.size}`:''}</div>
@@ -3766,13 +3810,27 @@ function renderDdsTable(){
     wrap.innerHTML = `<div class="panel empty">Операций пока нет</div>`;
     return;
   }
+  const visibleIds = rows.map(d=>d.id);
+  ddsSelected = ddsSelected.filter(id=>visibleIds.includes(id));
+  const allSelected = ddsSelected.length>0 && visibleIds.every(id=>ddsSelected.includes(id));
   wrap.innerHTML = `
+    ${ddsSelected.length ? `
+      <div class="panel" style="padding:10px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;background:var(--warn-bg)">
+        <span style="font-size:13px;font-weight:600">Выбрано: ${ddsSelected.length}</span>
+        <button class="btn btn-ghost" style="color:var(--warn)" onclick="deleteSelectedDdsEntries()">Удалить выбранные</button>
+        <button class="btn btn-ghost" onclick="clearDdsSelection()">Снять выделение</button>
+      </div>
+    ` : ''}
     <div class="panel">
       <table class="card-table">
-        <thead><tr><th>Дата</th><th>Тип</th><th>Категория</th><th>Клиент</th><th>Комментарий</th><th>Сумма</th><th></th></tr></thead>
+        <thead><tr>
+          <th style="width:30px"><input type="checkbox" ${allSelected?'checked':''} onchange="toggleAllDdsSelected(this.checked)"></th>
+          <th>Дата</th><th>Тип</th><th>Категория</th><th>Клиент</th><th>Комментарий</th><th>Сумма</th><th></th>
+        </tr></thead>
         <tbody>
           ${rows.map(d=>`
             <tr>
+              <td data-label="Выбрано"><input type="checkbox" ${ddsSelected.includes(d.id)?'checked':''} onchange="toggleDdsSelected('${escapeHtml(d.id)}', this.checked)"></td>
               <td class="mono" data-label="Дата" style="font-size:12px">${new Date(d.date).toLocaleDateString('ru-RU')}</td>
               <td data-label="Тип"><span class="status ${d.type==='income'?'assembled':'overdue'}">${d.type==='income'?'Приход':'Расход'}</span></td>
               <td data-label="Категория" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" title="Нажмите, чтобы изменить категорию" onclick="editDdsCategory('${escapeHtml(d.id)}')">${escapeHtml(d.category)}</td>
@@ -3786,6 +3844,35 @@ function renderDdsTable(){
       </table>
     </div>
   `;
+}
+function toggleDdsSelected(id, checked){
+  if(checked){ if(!ddsSelected.includes(id)) ddsSelected.push(id); }
+  else{ ddsSelected = ddsSelected.filter(x=>x!==id); }
+  renderDdsTable();
+}
+function toggleAllDdsSelected(checked){
+  const q = (document.getElementById('ddsSearch').value || '').toLowerCase();
+  const typeFilter = document.getElementById('ddsFilterType').value;
+  const visibleDds = hasFullWarehouseAccess() ? ddsEntries : ddsEntries.filter(d=>(d.warehouseId||'MAIN')===myWarehouseId());
+  const rows = visibleDds.filter(d=>
+    (!typeFilter || d.type===typeFilter) &&
+    (!q || d.category.toLowerCase().includes(q) || d.description.toLowerCase().includes(q) || (d.clientName||'').toLowerCase().includes(q))
+  );
+  ddsSelected = checked ? rows.map(d=>d.id) : [];
+  renderDdsTable();
+}
+function clearDdsSelection(){ ddsSelected = []; renderDdsTable(); }
+function deleteSelectedDdsEntries(){
+  if(!ddsSelected.length) return;
+  if(!confirm(`Удалить выбранные операции (${ddsSelected.length})? Отменить нельзя.`)) return;
+  const idsToDelete = [...ddsSelected];
+  ddsEntries = ddsEntries.filter(d=>!idsToDelete.includes(d.id));
+  ddsSelected = [];
+  toast(`Удалено операций: ${idsToDelete.length}`);
+  renderDdsTable();
+  sb.from('dds_entries').delete().in('id', idsToDelete).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить часть операций в базе'); }
+  });
 }
 document.getElementById('ddsType').addEventListener('change', updateDdsCategoryOptions);
 document.getElementById('ddsSearch').addEventListener('input', renderDdsTable);
