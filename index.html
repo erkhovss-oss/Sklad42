@@ -3115,10 +3115,23 @@ function wireFbsJumpScan(){
 function jumpToOrderByScan(code){
   const clientId = document.getElementById('fbsClientSelect').value;
   const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
-  const order = rows.find(o=> String(o.orderId)===code || o.barcode===code);
+  const orderIdStr = code;
+  let order = rows.find(o=> String(o.orderId)===code || o.barcode===code);
+  if(!order){
+    // точного совпадения нет — ищем номер заказа/штрихкод как часть отсканированной строки
+    // (на случай если WB зашивает в QR что-то длиннее, чем просто голый номер)
+    order = rows.find(o=> code.includes(String(o.orderId)) || (o.barcode && code.includes(o.barcode)));
+  }
+  if(!order){
+    // и наоборот — вдруг отсканированное значение короче и является частью номера заказа
+    const digitsOnly = code.replace(/\D/g, '');
+    if(digitsOnly.length >= 4){
+      order = rows.find(o=> String(o.orderId).includes(digitsOnly) || (o.barcode && o.barcode.includes(digitsOnly)));
+    }
+  }
   if(!order){
     playBeep('error');
-    toast(`Заказ с кодом «${code}» не найден среди тех, что на сборке`);
+    toast(`Не нашли заказ по коду «${code}» — пришлите этот текст, если повторится, разберём точный формат`);
     return;
   }
   playBeep('ok');
