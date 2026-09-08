@@ -3068,12 +3068,6 @@ function renderFbsBody(){
           <button class="btn btn-accent" onclick="closeFbsSupply()">📦 Закрыть поставку и отправить</button>
         </div>
       </div>
-      ${rows.length ? `
-        <div class="panel" style="padding:14px;margin-bottom:14px">
-          <div class="eyebrow" style="margin-bottom:6px">🔍 Найти заказ по QR ВБ / штрихкоду товара</div>
-          <input class="search mono" id="fbsJumpScanInput" placeholder="Отсканируйте — сразу откроется этот заказ для привязки КИЗ…" style="width:100%;max-width:460px" autocomplete="off">
-        </div>
-      ` : ''}
       ${missingKizCount ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;background:var(--warn-bg);color:var(--warn);font-size:13px;font-weight:600">⚠ У ${missingKizCount} заказ(ов) требуется КИЗ, но он ещё не привязан — используйте «Режим сборки», прежде чем закрывать поставку</div>` : ''}
       ${clientId ? `<div id="fbsTrbxPanel"></div>` : `<p style="font-size:12px;color:var(--ink-faint);margin-bottom:14px">Выберите конкретного клиента, чтобы работать с коробами поставки (короба WB привязаны к одному продавцу).</p>`}
       <div class="panel">${rows.map(o=>`
@@ -3090,7 +3084,6 @@ function renderFbsBody(){
       if(fbsTrbxLoadedFor !== clientId) loadFbsTrbxes(clientId);
       else renderFbsTrbxPanel(clientId);
     }
-    wireFbsJumpScan();
   } else {
     body.innerHTML = `<div class="panel">${rows.map(o=>`
       <div class="pick-row">
@@ -3099,45 +3092,6 @@ function renderFbsBody(){
       </div>
     `).join('')}</div>`;
   }
-}
-function wireFbsJumpScan(){
-  const input = document.getElementById('fbsJumpScanInput');
-  if(!input) return;
-  input.focus();
-  input.addEventListener('keydown', (e)=>{
-    if(e.key!=='Enter') return;
-    const code = input.value.trim();
-    input.value = '';
-    if(!code) return;
-    jumpToOrderByScan(code);
-  });
-}
-function jumpToOrderByScan(code){
-  const clientId = document.getElementById('fbsClientSelect').value;
-  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
-  const orderIdStr = code;
-  let order = rows.find(o=> String(o.orderId)===code || o.barcode===code);
-  if(!order){
-    // точного совпадения нет — ищем номер заказа/штрихкод как часть отсканированной строки
-    // (на случай если WB зашивает в QR что-то длиннее, чем просто голый номер)
-    order = rows.find(o=> code.includes(String(o.orderId)) || (o.barcode && code.includes(o.barcode)));
-  }
-  if(!order){
-    // и наоборот — вдруг отсканированное значение короче и является частью номера заказа
-    const digitsOnly = code.replace(/\D/g, '');
-    if(digitsOnly.length >= 4){
-      order = rows.find(o=> String(o.orderId).includes(digitsOnly) || (o.barcode && o.barcode.includes(digitsOnly)));
-    }
-  }
-  if(!order){
-    playBeep('error');
-    toast(`Не нашли заказ по коду «${code}» — пришлите этот текст, если повторится, разберём точный формат`);
-    return;
-  }
-  playBeep('ok');
-  assemblyModeQueue = [order];
-  assemblyModeIndex = 0;
-  renderAssemblyModeStep();
 }
 function startAssemblyMode(){
   const clientId = document.getElementById('fbsClientSelect').value;
@@ -3647,7 +3601,6 @@ function printFbsPickList(){
   if(!win){ toast('Браузер заблокировал открытие окна'); return; }
   win.document.write(`
     <html><head><title>Лист сборки</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
     <style>
       body{font-family:Arial,sans-serif;padding:14px;font-size:11px;color:#111}
       h1{font-size:16px;margin-bottom:14px}
@@ -3656,13 +3609,12 @@ function printFbsPickList(){
       th{background:#f0f0f0}
       td.mono, th.mono{font-family:'Courier New',monospace}
       .barcode-tail{font-weight:bold;font-size:13px}
-      .qr-cell{width:56px;text-align:center;padding:3px}
       @media print{ body{padding:6px} }
     </style>
     </head><body>
       <h1>Лист сборки${client?` · ${escapeHtml(client.name)}`:' (все клиенты)'} — ${items.length} поз.</h1>
       <table>
-        <thead><tr><th style="width:34px">№</th><th>Наименование</th><th>Артикул</th><th>ШК</th><th>Номер заказа</th><th class="qr-cell">Наш QR</th></tr></thead>
+        <thead><tr><th style="width:34px">№</th><th>Наименование</th><th>Артикул</th><th>ШК</th><th>Номер заказа</th></tr></thead>
         <tbody>
           ${items.map((it,idx)=>{
             const bc = it.barcode || '';
@@ -3678,15 +3630,11 @@ function printFbsPickList(){
               <td class="mono">${escapeHtml(it.article||'')}</td>
               <td class="mono">${escapeHtml(bcHead)}<span class="barcode-tail">${escapeHtml(bcTail)}</span></td>
               <td class="mono">${escapeHtml(oidHead)}<span class="barcode-tail">${escapeHtml(oidTail)}</span></td>
-              <td class="qr-cell"><div id="pl-qr-${it.orderId}"></div></td>
             </tr>
           `;}).join('')}
         </tbody>
       </table>
-      <script>
-        ${items.map(it=>`new QRCode(document.getElementById('pl-qr-${it.orderId}'), {text: '${it.orderId}', width:46, height:46});`).join('\n')}
-        window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };
-      <\/script>
+      <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
     </body></html>
   `);
   win.document.close();
@@ -3696,6 +3644,15 @@ function printAllFbsStickers(){
   const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
     .sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
   if(!rows.length){ toast('Нет заказов на сборке'); return; }
+
+  const groups = {};
+  rows.forEach(o=>{
+    const key = (o.barcode || o.article || String(o.orderId));
+    if(!groups[key]) groups[key] = { name:o.name, article:o.article, size:o.size, barcode:o.barcode, orders:[] };
+    groups[key].orders.push(o);
+  });
+  const groupList = Object.values(groups).sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
+
   const byClient = {};
   rows.forEach(o=>{ (byClient[o.clientId] = byClient[o.clientId] || []).push(o); });
   toast(`Запрашиваем этикетки у WB для ${rows.length} заказ(ов)…`);
@@ -3704,56 +3661,55 @@ function printAllFbsStickers(){
       .then(({data, error})=>({ orders, data, error }))
   );
   Promise.all(calls).then(results=>{
-    const allStickers = [];
+    const stickerByOrderId = {};
     let hadError = false;
     results.forEach(({orders, data, error})=>{
       if(error || (data && data.error)){ hadError = true; console.error(error||(data&&data.error)); return; }
       const stickers = data.stickers || [];
-      orders.forEach((o, idx)=>{
-        const s = stickers[idx];
-        if(s && s.file) allStickers.push({orderId:o.orderId, file:s.file, name:o.name, article:o.article, size:o.size, nmId:o.nmId, barcode:o.barcode});
-      });
+      orders.forEach((o, idx)=>{ if(stickers[idx] && stickers[idx].file) stickerByOrderId[o.orderId] = stickers[idx].file; });
     });
-    if(!allStickers.length){ toast('Не удалось получить ни одной этикетки' + (hadError?' — проверьте ключи WB клиентов':'')); return; }
-    allStickers.sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
+    const orderedStickers = [];
+    groupList.forEach(g=> g.orders.forEach(o=>{ if(stickerByOrderId[o.orderId]) orderedStickers.push(stickerByOrderId[o.orderId]); }));
+    if(!orderedStickers.length){ toast('Не удалось получить ни одной этикетки' + (hadError?' — проверьте ключи WB клиентов':'')); return; }
+
     const win = window.open('', '_blank');
     if(!win){ toast('Браузер заблокировал открытие окна'); return; }
     win.document.write(`
-      <html><head><title>Этикетки заказов на сборке</title>
+      <html><head><title>Этикетки на сборку</title>
       <style>
         @page{ size: 58mm 90mm; margin: 0; }
         *{ box-sizing:border-box; }
         body{margin:0;padding:0;font-family:Arial,sans-serif}
-        .label{width:58mm;padding:3mm;display:flex;flex-direction:column;align-items:center;page-break-after:always}
-        .label:last-child{page-break-after:avoid}
+        .info-label{width:58mm;min-height:40mm;padding:3mm;page-break-after:always}
         .qty{font-size:14pt;font-weight:bold;margin-bottom:2mm}
-        .name{font-size:9pt;font-weight:bold;text-align:center;margin-bottom:2mm;line-height:1.2}
-        table{width:100%;font-size:7pt;margin-bottom:3mm;border-collapse:collapse}
-        td{padding:0.5mm 0}
+        .name{font-size:10pt;font-weight:bold;margin-bottom:2mm;line-height:1.3}
+        table{width:100%;font-size:8pt;border-collapse:collapse}
+        td{padding:0.7mm 0}
         td.label-cell{color:#666;white-space:nowrap;padding-right:2mm}
         td.value-cell{font-weight:bold;word-break:break-all}
-        .sticker-wrap{width:100%}
-        .sticker-wrap img{width:100%}
+        .qr-page{width:58mm;height:40mm;display:flex;align-items:center;justify-content:center;overflow:hidden;page-break-after:always}
+        .qr-page:last-child{page-break-after:avoid}
+        .qr-page img{width:100%;height:100%;object-fit:contain}
       </style>
       </head><body>
-        ${allStickers.map(s=>`
-          <div class="label">
-            <div class="qty">1 шт.</div>
-            <div class="name">${escapeHtml(s.name||s.article)}</div>
+        ${groupList.map(g=>`
+          <div class="info-label">
+            <div class="qty">${g.orders.length} шт.</div>
+            <div class="name">${escapeHtml(g.name||g.article)}</div>
             <table>
-              ${s.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(s.size)}</td></tr>`:''}
-              <tr><td class="label-cell">Артикул WB</td><td class="value-cell">${s.nmId||'—'}</td></tr>
-              <tr><td class="label-cell">Баркод</td><td class="value-cell">${s.barcode||'—'}</td></tr>
-              <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(s.article)}</td></tr>
+              ${g.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(g.size)}</td></tr>`:''}
+              <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(g.article||'')}</td></tr>
+              <tr><td class="label-cell">ШК</td><td class="value-cell">${g.barcode||'—'}</td></tr>
+              <tr><td class="label-cell">Заказов</td><td class="value-cell">${g.orders.length}</td></tr>
             </table>
-            <div class="sticker-wrap"><img src="data:image/svg+xml;base64,${s.file}"></div>
           </div>
         `).join('')}
+        ${orderedStickers.map(file=>`<div class="qr-page"><img src="data:image/svg+xml;base64,${file}"></div>`).join('')}
         <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
       </body></html>
     `);
     win.document.close();
-    toast(`Готово: ${allStickers.length} этикеток${hadError?' (у части клиентов была ошибка получения)':''}`);
+    toast(`Готово: ${groupList.length} карточек товара, ${orderedStickers.length} QR-стикеров${hadError?' (у части клиентов была ошибка получения)':''}`);
   });
 }
 function printFbsSticker(orderId){
@@ -3772,28 +3728,28 @@ function printFbsSticker(orderId){
         @page{ size: 58mm 90mm; margin: 0; }
         *{ box-sizing:border-box; }
         body{margin:0;padding:0;font-family:Arial,sans-serif}
-        .label{width:58mm;padding:3mm;display:flex;flex-direction:column;align-items:center}
+        .info-label{width:58mm;min-height:40mm;padding:3mm;page-break-after:always}
         .qty{font-size:14pt;font-weight:bold;margin-bottom:2mm}
-        .name{font-size:9pt;font-weight:bold;text-align:center;margin-bottom:2mm;line-height:1.2}
-        table{width:100%;font-size:7pt;margin-bottom:3mm;border-collapse:collapse}
-        td{padding:0.5mm 0}
+        .name{font-size:10pt;font-weight:bold;margin-bottom:2mm;line-height:1.3}
+        table{width:100%;font-size:8pt;border-collapse:collapse}
+        td{padding:0.7mm 0}
         td.label-cell{color:#666;white-space:nowrap;padding-right:2mm}
         td.value-cell{font-weight:bold;word-break:break-all}
-        .sticker-wrap{width:100%}
-        .sticker-wrap img{width:100%}
+        .qr-page{width:58mm;height:40mm;display:flex;align-items:center;justify-content:center;overflow:hidden;page-break-after:avoid}
+        .qr-page img{width:100%;height:100%;object-fit:contain}
       </style>
       </head><body>
-        <div class="label">
+        <div class="info-label">
           <div class="qty">1 шт.</div>
           <div class="name">${escapeHtml(order.name||order.article)}</div>
           <table>
             ${order.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(order.size)}</td></tr>`:''}
-            <tr><td class="label-cell">Артикул WB</td><td class="value-cell">${order.nmId||'—'}</td></tr>
-            <tr><td class="label-cell">Баркод</td><td class="value-cell">${order.barcode||'—'}</td></tr>
-            <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(order.article)}</td></tr>
+            <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(order.article||'')}</td></tr>
+            <tr><td class="label-cell">ШК</td><td class="value-cell">${order.barcode||'—'}</td></tr>
+            <tr><td class="label-cell">Заказов</td><td class="value-cell">1</td></tr>
           </table>
-          <div class="sticker-wrap"><img src="data:image/svg+xml;base64,${file}" onload="setTimeout(()=>window.print(), 300)"></div>
         </div>
+        <div class="qr-page"><img src="data:image/svg+xml;base64,${file}" onload="setTimeout(()=>window.print(), 300)"></div>
       </body></html>
     `);
     win.document.close();
