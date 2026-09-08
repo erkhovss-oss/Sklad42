@@ -3554,10 +3554,15 @@ function printAllFbsStickers(){
     win.document.write(`
       <html><head><title>Этикетки заказов на сборке</title>
       <style>
-        body{margin:0;padding:10px}
-        .sticker-page{page-break-after:always;display:flex;justify-content:center;padding:10px}
+        @page{ size: 58mm 40mm; margin: 0; }
+        *{ box-sizing:border-box; }
+        body{margin:0;padding:0}
+        .sticker-page{
+          page-break-after:always; width:58mm; height:40mm;
+          display:flex; align-items:center; justify-content:center; overflow:hidden;
+        }
         .sticker-page:last-child{page-break-after:avoid}
-        img{max-width:100%}
+        .sticker-page img{width:100%; height:100%; object-fit:contain}
       </style>
       </head><body>
         ${allStickers.map(s=>`<div class="sticker-page"><img src="data:image/svg+xml;base64,${s.file}"></div>`).join('')}
@@ -3580,7 +3585,12 @@ function printFbsSticker(orderId){
     if(!win){ toast('Браузер заблокировал открытие окна'); return; }
     win.document.write(`
       <html><head><title>Этикетка заказа №${orderId}</title>
-      <style>body{margin:0;display:flex;justify-content:center;padding:20px} img{max-width:100%}</style>
+      <style>
+        @page{ size: 58mm 40mm; margin: 0; }
+        *{ box-sizing:border-box; }
+        body{margin:0;padding:0;width:58mm;height:40mm;display:flex;align-items:center;justify-content:center;overflow:hidden}
+        img{width:100%;height:100%;object-fit:contain}
+      </style>
       </head><body>
         <img src="data:image/svg+xml;base64,${file}" onload="setTimeout(()=>window.print(), 300)">
       </body></html>
