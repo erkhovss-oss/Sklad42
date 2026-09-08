@@ -880,6 +880,10 @@ function myWarehouseId(){ return currentUser ? (currentUser.warehouseId || null)
 function hasFullWarehouseAccess(){ return !myWarehouseId(); }
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
+let assemblyModeQueue = [];
+let assemblyModeIndex = 0;
+let fbsTrbxes = [];
+let fbsTrbxLoadedFor = '';
 let fbsSelectedOrders = [];
 let ddsSelected = [];
 let stocktakes = [];
@@ -3049,15 +3053,26 @@ function renderFbsBody(){
     body.innerHTML = `
       <div class="panel" style="padding:14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length}. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
-        <button class="btn btn-accent" onclick="closeFbsSupply()">📦 Закрыть поставку и отправить</button>
+        <div style="display:flex;gap:8px">
+          ${rows.length ? `<button class="btn btn-primary" onclick="startAssemblyMode()">🚀 Режим сборки</button>` : ''}
+          <button class="btn btn-accent" onclick="closeFbsSupply()">📦 Закрыть поставку и отправить</button>
+        </div>
       </div>
+      ${clientId ? `<div id="fbsTrbxPanel"></div>` : `<p style="font-size:12px;color:var(--ink-faint);margin-bottom:14px">Выберите конкретного клиента, чтобы работать с коробами поставки (короба WB привязаны к одному продавцу).</p>`}
       <div class="panel">${rows.map(o=>`
         <div class="pick-row">
           <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${renderKizStatusLabel(o)}</div></div>
-          <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
+          <div style="display:flex;gap:6px;align-items:center">
+            ${clientId ? renderTrbxAssignControl(o) : ''}
+            <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
+          </div>
         </div>
       `).join('')}</div>
     `;
+    if(clientId){
+      if(fbsTrbxLoadedFor !== clientId) loadFbsTrbxes(clientId);
+      else renderFbsTrbxPanel(clientId);
+    }
   } else {
     body.innerHTML = `<div class="panel">${rows.map(o=>`
       <div class="pick-row">
@@ -3066,6 +3081,127 @@ function renderFbsBody(){
       </div>
     `).join('')}</div>`;
   }
+}
+function startAssemblyMode(){
+  const clientId = document.getElementById('fbsClientSelect').value;
+  assemblyModeQueue = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
+  if(!assemblyModeQueue.length){ toast('Нет заказов на сборке'); return; }
+  assemblyModeIndex = 0;
+  renderAssemblyModeStep();
+}
+function renderAssemblyModeStep(){
+  const body = document.getElementById('fbsBody');
+  if(assemblyModeIndex >= assemblyModeQueue.length){
+    body.innerHTML = `
+      <div class="panel" style="padding:30px;text-align:center">
+        <h2 style="margin-bottom:14px">Все заказы обработаны</h2>
+        <button class="btn btn-accent" onclick="exitAssemblyMode()">Готово</button>
+      </div>
+    `;
+    return;
+  }
+  const order = assemblyModeQueue[assemblyModeIndex];
+  body.innerHTML = `
+    <div class="panel" style="padding:24px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+        <div>
+          <div class="eyebrow">Режим сборки · заказ ${assemblyModeIndex+1} из ${assemblyModeQueue.length}</div>
+          <h2 style="margin:6px 0 0 0">${order.name||order.article}${order.size?` · ${order.size}`:''}</h2>
+        </div>
+        <button class="btn btn-ghost" onclick="exitAssemblyMode()">✕ Завершить режим</button>
+      </div>
+      <table style="margin-bottom:20px">
+        <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Артикул</td><td class="mono">${escapeHtml(order.article)}</td></tr>
+        <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Штрихкод</td><td class="mono">${order.barcode||'—'}</td></tr>
+        <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Размер</td><td>${order.size||'—'}</td></tr>
+        <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Клиент</td><td>${escapeHtml(order.clientName)}</td></tr>
+        <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Заказ №</td><td class="mono">${order.orderId}</td></tr>
+      </table>
+      <div class="eyebrow" style="margin-bottom:6px">Штрихкод товара</div>
+      <input class="search" id="wizardBarcodeInput" placeholder="Отсканируйте штрихкод, чтобы подтвердить товар…" style="width:100%;max-width:420px;margin-bottom:14px" autocomplete="off">
+      ${order.requiresKiz ? `
+        <div class="eyebrow" style="margin-bottom:6px">КИЗ (Честный Знак)</div>
+        <input class="search mono" id="wizardKizInput" placeholder="Отсканируйте КИЗ этой единицы…" style="width:100%;max-width:420px;margin-bottom:6px" autocomplete="off" disabled>
+        <div id="wizardKizStatus" style="font-size:12px;margin-bottom:14px">${renderKizStatusLabel(order)}</div>
+      ` : ''}
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-accent" onclick="wizardNextOrder()">Следующий заказ →</button>
+        <button class="btn btn-ghost" onclick="wizardSkipOrder()">Пропустить</button>
+      </div>
+    </div>
+  `;
+  const bcInput = document.getElementById('wizardBarcodeInput');
+  bcInput.focus();
+  bcInput.addEventListener('keydown', (e)=>{
+    if(e.key!=='Enter') return;
+    const code = bcInput.value.trim();
+    bcInput.value='';
+    if(!code) return;
+    if(order.barcode && code!==order.barcode){
+      playBeep('error');
+      toast('Штрихкод не совпадает с товаром этого заказа');
+      return;
+    }
+    playBeep('ok');
+    if(order.requiresKiz){
+      const kizInput = document.getElementById('wizardKizInput');
+      kizInput.disabled = false;
+      forceEnglishInput(kizInput);
+      kizInput.focus();
+      toast('Теперь отсканируйте КИЗ этой единицы');
+    } else {
+      toast('Штрихкод подтверждён');
+    }
+  });
+  if(order.requiresKiz){
+    const kizInput = document.getElementById('wizardKizInput');
+    kizInput.addEventListener('keydown', (e2)=>{
+      if(e2.key!=='Enter') return;
+      const kizCode = kizInput.value.trim();
+      kizInput.value='';
+      if(!kizCode) return;
+      if(kizCode.length < MIN_KIZ_LENGTH){
+        playBeep('error');
+        toast(`Код слишком короткий (${kizCode.length} симв.) — отсканируйте ещё раз`);
+        return;
+      }
+      const dup = kizScans.find(k=>k.kizCode===kizCode);
+      if(dup){ playBeep('error'); toast(`Этот КИЗ уже был использован ранее (${dup.name})`); return; }
+      wizardAttachKiz(order, kizCode);
+    });
+  }
+}
+function wizardAttachKiz(order, kizCode){
+  toast('Отправляем КИЗ на WB…');
+  sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'attach_kiz', orderId: order.orderId, kizCode } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    order.kizCode = kizCode;
+    order.kizStatus = data.kizStatus;
+    kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||'', clientName:order.clientName, time:new Date().toISOString()});
+    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName}).then(({error})=>{ if(error) console.error(error); });
+    sb.from('wb_orders').update({kiz_code:kizCode, kiz_status:data.kizStatus}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
+    if(data.kizStatus==='attached'){ playBeep('ok'); toast('✅ КИЗ подтверждён WB'); }
+    else { playBeep('warn'); toast('⚠ WB не подтвердил КИЗ — ' + (data.warning||'проверьте вручную')); }
+    const statusDiv = document.getElementById('wizardKizStatus');
+    if(statusDiv) statusDiv.innerHTML = renderKizStatusLabel(order);
+  });
+}
+function wizardNextOrder(){
+  const order = assemblyModeQueue[assemblyModeIndex];
+  if(order && order.requiresKiz && order.kizStatus!=='attached'){
+    if(!confirm('КИЗ ещё не подтверждён для этого заказа — всё равно перейти дальше?')) return;
+  }
+  assemblyModeIndex++;
+  renderAssemblyModeStep();
+}
+function wizardSkipOrder(){
+  assemblyModeIndex++;
+  renderAssemblyModeStep();
+}
+function exitAssemblyMode(){
+  assemblyModeQueue = [];
+  assemblyModeIndex = 0;
+  renderFbsBody();
 }
 function startAssembleOrder(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
@@ -3087,16 +3223,13 @@ function renderAssembleOrderForm(order, requiresKiz){
   const body = document.getElementById('fbsBody');
   body.innerHTML = `
     <div class="panel" style="padding:20px">
-      <div class="eyebrow" style="margin-bottom:10px">Сборка заказа №${order.orderId}</div>
+      <div class="eyebrow" style="margin-bottom:10px">Отправка на сборку — заказ №${order.orderId}</div>
       <div style="display:flex;gap:14px;align-items:center;margin-bottom:16px">
         <div><div class="sku-name" style="font-size:16px">${order.name||order.article}${order.size?` · ${order.size}`:''}</div><div class="sku-code mono">${order.article} · ШК ${order.barcode||'—'}</div></div>
       </div>
       <div class="eyebrow" style="margin-bottom:6px">Штрихкод товара</div>
       <input class="search" id="fbsScanBarcode" placeholder="Отсканируйте штрихкод, чтобы подтвердить нужный товар…" style="width:100%;max-width:420px" autocomplete="off">
-      ${requiresKiz ? `
-        <div class="eyebrow" style="margin:14px 0 6px 0">КИЗ (Честный Знак) — подтверждено у WB, что нужен для этого заказа</div>
-        <input class="search mono" id="fbsScanKiz" placeholder="Отсканируйте КИЗ этой конкретной единицы…" style="width:100%;max-width:420px" autocomplete="off" disabled>
-      ` : ''}
+      ${requiresKiz ? `<p style="font-size:12px;color:var(--ink-faint);margin-top:10px">Этому заказу нужен КИЗ — привязать его можно будет позже, в «Режиме сборки» на вкладке «На сборке».</p>` : ''}
       <p style="font-size:12px;color:var(--ink-faint);margin-top:10px">Товар спишется с остатков этого клиента, как только заказ уйдёт на сборку.</p>
       <button class="btn btn-ghost" style="margin-top:10px" onclick="cancelAssembleOrder()">Отмена</button>
     </div>
@@ -3114,30 +3247,7 @@ function renderAssembleOrderForm(order, requiresKiz){
       return;
     }
     playBeep('ok');
-    if(requiresKiz){
-      const kizInput = document.getElementById('fbsScanKiz');
-      kizInput.disabled = false;
-      forceEnglishInput(kizInput);
-      kizInput.focus();
-      toast('Теперь отсканируйте КИЗ этой единицы');
-      kizInput.addEventListener('keydown', (e2)=>{
-        if(e2.key!=='Enter') return;
-        const kizCode = kizInput.value.trim();
-        kizInput.value='';
-        if(!kizCode) return;
-        if(kizCode.length < MIN_KIZ_LENGTH){
-          playBeep('error');
-          toast(`Код слишком короткий (${kizCode.length} симв.) — похоже на неполное сканирование, отсканируйте ещё раз`);
-          return;
-        }
-        const dup = kizScans.find(k=>k.kizCode===kizCode);
-        if(dup){ playBeep('error'); toast(`Этот КИЗ уже был использован ранее (${dup.name})`); return; }
-        playBeep('ok');
-        finishAssembleOrder(order, kizCode);
-      });
-    } else {
-      finishAssembleOrder(order, null);
-    }
+    finishAssembleOrder(order, null);
   });
 }
 function cancelAssembleOrder(){
@@ -3207,14 +3317,18 @@ async function bulkAssembleSelectedFbsOrders(){
   }
   toast(`Собираем ${withoutKiz.length} заказ(ов)…`);
   for(const order of withoutKiz){
-    finishAssembleOrder(order, null);
+    finishAssembleOrder(order, null, true);
     await new Promise(resolve=>setTimeout(resolve, 400));
   }
   fbsSelectedOrders = withKiz.map(o=>o.orderId);
-  if(withKiz.length) toast(`Готово. Осталось собрать с КИЗ вручную: ${withKiz.length}`);
-  renderFbsBody();
+  if(withKiz.length){
+    toast(`Готово. Осталось собрать с КИЗ вручную: ${withKiz.length}`);
+    renderFbsBody();
+  } else {
+    setFbsView('confirm');
+  }
 }
-function finishAssembleOrder(order, kizCode){
+function finishAssembleOrder(order, kizCode, skipViewSwitch){
   const client = clients.find(c=>c.id===order.clientId);
   const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
   if(!inv || inv.qty < 1){
@@ -3260,7 +3374,9 @@ function finishAssembleOrder(order, kizCode){
     sb.from('wb_orders').update({supplier_status:'confirm', wb_supply_id:data.wbSupplyId, kiz_code:kizCode, kiz_status:data.kizStatus||null}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
     if(data.kizStatus === 'attached') toast(`Заказ №${order.orderId}: КИЗ прикреплён и подтверждён у WB ✅`);
     else if(data.kizStatus === 'verify_failed') toast(`Заказ №${order.orderId}: собран, но КИЗ WB не подтвердил — ${data.warning||'проверьте вручную'} ⚠`);
-    renderFbsBody();
+    if(skipViewSwitch) renderFbsBody();
+    else if(fbsView!=='confirm') setFbsView('confirm');
+    else renderFbsBody();
   });
 }
 function cancelFbsOrder(orderId){
@@ -3276,6 +3392,113 @@ function cancelFbsOrder(orderId){
     renderFbsBody();
   });
 }
+function loadFbsTrbxes(clientId){
+  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'list_trbx' } }).then(({data, error})=>{
+    if(error || (data && data.error)){ console.error(error||(data&&data.error)); return; }
+    fbsTrbxes = data.trbxes || [];
+    fbsTrbxLoadedFor = clientId;
+    renderFbsBody();
+  });
+}
+function renderFbsTrbxPanel(clientId){
+  const wrap = document.getElementById('fbsTrbxPanel');
+  if(!wrap) return;
+  wrap.innerHTML = `
+    <div class="panel" style="padding:16px;margin-bottom:14px">
+      <div class="eyebrow" style="margin-bottom:10px">Короба поставки (${fbsTrbxes.length})</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:${fbsTrbxes.length?'14px':'0'}">
+        <input class="search mono" id="fbsTrbxAmount" type="number" min="1" value="1" style="width:90px">
+        <button class="btn btn-ghost" onclick="createFbsTrbx('${clientId}')">+ Создать короба</button>
+        ${fbsTrbxes.length ? `<button class="btn btn-accent" onclick="downloadFbsTrbxLabels('${clientId}')">📦 Скачать этикетки коробов</button>` : ''}
+      </div>
+      ${fbsTrbxes.length ? `
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${fbsTrbxes.map(t=>`<span class="status planned" style="cursor:default">Короб ${String(t.id).replace('WB-TRBX-','№')} · ${(t.orders||[]).length} шт</span>`).join('')}
+        </div>
+      ` : `<p style="font-size:12px;color:var(--ink-faint)">Коробов ещё нет — создайте хотя бы один, чтобы распределять по ним заказы.</p>`}
+    </div>
+  `;
+}
+function createFbsTrbx(clientId){
+  const amount = Math.max(1, parseInt(document.getElementById('fbsTrbxAmount').value)||1);
+  toast('Создаём короба у WB…');
+  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'create_trbx', amount } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    toast(`Создано коробов: ${(data.trbxIds||[]).length}`);
+    loadFbsTrbxes(clientId);
+  });
+}
+function renderTrbxAssignControl(o){
+  if(!fbsTrbxes.length) return '';
+  const assigned = fbsTrbxes.find(t=>(t.orders||[]).includes(o.orderId));
+  if(assigned){
+    return `<span class="mono" style="font-size:11px;color:var(--ink-faint)">короб ${String(assigned.id).replace('WB-TRBX-','№')}</span><button class="btn btn-ghost" style="padding:3px 8px" onclick="removeFbsTrbxOrder('${o.clientId}','${assigned.id}',${o.orderId})">✕</button>`;
+  }
+  return `
+    <select class="search" style="width:130px;padding:4px 6px;font-size:12px" onchange="if(this.value) assignFbsTrbxOrder('${o.clientId}', this.value, ${o.orderId})">
+      <option value="">в короб…</option>
+      ${fbsTrbxes.map(t=>`<option value="${t.id}">Короб ${String(t.id).replace('WB-TRBX-','№')}</option>`).join('')}
+    </select>
+  `;
+}
+function assignFbsTrbxOrder(clientId, trbxId, orderId){
+  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'assign_trbx_order', trbxId, orderId } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    toast('Заказ привязан к коробу');
+    loadFbsTrbxes(clientId);
+  });
+}
+function removeFbsTrbxOrder(clientId, trbxId, orderId){
+  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'remove_trbx_order', trbxId, orderId } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    toast('Заказ убран из короба');
+    loadFbsTrbxes(clientId);
+  });
+}
+function downloadFbsTrbxLabels(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  if(!fbsTrbxes.length){ toast('Сначала создайте короба'); return; }
+  toast('Запрашиваем стикеры коробов у WB…');
+  const trbxIds = fbsTrbxes.map(t=>t.id);
+  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'get_trbx_stickers', trbxIds, stickerType:'svg' } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    const stickers = data.stickers || [];
+    const win = window.open('', '_blank');
+    if(!win){ toast('Браузер заблокировал открытие окна'); return; }
+    const pages = fbsTrbxes.map((t,idx)=>{
+      const sticker = stickers.find(s=>(s.trbxId||s.id)===t.id) || stickers[idx];
+      const ordersInBox = (t.orders||[]).map(oid=>fbsOrders.find(o=>o.orderId===oid)).filter(Boolean);
+      const contentRows = ordersInBox.map(o=>`<tr><td>${escapeHtml(o.article)}</td><td>${escapeHtml(o.name||'')}</td><td>${escapeHtml(o.size||'—')}</td><td>${escapeHtml(o.barcode||'—')}</td></tr>`).join('');
+      return `
+        <div class="trbx-page">
+          <h2>Короб ${String(t.id).replace('WB-TRBX-','№')}</h2>
+          <div style="color:#666;font-size:12px;margin-bottom:10px">${escapeHtml(client?client.name:'')}</div>
+          <table>
+            <thead><tr><th>Артикул</th><th>Название</th><th>Размер</th><th>Штрихкод</th></tr></thead>
+            <tbody>${contentRows || '<tr><td colspan="4">нет привязанных заказов</td></tr>'}</tbody>
+          </table>
+          ${sticker && sticker.file ? `<div class="qr-wrap"><img src="data:image/svg+xml;base64,${sticker.file}"></div>` : `<p style="color:#c00">QR-стикер не получен от WB</p>`}
+        </div>
+      `;
+    }).join('');
+    win.document.write(`
+      <html><head><title>Этикетки коробов</title>
+      <style>
+        body{font-family:Arial,sans-serif;padding:10px;color:#111}
+        .trbx-page{page-break-after:always;padding:16px;border:1px solid #ccc;border-radius:8px;margin-bottom:16px;max-width:420px}
+        .trbx-page:last-child{page-break-after:avoid}
+        h2{margin:0 0 4px 0;font-size:18px}
+        table{width:100%;border-collapse:collapse;margin-bottom:14px}
+        th,td{border:1px solid #333;padding:4px 6px;font-size:11px;text-align:left}
+        .qr-wrap{display:flex;justify-content:center}
+        .qr-wrap img{width:220px}
+      </style></head><body>${pages}
+      <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
+      </body></html>
+    `);
+    win.document.close();
+  });
+}
 function closeFbsSupply(){
   const clientId = document.getElementById('fbsClientSelect').value;
   const client = clients.find(c=>c.id===clientId);
@@ -3284,6 +3507,8 @@ function closeFbsSupply(){
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
     fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm').forEach(o=>{ o.supplierStatus='complete'; });
     sb.from('wb_orders').update({supplier_status:'complete'}).eq('client_id', clientId).eq('supplier_status','confirm').then(()=>{});
+    fbsTrbxes = [];
+    fbsTrbxLoadedFor = '';
     toast('Поставка закрыта и передана на склад WB');
     setFbsView('complete');
   });
