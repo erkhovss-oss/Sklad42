@@ -3593,71 +3593,51 @@ function closeFbsSupply(){
 }
 function printFbsPickList(){
   const clientId = document.getElementById('fbsClientSelect').value;
-  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
+  const items = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
     .sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
-  if(!rows.length){ toast('Нет заказов на сборке'); return; }
-  const byClient = {};
-  rows.forEach(o=>{ (byClient[o.clientId] = byClient[o.clientId] || []).push(o); });
-  toast('Формируем лист сборки…');
-  const calls = Object.entries(byClient).map(([cid, orders])=>
-    sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action:'get_sticker', orderIds: orders.map(o=>o.orderId) } })
-      .then(({data, error})=>({ orders, data, error }))
-  );
-  Promise.all(calls).then(results=>{
-    const items = [];
-    let hadError = false;
-    results.forEach(({orders, data, error})=>{
-      if(error || (data && data.error)){ hadError = true; console.error(error||(data&&data.error)); return; }
-      const stickers = data.stickers || [];
-      orders.forEach((o, idx)=>{
-        const s = stickers[idx];
-        items.push({ orderId:o.orderId, name:o.name, article:o.article, size:o.size, barcode:o.barcode, file: s && s.file });
-      });
-    });
-    items.sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
-    if(!items.length){ toast('Не удалось получить данные' + (hadError?' — проверьте ключи WB клиентов':'')); return; }
-    const client = clients.find(c=>c.id===clientId);
-    const win = window.open('', '_blank');
-    if(!win){ toast('Браузер заблокировал открытие окна'); return; }
-    win.document.write(`
-      <html><head><title>Лист сборки</title>
-      <style>
-        body{font-family:Arial,sans-serif;padding:14px;font-size:11px;color:#111}
-        h1{font-size:16px;margin-bottom:14px}
-        table{width:100%;border-collapse:collapse}
-        th,td{border:1px solid #333;padding:5px 8px;text-align:left;vertical-align:middle}
-        th{background:#f0f0f0}
-        td.mono, th.mono{font-family:'Courier New',monospace}
-        .qr-cell{width:60px;text-align:center}
-        .qr-cell img{width:50px;height:50px}
-        .barcode-tail{font-weight:bold;font-size:13px}
-        @media print{ body{padding:6px} }
-      </style>
-      </head><body>
-        <h1>Лист сборки${client?` · ${escapeHtml(client.name)}`:' (все клиенты)'} — ${items.length} поз.</h1>
-        <table>
-          <thead><tr><th style="width:34px">№</th><th>Наименование</th><th>Артикул</th><th>ШК</th><th class="qr-cell">QR WB</th></tr></thead>
-          <tbody>
-            ${items.map((it,idx)=>{
-              const bc = it.barcode || '';
-              const head = bc.length>4 ? bc.slice(0,-4) : '';
-              const tail = bc.length>4 ? bc.slice(-4) : bc;
-              return `
-              <tr>
-                <td>${idx+1}</td>
-                <td>${escapeHtml(it.name||'')}${it.size?` · ${escapeHtml(it.size)}`:''}</td>
-                <td class="mono">${escapeHtml(it.article||'')}</td>
-                <td class="mono">${escapeHtml(head)}<span class="barcode-tail">${escapeHtml(tail)}</span></td>
-                <td class="qr-cell">${it.file ? `<img src="data:image/svg+xml;base64,${it.file}">` : '—'}</td>
-              </tr>
-            `;}).join('')}
-          </tbody>
-        </table>
-        <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
-      </body></html>
-    `);
-    win.document.close();
-  });
+  if(!items.length){ toast('Нет заказов на сборке'); return; }
+  const client = clients.find(c=>c.id===clientId);
+  const win = window.open('', '_blank');
+  if(!win){ toast('Браузер заблокировал открытие окна'); return; }
+  win.document.write(`
+    <html><head><title>Лист сборки</title>
+    <style>
+      body{font-family:Arial,sans-serif;padding:14px;font-size:11px;color:#111}
+      h1{font-size:16px;margin-bottom:14px}
+      table{width:100%;border-collapse:collapse}
+      th,td{border:1px solid #333;padding:5px 8px;text-align:left;vertical-align:middle}
+      th{background:#f0f0f0}
+      td.mono, th.mono{font-family:'Courier New',monospace}
+      .barcode-tail{font-weight:bold;font-size:13px}
+      @media print{ body{padding:6px} }
+    </style>
+    </head><body>
+      <h1>Лист сборки${client?` · ${escapeHtml(client.name)}`:' (все клиенты)'} — ${items.length} поз.</h1>
+      <table>
+        <thead><tr><th style="width:34px">№</th><th>Наименование</th><th>Артикул</th><th>ШК</th><th>QR ВБ (номер)</th></tr></thead>
+        <tbody>
+          ${items.map((it,idx)=>{
+            const bc = it.barcode || '';
+            const bcHead = bc.length>4 ? bc.slice(0,-4) : '';
+            const bcTail = bc.length>4 ? bc.slice(-4) : bc;
+            const oid = String(it.orderId||'');
+            const oidHead = oid.length>4 ? oid.slice(0,-4) : '';
+            const oidTail = oid.length>4 ? oid.slice(-4) : oid;
+            return `
+            <tr>
+              <td>${idx+1}</td>
+              <td>${escapeHtml(it.name||'')}${it.size?` · ${escapeHtml(it.size)}`:''}</td>
+              <td class="mono">${escapeHtml(it.article||'')}</td>
+              <td class="mono">${escapeHtml(bcHead)}<span class="barcode-tail">${escapeHtml(bcTail)}</span></td>
+              <td class="mono">${escapeHtml(oidHead)}<span class="barcode-tail">${escapeHtml(oidTail)}</span></td>
+            </tr>
+          `;}).join('')}
+        </tbody>
+      </table>
+      <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
+    </body></html>
+  `);
+  win.document.close();
 }
 function printAllFbsStickers(){
   const clientId = document.getElementById('fbsClientSelect').value;
