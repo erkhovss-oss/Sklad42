@@ -4005,12 +4005,20 @@ function handleStocktakeScan(countId){
     if(!item){
       playBeep('error');
       toast(`Штрихкод ${code} не найден среди товаров этой области`);
+      refocusStocktakeScan(countId);
       return;
     }
     addStocktakeCount(countId, item.sku, item.size, item.client, 1, item.barcode, item.cell, item.name);
     playBeep('ok');
     renderStocktakeList();
+    refocusStocktakeScan(countId);
   });
+}
+function refocusStocktakeScan(countId){
+  setTimeout(()=>{
+    const el = document.getElementById('stocktakeScanInput-'+countId);
+    if(el) el.focus();
+  }, 0);
 }
 function manualAddStocktakeItem(countId){
   const select = document.getElementById('stocktakeManualSelect-'+countId);
