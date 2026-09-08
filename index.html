@@ -3575,7 +3575,7 @@ function printAllFbsStickers(){
       const stickers = data.stickers || [];
       orders.forEach((o, idx)=>{
         const s = stickers[idx];
-        if(s && s.file) allStickers.push({orderId:o.orderId, file:s.file});
+        if(s && s.file) allStickers.push({orderId:o.orderId, file:s.file, name:o.name, article:o.article, size:o.size, nmId:o.nmId, barcode:o.barcode});
       });
     });
     if(!allStickers.length){ toast('Не удалось получить ни одной этикетки' + (hadError?' — проверьте ключи WB клиентов':'')); return; }
@@ -3584,18 +3584,34 @@ function printAllFbsStickers(){
     win.document.write(`
       <html><head><title>Этикетки заказов на сборке</title>
       <style>
-        @page{ size: 58mm 40mm; margin: 0; }
+        @page{ size: 58mm 90mm; margin: 0; }
         *{ box-sizing:border-box; }
-        body{margin:0;padding:0}
-        .sticker-page{
-          page-break-after:always; width:58mm; height:40mm;
-          display:flex; align-items:center; justify-content:center; overflow:hidden;
-        }
-        .sticker-page:last-child{page-break-after:avoid}
-        .sticker-page img{width:100%; height:100%; object-fit:contain}
+        body{margin:0;padding:0;font-family:Arial,sans-serif}
+        .label{width:58mm;padding:3mm;display:flex;flex-direction:column;align-items:center;page-break-after:always}
+        .label:last-child{page-break-after:avoid}
+        .qty{font-size:14pt;font-weight:bold;margin-bottom:2mm}
+        .name{font-size:9pt;font-weight:bold;text-align:center;margin-bottom:2mm;line-height:1.2}
+        table{width:100%;font-size:7pt;margin-bottom:3mm;border-collapse:collapse}
+        td{padding:0.5mm 0}
+        td.label-cell{color:#666;white-space:nowrap;padding-right:2mm}
+        td.value-cell{font-weight:bold;word-break:break-all}
+        .sticker-wrap{width:100%}
+        .sticker-wrap img{width:100%}
       </style>
       </head><body>
-        ${allStickers.map(s=>`<div class="sticker-page"><img src="data:image/svg+xml;base64,${s.file}"></div>`).join('')}
+        ${allStickers.map(s=>`
+          <div class="label">
+            <div class="qty">1 шт.</div>
+            <div class="name">${escapeHtml(s.name||s.article)}</div>
+            <table>
+              ${s.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(s.size)}</td></tr>`:''}
+              <tr><td class="label-cell">Артикул WB</td><td class="value-cell">${s.nmId||'—'}</td></tr>
+              <tr><td class="label-cell">Баркод</td><td class="value-cell">${s.barcode||'—'}</td></tr>
+              <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(s.article)}</td></tr>
+            </table>
+            <div class="sticker-wrap"><img src="data:image/svg+xml;base64,${s.file}"></div>
+          </div>
+        `).join('')}
         <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
       </body></html>
     `);
@@ -3616,13 +3632,31 @@ function printFbsSticker(orderId){
     win.document.write(`
       <html><head><title>Этикетка заказа №${orderId}</title>
       <style>
-        @page{ size: 58mm 40mm; margin: 0; }
+        @page{ size: 58mm 90mm; margin: 0; }
         *{ box-sizing:border-box; }
-        body{margin:0;padding:0;width:58mm;height:40mm;display:flex;align-items:center;justify-content:center;overflow:hidden}
-        img{width:100%;height:100%;object-fit:contain}
+        body{margin:0;padding:0;font-family:Arial,sans-serif}
+        .label{width:58mm;padding:3mm;display:flex;flex-direction:column;align-items:center}
+        .qty{font-size:14pt;font-weight:bold;margin-bottom:2mm}
+        .name{font-size:9pt;font-weight:bold;text-align:center;margin-bottom:2mm;line-height:1.2}
+        table{width:100%;font-size:7pt;margin-bottom:3mm;border-collapse:collapse}
+        td{padding:0.5mm 0}
+        td.label-cell{color:#666;white-space:nowrap;padding-right:2mm}
+        td.value-cell{font-weight:bold;word-break:break-all}
+        .sticker-wrap{width:100%}
+        .sticker-wrap img{width:100%}
       </style>
       </head><body>
-        <img src="data:image/svg+xml;base64,${file}" onload="setTimeout(()=>window.print(), 300)">
+        <div class="label">
+          <div class="qty">1 шт.</div>
+          <div class="name">${escapeHtml(order.name||order.article)}</div>
+          <table>
+            ${order.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(order.size)}</td></tr>`:''}
+            <tr><td class="label-cell">Артикул WB</td><td class="value-cell">${order.nmId||'—'}</td></tr>
+            <tr><td class="label-cell">Баркод</td><td class="value-cell">${order.barcode||'—'}</td></tr>
+            <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(order.article)}</td></tr>
+          </table>
+          <div class="sticker-wrap"><img src="data:image/svg+xml;base64,${file}" onload="setTimeout(()=>window.print(), 300)"></div>
+        </div>
       </body></html>
     `);
     win.document.close();
