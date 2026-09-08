@@ -880,6 +880,7 @@ function myWarehouseId(){ return currentUser ? (currentUser.warehouseId || null)
 function hasFullWarehouseAccess(){ return !myWarehouseId(); }
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
+let fbsSelectedOrders = [];
 let ddsSelected = [];
 let stocktakes = [];
 let activeStocktakeId = null;
@@ -2961,10 +2962,10 @@ function renderFbsClientSelect(){
   const wbClients = clients.filter(c=>c.wbConnected);
   const select = document.getElementById('fbsClientSelect');
   const prev = select.value || fbsSelectedClientId;
-  select.innerHTML = wbClients.length
+  select.innerHTML = `<option value="">Все клиенты</option>` + (wbClients.length
     ? wbClients.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')
-    : `<option value="">Нет клиентов с подключённым WB</option>`;
-  if(wbClients.find(c=>c.id===prev)) select.value = prev;
+    : '');
+  if(prev==='' || wbClients.find(c=>c.id===prev)) select.value = prev;
   fbsSelectedClientId = select.value;
 }
 function setFbsView(view){
@@ -2986,23 +2987,26 @@ function renderFbsOrders(){
 }
 async function fetchNewFbsOrders(silent){
   const clientId = document.getElementById('fbsClientSelect').value;
-  if(!clientId) return;
-  try{
-    const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId, action: 'fetch_new' } });
-    if(error){ if(!silent) toast('WB: ' + await extractFnErrorMessage(error)); return; }
-    if(data && data.error){ if(!silent) toast('WB: ' + data.error); return; }
-    await loadFbsOrders();
-    if(!silent) toast(`Проверено — новых заказов: ${data.fetched||0}`);
-    renderFbsBody();
-  }catch(e){
-    if(!silent) toast('Не удалось вызвать серверную функцию — она развёрнута в Supabase?');
+  const targets = clientId ? [clientId] : clients.filter(c=>c.wbConnected).map(c=>c.id);
+  if(!targets.length) return;
+  let totalFetched = 0;
+  for(const cid of targets){
+    try{
+      const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action: 'fetch_new' } });
+      if(error){ if(!silent) toast('WB: ' + await extractFnErrorMessage(error)); continue; }
+      if(data && data.error){ if(!silent) toast('WB: ' + data.error); continue; }
+      totalFetched += data.fetched||0;
+    }catch(e){ /* пропускаем клиента при сбое, идём дальше */ }
   }
+  await loadFbsOrders();
+  if(!silent) toast(`Проверено — новых заказов: ${totalFetched}`);
+  renderFbsBody();
 }
 function renderFbsBody(){
   const clientId = document.getElementById('fbsClientSelect') ? document.getElementById('fbsClientSelect').value : '';
   const body = document.getElementById('fbsBody');
-  const rows = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus===fbsView);
-  if(!clientId){
+  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus===fbsView);
+  if(!clients.some(c=>c.wbConnected)){
     body.innerHTML = `<div class="panel empty"><span class="eyebrow">Нет клиента</span>Подключите WB хотя бы одному клиенту в разделе «Клиенты»</div>`;
     return;
   }
@@ -3011,9 +3015,24 @@ function renderFbsBody(){
     return;
   }
   if(fbsView==='new'){
-    body.innerHTML = `<div class="panel">${rows.map(o=>`
+    const visibleIds = rows.map(o=>o.orderId);
+    fbsSelectedOrders = fbsSelectedOrders.filter(id=>visibleIds.includes(id));
+    const allSelected = fbsSelectedOrders.length>0 && visibleIds.every(id=>fbsSelectedOrders.includes(id));
+    const selectedRequiringKiz = rows.filter(o=>fbsSelectedOrders.includes(o.orderId) && o.requiresKiz).length;
+    body.innerHTML = `
+      <div class="panel" style="padding:10px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+          <input type="checkbox" ${allSelected?'checked':''} onchange="toggleAllFbsSelected(this.checked)"> Выбрать все
+        </label>
+        ${fbsSelectedOrders.length ? `
+          <span style="font-size:13px;font-weight:600">Выбрано: ${fbsSelectedOrders.length}${selectedRequiringKiz?` (из них с КИЗ: ${selectedRequiringKiz} — соберутся отдельно, вручную)`:''}</span>
+          <button class="btn btn-accent" onclick="bulkAssembleSelectedFbsOrders()">Собрать выбранные</button>
+        ` : ''}
+      </div>
+      <div class="panel">${rows.map(o=>`
       <div class="pick-row">
-        <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${o.requiresKiz?' · требует КИЗ':''}</div></div>
+        <input type="checkbox" ${fbsSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsSelected(${o.orderId}, this.checked)">
+        <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}</div></div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-accent" style="padding:6px 12px" onclick="startAssembleOrder(${o.orderId})">Собрать</button>
           <button class="btn btn-ghost" style="padding:6px 12px;color:var(--warn)" onclick="cancelFbsOrder(${o.orderId})">Отменить</button>
@@ -3106,6 +3125,35 @@ function startAssembleOrder(orderId){
 function cancelAssembleOrder(){
   assemblingOrder = null;
   fbsPendingKiz = null;
+  renderFbsBody();
+}
+function toggleFbsSelected(orderId, checked){
+  if(checked){ if(!fbsSelectedOrders.includes(orderId)) fbsSelectedOrders.push(orderId); }
+  else{ fbsSelectedOrders = fbsSelectedOrders.filter(id=>id!==orderId); }
+  renderFbsBody();
+}
+function toggleAllFbsSelected(checked){
+  const clientId = document.getElementById('fbsClientSelect').value;
+  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='new');
+  fbsSelectedOrders = checked ? rows.map(o=>o.orderId) : [];
+  renderFbsBody();
+}
+async function bulkAssembleSelectedFbsOrders(){
+  const clientId = document.getElementById('fbsClientSelect').value;
+  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='new' && fbsSelectedOrders.includes(o.orderId));
+  const withoutKiz = rows.filter(o=>!o.requiresKiz);
+  const withKiz = rows.filter(o=>o.requiresKiz);
+  if(!withoutKiz.length){
+    toast('Все выбранные заказы требуют КИЗ — соберите их по одному кнопкой «Собрать»');
+    return;
+  }
+  toast(`Собираем ${withoutKiz.length} заказ(ов)…`);
+  for(const order of withoutKiz){
+    finishAssembleOrder(order, null);
+    await new Promise(resolve=>setTimeout(resolve, 400));
+  }
+  fbsSelectedOrders = withKiz.map(o=>o.orderId);
+  if(withKiz.length) toast(`Готово. Осталось собрать с КИЗ вручную: ${withKiz.length}`);
   renderFbsBody();
 }
 function finishAssembleOrder(order, kizCode){
