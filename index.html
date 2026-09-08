@@ -2011,7 +2011,7 @@ async function addWbProductToInventory(clientId, nmId, size){
   size = size || '';
   const p = client.wbProducts.find(x=>x.nmId===nmId && (x.size||'')===size);
   if(!p) return;
-  const sku = 'WB-' + p.nmId;
+  const sku = p.vendorCode || ('WB-' + p.nmId);
   if(findInventoryItem(sku, client.name, size)){ toast('Уже добавлено в остатки'); return; }
   const newItem = {
     sku, name:p.name, qty:0, client:client.name, size,
@@ -2029,7 +2029,7 @@ async function addWbProductsBatch(clientId, products){
   let added = 0;
   for(const p of products){
     const size = p.size || '';
-    const sku = 'WB-' + p.nmId;
+    const sku = p.vendorCode || ('WB-' + p.nmId);
     if(findInventoryItem(sku, client.name, size)) continue;
     const newItem = { sku, name:p.name, qty:0, client:client.name, size, vendorCode:p.vendorCode, barcode:p.barcode||'', dims:p.dims };
     inventory.push(newItem);
@@ -2043,7 +2043,7 @@ async function addWbProductsBatch(clientId, products){
 function addAllWbProducts(clientId){
   const client = clients.find(c=>c.id===clientId);
   if(!client) return;
-  const toAdd = client.wbProducts.filter(p=>!findInventoryItem('WB-'+p.nmId, client.name, p.size||''));
+  const toAdd = client.wbProducts.filter(p=>!findInventoryItem(p.vendorCode || ('WB-'+p.nmId), client.name, p.size||''));
   if(!toAdd.length){ toast('Все карточки уже в остатках'); return; }
   addWbProductsBatch(clientId, toAdd);
 }
@@ -2254,7 +2254,7 @@ function renderClientDetail(body){
         ` : ''}
         <div style="margin-top:10px">
           ${c.wbProducts.length ? c.wbProducts.map(p=>{
-            const already = findInventoryItem('WB-'+p.nmId, c.name, p.size||'');
+            const already = findInventoryItem(p.vendorCode || ('WB-'+p.nmId), c.name, p.size||'');
             const checkKey = p.nmId+'~~'+(p.size||'');
             return `
             <div class="pick-row" style="align-items:flex-start">
@@ -3068,6 +3068,12 @@ function renderFbsBody(){
           <button class="btn btn-accent" onclick="closeFbsSupply()">📦 Закрыть поставку и отправить</button>
         </div>
       </div>
+      ${rows.length ? `
+        <div class="panel" style="padding:14px;margin-bottom:14px">
+          <div class="eyebrow" style="margin-bottom:6px">🔍 Найти заказ по QR ВБ / штрихкоду товара</div>
+          <input class="search mono" id="fbsJumpScanInput" placeholder="Отсканируйте — сразу откроется этот заказ для привязки КИЗ…" style="width:100%;max-width:460px" autocomplete="off">
+        </div>
+      ` : ''}
       ${missingKizCount ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;background:var(--warn-bg);color:var(--warn);font-size:13px;font-weight:600">⚠ У ${missingKizCount} заказ(ов) требуется КИЗ, но он ещё не привязан — используйте «Режим сборки», прежде чем закрывать поставку</div>` : ''}
       ${clientId ? `<div id="fbsTrbxPanel"></div>` : `<p style="font-size:12px;color:var(--ink-faint);margin-bottom:14px">Выберите конкретного клиента, чтобы работать с коробами поставки (короба WB привязаны к одному продавцу).</p>`}
       <div class="panel">${rows.map(o=>`
@@ -3084,6 +3090,7 @@ function renderFbsBody(){
       if(fbsTrbxLoadedFor !== clientId) loadFbsTrbxes(clientId);
       else renderFbsTrbxPanel(clientId);
     }
+    wireFbsJumpScan();
   } else {
     body.innerHTML = `<div class="panel">${rows.map(o=>`
       <div class="pick-row">
@@ -3092,6 +3099,32 @@ function renderFbsBody(){
       </div>
     `).join('')}</div>`;
   }
+}
+function wireFbsJumpScan(){
+  const input = document.getElementById('fbsJumpScanInput');
+  if(!input) return;
+  input.focus();
+  input.addEventListener('keydown', (e)=>{
+    if(e.key!=='Enter') return;
+    const code = input.value.trim();
+    input.value = '';
+    if(!code) return;
+    jumpToOrderByScan(code);
+  });
+}
+function jumpToOrderByScan(code){
+  const clientId = document.getElementById('fbsClientSelect').value;
+  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
+  const order = rows.find(o=> String(o.orderId)===code || o.barcode===code);
+  if(!order){
+    playBeep('error');
+    toast(`Заказ с кодом «${code}» не найден среди тех, что на сборке`);
+    return;
+  }
+  playBeep('ok');
+  assemblyModeQueue = [order];
+  assemblyModeIndex = 0;
+  renderAssemblyModeStep();
 }
 function startAssemblyMode(){
   const clientId = document.getElementById('fbsClientSelect').value;
