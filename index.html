@@ -3647,6 +3647,7 @@ function printFbsPickList(){
   if(!win){ toast('Браузер заблокировал открытие окна'); return; }
   win.document.write(`
     <html><head><title>Лист сборки</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
     <style>
       body{font-family:Arial,sans-serif;padding:14px;font-size:11px;color:#111}
       h1{font-size:16px;margin-bottom:14px}
@@ -3655,12 +3656,13 @@ function printFbsPickList(){
       th{background:#f0f0f0}
       td.mono, th.mono{font-family:'Courier New',monospace}
       .barcode-tail{font-weight:bold;font-size:13px}
+      .qr-cell{width:56px;text-align:center;padding:3px}
       @media print{ body{padding:6px} }
     </style>
     </head><body>
       <h1>Лист сборки${client?` · ${escapeHtml(client.name)}`:' (все клиенты)'} — ${items.length} поз.</h1>
       <table>
-        <thead><tr><th style="width:34px">№</th><th>Наименование</th><th>Артикул</th><th>ШК</th><th>QR ВБ (номер)</th></tr></thead>
+        <thead><tr><th style="width:34px">№</th><th>Наименование</th><th>Артикул</th><th>ШК</th><th>Номер заказа</th><th class="qr-cell">Наш QR</th></tr></thead>
         <tbody>
           ${items.map((it,idx)=>{
             const bc = it.barcode || '';
@@ -3676,11 +3678,15 @@ function printFbsPickList(){
               <td class="mono">${escapeHtml(it.article||'')}</td>
               <td class="mono">${escapeHtml(bcHead)}<span class="barcode-tail">${escapeHtml(bcTail)}</span></td>
               <td class="mono">${escapeHtml(oidHead)}<span class="barcode-tail">${escapeHtml(oidTail)}</span></td>
+              <td class="qr-cell"><div id="pl-qr-${it.orderId}"></div></td>
             </tr>
           `;}).join('')}
         </tbody>
       </table>
-      <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
+      <script>
+        ${items.map(it=>`new QRCode(document.getElementById('pl-qr-${it.orderId}'), {text: '${it.orderId}', width:46, height:46});`).join('\n')}
+        window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };
+      <\/script>
     </body></html>
   `);
   win.document.close();
