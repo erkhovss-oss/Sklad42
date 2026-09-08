@@ -3037,7 +3037,7 @@ function renderFbsBody(){
       <div class="panel">${rows.map(o=>`
       <div class="pick-row">
         <input type="checkbox" ${fbsSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsSelected(${o.orderId}, this.checked)">
-        <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}</div></div>
+        <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}${o.wbWarehouseId ? renderFbsWarehouseBadge(o) : ' · <span style="color:var(--ink-faint)">склад не определён</span>'}</div></div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-accent" style="padding:6px 12px" onclick="startAssembleOrder(${o.orderId})">Собрать</button>
           <button class="btn btn-ghost" style="padding:6px 12px" onclick="hideFbsOrder(${o.orderId})" title="Убрать только у нас, у WB заказ останется как есть">Скрыть</button>
@@ -3158,6 +3158,14 @@ function hideOrdersFromOtherWarehouse(clientId){
     if(error){ console.error(error); toast('Не удалось удалить часть заказов в базе'); }
   });
 }
+function renderFbsWarehouseBadge(o){
+  const client = clients.find(c=>c.id===o.clientId);
+  const matches = client && client.wbWarehouseId && String(client.wbWarehouseId)===String(o.wbWarehouseId);
+  const mismatches = client && client.wbWarehouseId && !matches;
+  const color = matches ? 'var(--ok)' : (mismatches ? 'var(--warn)' : 'var(--ink-faint)');
+  const mark = matches ? ' ✓ наш' : (mismatches ? ' ⚠ чужой' : '');
+  return ` · <span style="color:${color};font-weight:${matches||mismatches?'700':'400'}">склад ${escapeHtml(o.wbWarehouseId)}${mark}</span>`;
+}
 function toggleFbsSelected(orderId, checked){
   if(checked){ if(!fbsSelectedOrders.includes(orderId)) fbsSelectedOrders.push(orderId); }
   else{ fbsSelectedOrders = fbsSelectedOrders.filter(id=>id!==orderId); }
@@ -3266,7 +3274,13 @@ function printFbsSticker(orderId){
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
     const win = window.open('', '_blank');
     if(!win){ toast('Браузер заблокировал открытие окна'); return; }
-    win.document.write(`<iframe src="data:application/pdf;base64,${data.file}" style="width:100%;height:100vh;border:none"></iframe>`);
+    win.document.write(`
+      <html><head><title>Этикетка заказа №${orderId}</title>
+      <style>body{margin:0;display:flex;justify-content:center;padding:20px} img{max-width:100%}</style>
+      </head><body>
+        <img src="data:image/svg+xml;base64,${data.file}" onload="setTimeout(()=>window.print(), 300)">
+      </body></html>
+    `);
     win.document.close();
   });
 }
