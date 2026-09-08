@@ -3104,6 +3104,14 @@ function renderAssemblyModeStep(){
     return;
   }
   const order = assemblyModeQueue[assemblyModeIndex];
+  body.innerHTML = `<div class="panel" style="padding:24px"><p style="font-size:13px;color:var(--ink-soft)">Проверяем у WB, нужен ли код маркировки для этого заказа…</p></div>`;
+  sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'check_meta', orderId: order.orderId } }).then(({data, error})=>{
+    if(!error && data && !data.error) order.requiresKiz = order.requiresKiz || !!data.requiresKiz;
+    renderAssemblyModeStepContent(order, order.requiresKiz);
+  });
+}
+function renderAssemblyModeStepContent(order, requiresKiz){
+  const body = document.getElementById('fbsBody');
   body.innerHTML = `
     <div class="panel" style="padding:24px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:10px">
@@ -3122,11 +3130,16 @@ function renderAssemblyModeStep(){
       </table>
       <div class="eyebrow" style="margin-bottom:6px">Штрихкод товара</div>
       <input class="search" id="wizardBarcodeInput" placeholder="Отсканируйте штрихкод, чтобы подтвердить товар…" style="width:100%;max-width:420px;margin-bottom:14px" autocomplete="off">
-      ${order.requiresKiz ? `
-        <div class="eyebrow" style="margin-bottom:6px">КИЗ (Честный Знак)</div>
-        <input class="search mono" id="wizardKizInput" placeholder="Отсканируйте КИЗ этой единицы…" style="width:100%;max-width:420px;margin-bottom:6px" autocomplete="off" disabled>
-        <div id="wizardKizStatus" style="font-size:12px;margin-bottom:14px">${renderKizStatusLabel(order)}</div>
-      ` : ''}
+      <div id="wizardKizBlock">
+        ${requiresKiz ? `
+          <div class="eyebrow" style="margin-bottom:6px">КИЗ (Честный Знак)</div>
+          <input class="search mono" id="wizardKizInput" placeholder="Отсканируйте КИЗ этой единицы…" style="width:100%;max-width:420px;margin-bottom:6px" autocomplete="off" disabled>
+          <div id="wizardKizStatus" style="font-size:12px;margin-bottom:14px">${renderKizStatusLabel(order)}</div>
+        ` : `
+          <p style="font-size:12px;color:var(--ink-faint);margin-bottom:10px">WB не подтвердил, что этому заказу нужен КИЗ. Если вы точно знаете, что нужен — добавьте поле вручную:</p>
+          <button class="btn btn-ghost" style="margin-bottom:14px" onclick="forceShowWizardKiz(${order.orderId})">+ Этому товару всё же нужен КИЗ</button>
+        `}
+      </div>
       <div style="display:flex;gap:8px">
         <button class="btn btn-accent" onclick="wizardNextOrder()">Следующий заказ →</button>
         <button class="btn btn-ghost" onclick="wizardSkipOrder()">Пропустить</button>
@@ -3146,8 +3159,8 @@ function renderAssemblyModeStep(){
       return;
     }
     playBeep('ok');
-    if(order.requiresKiz){
-      const kizInput = document.getElementById('wizardKizInput');
+    const kizInput = document.getElementById('wizardKizInput');
+    if(kizInput){
       kizInput.disabled = false;
       forceEnglishInput(kizInput);
       kizInput.focus();
@@ -3156,23 +3169,40 @@ function renderAssemblyModeStep(){
       toast('Штрихкод подтверждён');
     }
   });
-  if(order.requiresKiz){
-    const kizInput = document.getElementById('wizardKizInput');
-    kizInput.addEventListener('keydown', (e2)=>{
-      if(e2.key!=='Enter') return;
-      const kizCode = kizInput.value.trim();
-      kizInput.value='';
-      if(!kizCode) return;
-      if(kizCode.length < MIN_KIZ_LENGTH){
-        playBeep('error');
-        toast(`Код слишком короткий (${kizCode.length} симв.) — отсканируйте ещё раз`);
-        return;
-      }
-      const dup = kizScans.find(k=>k.kizCode===kizCode);
-      if(dup){ playBeep('error'); toast(`Этот КИЗ уже был использован ранее (${dup.name})`); return; }
-      wizardAttachKiz(order, kizCode);
-    });
-  }
+  wireWizardKizInput(order);
+}
+function forceShowWizardKiz(orderId){
+  const order = assemblyModeQueue[assemblyModeIndex];
+  if(!order || order.orderId!==orderId) return;
+  order.requiresKiz = true;
+  const blockEl = document.getElementById('wizardKizBlock');
+  blockEl.innerHTML = `
+    <div class="eyebrow" style="margin-bottom:6px">КИЗ (Честный Знак)</div>
+    <input class="search mono" id="wizardKizInput" placeholder="Отсканируйте КИЗ этой единицы…" style="width:100%;max-width:420px;margin-bottom:6px" autocomplete="off">
+    <div id="wizardKizStatus" style="font-size:12px;margin-bottom:14px">${renderKizStatusLabel(order)}</div>
+  `;
+  forceEnglishInput(document.getElementById('wizardKizInput'));
+  document.getElementById('wizardKizInput').focus();
+  wireWizardKizInput(order);
+}
+function wireWizardKizInput(order){
+  const kizInput = document.getElementById('wizardKizInput');
+  if(!kizInput || kizInput.dataset.wired) return;
+  kizInput.dataset.wired = '1';
+  kizInput.addEventListener('keydown', (e2)=>{
+    if(e2.key!=='Enter') return;
+    const kizCode = kizInput.value.trim();
+    kizInput.value='';
+    if(!kizCode) return;
+    if(kizCode.length < MIN_KIZ_LENGTH){
+      playBeep('error');
+      toast(`Код слишком короткий (${kizCode.length} симв.) — отсканируйте ещё раз`);
+      return;
+    }
+    const dup = kizScans.find(k=>k.kizCode===kizCode);
+    if(dup){ playBeep('error'); toast(`Этот КИЗ уже был использован ранее (${dup.name})`); return; }
+    wizardAttachKiz(order, kizCode);
+  });
 }
 function wizardAttachKiz(order, kizCode){
   toast('Отправляем КИЗ на WB…');
@@ -3182,7 +3212,7 @@ function wizardAttachKiz(order, kizCode){
     order.kizStatus = data.kizStatus;
     kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||'', clientName:order.clientName, time:new Date().toISOString()});
     sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName}).then(({error})=>{ if(error) console.error(error); });
-    sb.from('wb_orders').update({kiz_code:kizCode, kiz_status:data.kizStatus}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
+    sb.from('wb_orders').update({kiz_code:kizCode, kiz_status:data.kizStatus, requires_kiz:true}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
     if(data.kizStatus==='attached'){ playBeep('ok'); toast('✅ КИЗ подтверждён WB'); }
     else { playBeep('warn'); toast('⚠ WB не подтвердил КИЗ — ' + (data.warning||'проверьте вручную')); }
     const statusDiv = document.getElementById('wizardKizStatus');
