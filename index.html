@@ -3699,20 +3699,23 @@ function printAllFbsStickers(){
         .qr-page img{width:100%;height:100%;object-fit:contain}
       </style>
       </head><body>
-        ${groupList.map(g=>`
-          <div class="info-label">
-            <div class="qty">${g.orders.length} шт.</div>
-            <div class="name">${escapeHtml(g.name||g.article)}</div>
-            <table>
-              ${g.color?`<tr><td class="label-cell">Цвет</td><td class="value-cell">${escapeHtml(g.color)}</td></tr>`:''}
-              ${g.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(g.size)}</td></tr>`:''}
-              <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(g.article||'')}</td></tr>
-              <tr><td class="label-cell">ШК</td><td class="value-cell">${g.barcode||'—'}</td></tr>
-              <tr><td class="label-cell">Заказов</td><td class="value-cell">${g.orders.length}</td></tr>
-            </table>
-          </div>
-        `).join('')}
-        ${orderedStickers.map(file=>`<div class="qr-page"><img src="data:image/svg+xml;base64,${file}"></div>`).join('')}
+        ${groupList.map(g=>{
+          const groupStickers = g.orders.map(o=>stickerByOrderId[o.orderId]).filter(Boolean);
+          return `
+            <div class="info-label">
+              <div class="qty">${g.orders.length} шт.</div>
+              <div class="name">${escapeHtml(g.name||g.article)}</div>
+              <table>
+                ${g.color?`<tr><td class="label-cell">Цвет</td><td class="value-cell">${escapeHtml(g.color)}</td></tr>`:''}
+                ${g.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(g.size)}</td></tr>`:''}
+                <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(g.article||'')}</td></tr>
+                <tr><td class="label-cell">ШК</td><td class="value-cell">${g.barcode||'—'}</td></tr>
+                <tr><td class="label-cell">Заказов</td><td class="value-cell">${g.orders.length}</td></tr>
+              </table>
+            </div>
+            ${groupStickers.map(file=>`<div class="qr-page"><img src="data:image/svg+xml;base64,${file}"></div>`).join('')}
+          `;
+        }).join('')}
         <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
       </body></html>
     `);
