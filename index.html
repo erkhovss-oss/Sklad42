@@ -1259,6 +1259,10 @@ function renderInventory(){
                 ${warehouses.map(w=>`<option value="${w.id}" ${(i.warehouseId||'MAIN')===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')}
               </select>
             </div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);cursor:pointer;align-self:flex-end;padding-bottom:8px">
+              <input type="checkbox" id="editRequiresKiz-${escapeHtml(key)}" ${i.requiresKiz?'checked':''}>
+              Требует КИЗ (Честный Знак) на WB
+            </label>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
             <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Кол-во</div><input class="search" type="number" min="0" style="width:90px" id="editQty-${escapeHtml(key)}" value="${i.qty}"></div>
@@ -1399,6 +1403,7 @@ async function saveEdit(key){
   const barcode = document.getElementById('editBarcode-'+key).value.trim();
   const newClient = document.getElementById('editClient-'+key).value.trim();
   const newWarehouseId = document.getElementById('editWarehouse-'+key).value;
+  const requiresKiz = document.getElementById('editRequiresKiz-'+key).checked;
   const qty = Math.max(0, parseInt(document.getElementById('editQty-'+key).value) || 0);
   const cellRaw = document.getElementById('editCell-'+key).value.trim();
   const newCell = cellRaw ? Math.max(1, parseInt(cellRaw) || 0) : null;
@@ -1421,6 +1426,7 @@ async function saveEdit(key){
   item.barcode = barcode || '';
   item.client = newClient || '—';
   item.warehouseId = newWarehouseId || 'MAIN';
+  item.requiresKiz = requiresKiz;
   item.qty = qty;
   item.dims = (l>0 && w>0 && h>0) ? {l, w, h, weight:(item.dims&&item.dims.weight)||0} : null;
   if(newCell !== null){
@@ -1534,6 +1540,7 @@ async function syncInventoryRow(sku, client, size, warehouseId){
       client_name: item.client || '',
       size: item.size || '',
       warehouse_id: item.warehouseId || 'MAIN',
+      requires_kiz: item.requiresKiz || false,
       vendor_code: item.vendorCode || null,
       barcode: item.barcode || null,
       dims: item.dims || null,
@@ -3104,7 +3111,13 @@ function renderAssemblyModeStep(){
     return;
   }
   const order = assemblyModeQueue[assemblyModeIndex];
-  body.innerHTML = `<div class="panel" style="padding:24px"><p style="font-size:13px;color:var(--ink-soft)">Проверяем у WB, нужен ли код маркировки для этого заказа…</p></div>`;
+  const localKiz = findLocalRequiresKiz(order);
+  if(localKiz !== null){
+    order.requiresKiz = localKiz;
+    renderAssemblyModeStepContent(order, localKiz);
+    return;
+  }
+  body.innerHTML = `<div class="panel" style="padding:24px"><p style="font-size:13px;color:var(--ink-soft)">Товар ещё не отмечен в «Остатках» — уточняем у WB напрямую…</p></div>`;
   sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'check_meta', orderId: order.orderId } }).then(({data, error})=>{
     if(!error && data && !data.error) order.requiresKiz = order.requiresKiz || !!data.requiresKiz;
     renderAssemblyModeStepContent(order, order.requiresKiz);
@@ -3213,7 +3226,16 @@ function wizardAttachKiz(order, kizCode){
     kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||'', clientName:order.clientName, time:new Date().toISOString()});
     sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName}).then(({error})=>{ if(error) console.error(error); });
     sb.from('wb_orders').update({kiz_code:kizCode, kiz_status:data.kizStatus, requires_kiz:true}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
-    if(data.kizStatus==='attached'){ playBeep('ok'); toast('✅ КИЗ подтверждён WB'); }
+    if(data.kizStatus==='attached'){
+      playBeep('ok');
+      toast('✅ КИЗ подтверждён WB');
+      const invItem = order.barcode ? inventory.find(i=>i.barcode===order.barcode && i.client===order.clientName) : null;
+      if(invItem && !invItem.requiresKiz){
+        invItem.requiresKiz = true;
+        syncInventoryRow(invItem.sku, invItem.client, invItem.size, invItem.warehouseId);
+        toast('Товар «' + invItem.name + '» теперь отмечен как требующий КИЗ в Остатках — в следующий раз определится сам');
+      }
+    }
     else { playBeep('warn'); toast('⚠ WB не подтвердил КИЗ — ' + (data.warning||'проверьте вручную')); }
     const statusDiv = document.getElementById('wizardKizStatus');
     if(statusDiv) statusDiv.innerHTML = renderKizStatusLabel(order);
@@ -3236,18 +3258,30 @@ function exitAssemblyMode(){
   assemblyModeIndex = 0;
   renderFbsBody();
 }
+function findLocalRequiresKiz(order){
+  let item = order.barcode ? inventory.find(i=>i.barcode===order.barcode && i.client===order.clientName) : null;
+  if(!item && order.article) item = inventory.find(i=>i.vendorCode===order.article && i.client===order.clientName);
+  if(item && typeof item.requiresKiz === 'boolean') return item.requiresKiz;
+  return null; // неизвестно локально — придётся спросить у WB
+}
 function startAssembleOrder(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
   if(!order) return;
   assemblingOrder = order;
   fbsPendingKiz = null;
+  const localKiz = findLocalRequiresKiz(order);
+  if(localKiz !== null){
+    order.requiresKiz = localKiz;
+    renderAssembleOrderForm(order, localKiz);
+    return;
+  }
   const body = document.getElementById('fbsBody');
-  body.innerHTML = `<div class="panel" style="padding:20px"><p style="font-size:13px;color:var(--ink-soft)">Проверяем у WB, нужен ли код маркировки для этого заказа…</p></div>`;
+  body.innerHTML = `<div class="panel" style="padding:20px"><p style="font-size:13px;color:var(--ink-soft)">Товар ещё не отмечен в «Остатках» — уточняем у WB напрямую…</p></div>`;
   sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'check_meta', orderId } }).then(({data, error})=>{
     let requiresKiz = order.requiresKiz;
     if(!error && data && !data.error){
       requiresKiz = !!data.requiresKiz;
-      order.requiresKiz = requiresKiz; // подменяем локально, раз WB подтвердил живьём — это надёжнее, чем то, что пришло при первом опросе новых заказов
+      order.requiresKiz = requiresKiz;
     }
     renderAssembleOrderForm(order, requiresKiz);
   });
@@ -6006,7 +6040,7 @@ async function loadEmployees(){
 async function loadInventory(){
   const { data, error } = await sb.from('inventory').select('*').order('sku').limit(50000);
   if(error){ console.error(error); return; }
-  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', warehouseId:i.warehouse_id||'MAIN', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null}));
+  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', warehouseId:i.warehouse_id||'MAIN', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null, requiresKiz:i.requires_kiz||false}));
 }
 async function loadInventoryBarcodes(){
   const { data, error } = await sb.from('inventory_barcodes').select('*').limit(50000);
