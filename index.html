@@ -1250,6 +1250,7 @@ function renderInventory(){
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
             <input class="search" style="width:100px" id="editSize-${escapeHtml(key)}" value="${escapeHtml(i.size||'')}" placeholder="Размер">
+            <input class="search" style="width:130px" id="editColor-${escapeHtml(key)}" value="${escapeHtml(i.color||'')}" placeholder="Цвет">
             <input class="search mono" style="width:160px" id="editBarcode-${escapeHtml(key)}" value="${escapeHtml(i.barcode||'')}" placeholder="Штрихкод" autocomplete="off">
             <input class="search" style="flex:1;min-width:140px" id="editClient-${escapeHtml(key)}" value="${escapeHtml(i.client||'')}" placeholder="Клиент">
           </div>
@@ -1404,6 +1405,7 @@ async function saveEdit(key){
   const newClient = document.getElementById('editClient-'+key).value.trim();
   const newWarehouseId = document.getElementById('editWarehouse-'+key).value;
   const requiresKiz = document.getElementById('editRequiresKiz-'+key).checked;
+  const color = document.getElementById('editColor-'+key).value.trim();
   const qty = Math.max(0, parseInt(document.getElementById('editQty-'+key).value) || 0);
   const cellRaw = document.getElementById('editCell-'+key).value.trim();
   const newCell = cellRaw ? Math.max(1, parseInt(cellRaw) || 0) : null;
@@ -1427,6 +1429,7 @@ async function saveEdit(key){
   item.client = newClient || '—';
   item.warehouseId = newWarehouseId || 'MAIN';
   item.requiresKiz = requiresKiz;
+  item.color = color;
   item.qty = qty;
   item.dims = (l>0 && w>0 && h>0) ? {l, w, h, weight:(item.dims&&item.dims.weight)||0} : null;
   if(newCell !== null){
@@ -1541,6 +1544,7 @@ async function syncInventoryRow(sku, client, size, warehouseId){
       size: item.size || '',
       warehouse_id: item.warehouseId || 'MAIN',
       requires_kiz: item.requiresKiz || false,
+      color: item.color || null,
       vendor_code: item.vendorCode || null,
       barcode: item.barcode || null,
       dims: item.dims || null,
@@ -1987,6 +1991,8 @@ async function loadWbProducts(clientId){
       const dims = (c.dimensions && c.dimensions.isValid && (c.dimensions.length||c.dimensions.width||c.dimensions.height))
         ? {l:c.dimensions.length, w:c.dimensions.width, h:c.dimensions.height, weight:c.dimensions.weightBrutto||0}
         : null;
+      const colorChar = (c.characteristics || []).find(ch => ch.name && ch.name.toLowerCase().includes('цвет'));
+      const color = colorChar ? (Array.isArray(colorChar.value) ? colorChar.value.join(', ') : String(colorChar.value)) : '';
       const sizes = (c.sizes && c.sizes.length) ? c.sizes : [{techSize:'', skus:[]}];
       sizes.forEach(s=>{
         products.push({
@@ -1995,6 +2001,7 @@ async function loadWbProducts(clientId){
           vendorCode: c.vendorCode,
           size: s.techSize || '',
           barcode: (s.skus && s.skus[0]) || '',
+          color,
           dims
         });
       });
@@ -2015,7 +2022,7 @@ async function addWbProductToInventory(clientId, nmId, size){
   if(findInventoryItem(sku, client.name, size)){ toast('Уже добавлено в остатки'); return; }
   const newItem = {
     sku, name:p.name, qty:0, client:client.name, size,
-    vendorCode:p.vendorCode, barcode:p.barcode||'', dims:p.dims
+    vendorCode:p.vendorCode, barcode:p.barcode||'', dims:p.dims, color:p.color||''
   };
   inventory.push(newItem);
   const cell = await ensureCellAssigned(newItem);
@@ -2031,7 +2038,7 @@ async function addWbProductsBatch(clientId, products){
     const size = p.size || '';
     const sku = p.vendorCode || ('WB-' + p.nmId);
     if(findInventoryItem(sku, client.name, size)) continue;
-    const newItem = { sku, name:p.name, qty:0, client:client.name, size, vendorCode:p.vendorCode, barcode:p.barcode||'', dims:p.dims };
+    const newItem = { sku, name:p.name, qty:0, client:client.name, size, vendorCode:p.vendorCode, barcode:p.barcode||'', dims:p.dims, color:p.color||'' };
     inventory.push(newItem);
     await ensureCellAssigned(newItem);
     syncInventoryRow(newItem.sku, newItem.client, newItem.size);
@@ -3648,7 +3655,7 @@ function printAllFbsStickers(){
   const groups = {};
   rows.forEach(o=>{
     const key = (o.barcode || o.article || String(o.orderId));
-    if(!groups[key]) groups[key] = { name:o.name, article:o.article, size:o.size, barcode:o.barcode, orders:[] };
+    if(!groups[key]) groups[key] = { name:o.name, article:o.article, size:o.size, barcode:o.barcode, color:findLocalColor(o), orders:[] };
     groups[key].orders.push(o);
   });
   const groupList = Object.values(groups).sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
@@ -3697,6 +3704,7 @@ function printAllFbsStickers(){
             <div class="qty">${g.orders.length} шт.</div>
             <div class="name">${escapeHtml(g.name||g.article)}</div>
             <table>
+              ${g.color?`<tr><td class="label-cell">Цвет</td><td class="value-cell">${escapeHtml(g.color)}</td></tr>`:''}
               ${g.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(g.size)}</td></tr>`:''}
               <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(g.article||'')}</td></tr>
               <tr><td class="label-cell">ШК</td><td class="value-cell">${g.barcode||'—'}</td></tr>
@@ -3712,9 +3720,14 @@ function printAllFbsStickers(){
     toast(`Готово: ${groupList.length} карточек товара, ${orderedStickers.length} QR-стикеров${hadError?' (у части клиентов была ошибка получения)':''}`);
   });
 }
+function findLocalColor(order){
+  const item = order.barcode ? inventory.find(i=>i.barcode===order.barcode && i.client===order.clientName) : null;
+  return item ? (item.color || '') : '';
+}
 function printFbsSticker(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
   if(!order) return;
+  const color = findLocalColor(order);
   toast('Запрашиваем этикетку у WB…');
   sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'get_sticker', orderId } }).then(({data, error})=>{
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
@@ -3743,6 +3756,7 @@ function printFbsSticker(orderId){
           <div class="qty">1 шт.</div>
           <div class="name">${escapeHtml(order.name||order.article)}</div>
           <table>
+            ${color?`<tr><td class="label-cell">Цвет</td><td class="value-cell">${escapeHtml(color)}</td></tr>`:''}
             ${order.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(order.size)}</td></tr>`:''}
             <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(order.article||'')}</td></tr>
             <tr><td class="label-cell">ШК</td><td class="value-cell">${order.barcode||'—'}</td></tr>
@@ -6099,7 +6113,7 @@ async function loadEmployees(){
 async function loadInventory(){
   const { data, error } = await sb.from('inventory').select('*').order('sku').limit(50000);
   if(error){ console.error(error); return; }
-  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', warehouseId:i.warehouse_id||'MAIN', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null, requiresKiz:i.requires_kiz||false}));
+  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', warehouseId:i.warehouse_id||'MAIN', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null, requiresKiz:i.requires_kiz||false, color:i.color||''}));
 }
 async function loadInventoryBarcodes(){
   const { data, error } = await sb.from('inventory_barcodes').select('*').limit(50000);
