@@ -1935,11 +1935,21 @@ async function listWbWarehouses(clientId){
     const { data, error } = await sb.functions.invoke('wb-sync-stocks-ts', { body: { clientId, action: 'list_warehouses' } });
     if(error){ toast('WB: ' + await extractFnErrorMessage(error)); return; }
     if(data && data.error){ toast('WB: ' + data.error); return; }
-    const list = (data.warehouses || []).map(w=>`${w.id} — ${w.name}`).join('\n');
-    alert('Склады продавца на WB:\n\n' + (list || 'пусто — сначала создайте склад в личном кабинете WB'));
+    const c = clients.find(x=>x.id===clientId);
+    c.wbWarehousesList = data.warehouses || [];
+    if(!c.wbWarehousesList.length){ toast('У продавца пока нет складов на WB — создайте склад в личном кабинете'); return; }
+    toast(`Найдено складов: ${c.wbWarehousesList.length} — выберите нужный ниже`);
+    renderClients();
   }catch(e){
     toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
   }
+}
+function useWbWarehouseFromList(clientId){
+  const c = clients.find(x=>x.id===clientId);
+  const select = document.getElementById('wbWarehousePicker-'+clientId);
+  if(!select || !select.value) return;
+  document.getElementById('wbWarehouseId-'+clientId).value = select.value;
+  saveWbWarehouseId(clientId);
 }
 async function pushStocksToWb(clientId){
   toast('Отправляем остатки на Wildberries…');
@@ -2261,6 +2271,14 @@ function renderClientDetail(body){
         <button class="btn btn-ghost" onclick="saveWbWarehouseId('${c.id}')">Сохранить</button>
         <button class="btn btn-ghost" onclick="listWbWarehouses('${c.id}')">📋 Получить список складов</button>
       </div>
+      ${(c.wbWarehousesList && c.wbWarehousesList.length) ? `
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px 12px;background:var(--bg);border-radius:8px">
+          <select class="search" id="wbWarehousePicker-${c.id}" style="flex:1;min-width:220px">
+            ${c.wbWarehousesList.map(w=>`<option value="${w.id}" ${String(c.wbWarehouseId)===String(w.id)?'selected':''}>${w.id} — ${escapeHtml(w.name)}</option>`).join('')}
+          </select>
+          <button class="btn btn-primary" onclick="useWbWarehouseFromList('${c.id}')">Использовать этот склад</button>
+        </div>
+      ` : ''}
       ${c.wbWarehouseId ? `
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
           <button class="btn ${c.wbAutoSync?'btn-accent':'btn-ghost'}" style="padding:6px 12px;font-size:12px" onclick="toggleWbAutoSync('${c.id}')">${c.wbAutoSync?'🔄 Автосинхронизация: Вкл':'⏸ Автосинхронизация: Выкл'}</button>
