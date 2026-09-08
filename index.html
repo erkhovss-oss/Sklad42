@@ -3019,6 +3019,10 @@ function renderFbsBody(){
     fbsSelectedOrders = fbsSelectedOrders.filter(id=>visibleIds.includes(id));
     const allSelected = fbsSelectedOrders.length>0 && visibleIds.every(id=>fbsSelectedOrders.includes(id));
     const selectedRequiringKiz = rows.filter(o=>fbsSelectedOrders.includes(o.orderId) && o.requiresKiz).length;
+    const wrongWarehouseCount = clientId ? rows.filter(o=>{
+      const cl = clients.find(c=>c.id===clientId);
+      return cl && cl.wbWarehouseId && o.wbWarehouseId && String(o.wbWarehouseId)!==String(cl.wbWarehouseId);
+    }).length : 0;
     body.innerHTML = `
       <div class="panel" style="padding:10px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
@@ -3028,6 +3032,7 @@ function renderFbsBody(){
           <span style="font-size:13px;font-weight:600">Выбрано: ${fbsSelectedOrders.length}${selectedRequiringKiz?` (из них с КИЗ: ${selectedRequiringKiz} — соберутся отдельно, вручную)`:''}</span>
           <button class="btn btn-accent" onclick="bulkAssembleSelectedFbsOrders()">Собрать выбранные</button>
         ` : ''}
+        ${wrongWarehouseCount ? `<button class="btn btn-ghost" style="color:var(--warn)" onclick="hideOrdersFromOtherWarehouse('${clientId}')">🧹 Убрать заказы не с этого склада (${wrongWarehouseCount})</button>` : ''}
       </div>
       <div class="panel">${rows.map(o=>`
       <div class="pick-row">
@@ -3035,6 +3040,7 @@ function renderFbsBody(){
         <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}</div></div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-accent" style="padding:6px 12px" onclick="startAssembleOrder(${o.orderId})">Собрать</button>
+          <button class="btn btn-ghost" style="padding:6px 12px" onclick="hideFbsOrder(${o.orderId})" title="Убрать только у нас, у WB заказ останется как есть">Скрыть</button>
           <button class="btn btn-ghost" style="padding:6px 12px;color:var(--warn)" onclick="cancelFbsOrder(${o.orderId})">Отменить</button>
         </div>
       </div>
@@ -3126,6 +3132,31 @@ function cancelAssembleOrder(){
   assemblingOrder = null;
   fbsPendingKiz = null;
   renderFbsBody();
+}
+function hideFbsOrder(orderId){
+  if(!confirm('Убрать этот заказ из списка только у нас? У Wildberries и у клиента заказ останется как есть — его должен собрать тот, кто отвечает за нужный склад.')) return;
+  fbsOrders = fbsOrders.filter(o=>o.orderId!==orderId);
+  fbsSelectedOrders = fbsSelectedOrders.filter(id=>id!==orderId);
+  toast('Заказ убран из списка (у WB не тронут)');
+  renderFbsBody();
+  sb.from('wb_orders').delete().eq('order_id', orderId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить локально в базе'); }
+  });
+}
+function hideOrdersFromOtherWarehouse(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  if(!client || !client.wbWarehouseId){ toast('У клиента не указан ID склада WB'); return; }
+  const toRemove = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='new' && o.wbWarehouseId && String(o.wbWarehouseId)!==String(client.wbWarehouseId));
+  if(!toRemove.length){ toast('Таких заказов не найдено'); return; }
+  if(!confirm(`Убрать из списка ${toRemove.length} заказ(ов) с других складов? У Wildberries они останутся как есть.`)) return;
+  const idsToRemove = toRemove.map(o=>o.orderId);
+  fbsOrders = fbsOrders.filter(o=>!idsToRemove.includes(o.orderId));
+  fbsSelectedOrders = fbsSelectedOrders.filter(id=>!idsToRemove.includes(id));
+  toast(`Убрано из списка: ${idsToRemove.length}`);
+  renderFbsBody();
+  sb.from('wb_orders').delete().in('order_id', idsToRemove).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить часть заказов в базе'); }
+  });
 }
 function toggleFbsSelected(orderId, checked){
   if(checked){ if(!fbsSelectedOrders.includes(orderId)) fbsSelectedOrders.push(orderId); }
@@ -3246,7 +3277,7 @@ async function loadFbsOrders(){
     orderId:o.order_id, clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
-    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false
+    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||''
   }));
 }
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fetchNewFbsOrders(true); });
