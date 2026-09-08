@@ -3050,6 +3050,7 @@ function renderFbsBody(){
       </div>
     `).join('')}</div>`;
   } else if(fbsView==='confirm'){
+    const missingKizCount = rows.filter(o=>o.requiresKiz && o.kizStatus!=='attached').length;
     body.innerHTML = `
       <div class="panel" style="padding:14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length}. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
@@ -3058,6 +3059,7 @@ function renderFbsBody(){
           <button class="btn btn-accent" onclick="closeFbsSupply()">📦 Закрыть поставку и отправить</button>
         </div>
       </div>
+      ${missingKizCount ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;background:var(--warn-bg);color:var(--warn);font-size:13px;font-weight:600">⚠ У ${missingKizCount} заказ(ов) требуется КИЗ, но он ещё не привязан — используйте «Режим сборки», прежде чем закрывать поставку</div>` : ''}
       ${clientId ? `<div id="fbsTrbxPanel"></div>` : `<p style="font-size:12px;color:var(--ink-faint);margin-bottom:14px">Выберите конкретного клиента, чтобы работать с коробами поставки (короба WB привязаны к одному продавцу).</p>`}
       <div class="panel">${rows.map(o=>`
         <div class="pick-row">
@@ -3502,7 +3504,17 @@ function downloadFbsTrbxLabels(clientId){
 function closeFbsSupply(){
   const clientId = document.getElementById('fbsClientSelect').value;
   const client = clients.find(c=>c.id===clientId);
-  if(!confirm(`Закрыть текущую поставку клиента «${client?client.name:''}» и передать на склад WB?`)) return;
+  if(!clientId){ toast('Выберите конкретного клиента, чтобы закрыть его поставку'); return; }
+
+  const missingKiz = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm' && o.requiresKiz && o.kizStatus!=='attached');
+  if(missingKiz.length){
+    const names = missingKiz.slice(0,5).map(o=>`«${o.name||o.article}» (заказ №${o.orderId})`).join(', ');
+    const more = missingKiz.length>5 ? ` и ещё ${missingKiz.length-5}` : '';
+    if(!confirm(`⚠ У ${missingKiz.length} заказ(ов) не привязан КИЗ, хотя он требуется: ${names}${more}.\n\nЗакрыть поставку без КИЗ рискованно — WB может отклонить поставку или заблокировать продажу. Всё равно закрыть?`)) return;
+  } else {
+    if(!confirm(`Закрыть текущую поставку клиента «${client?client.name:''}» и передать на склад WB?`)) return;
+  }
+
   sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'close_supply' } }).then(({data, error})=>{
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
     fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm').forEach(o=>{ o.supplierStatus='complete'; });
