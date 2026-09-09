@@ -3018,7 +3018,7 @@ async function fetchNewFbsOrders(silent){
   }
   await loadFbsOrders();
   if(!silent) toast(`Проверено — новых заказов: ${totalFetched}`);
-  renderFbsBody();
+  if(assemblyModeQueue.length === 0) renderFbsBody();
 }
 function renderFbsBody(){
   const clientId = document.getElementById('fbsClientSelect') ? document.getElementById('fbsClientSelect').value : '';
