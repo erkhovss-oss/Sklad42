@@ -3055,7 +3055,7 @@ function renderFbsBody(){
       <div class="panel">${rows.map(o=>`
       <div class="pick-row">
         <input type="checkbox" ${fbsSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsSelected(${o.orderId}, this.checked)">
-        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}${o.wbWarehouseId ? renderFbsWarehouseBadge(o) : ' · <span style="color:var(--ink-faint)">склад не определён</span>'}</div></div>
+        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}${o.wbWarehouseId ? renderFbsWarehouseBadge(o) : ' · <span style="color:var(--ink-faint)">склад не определён</span>'}</div></div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-accent" style="padding:6px 12px" onclick="startAssembleOrder(${o.orderId})">Собрать</button>
           <button class="btn btn-ghost" style="padding:6px 12px" onclick="hideFbsOrder(${o.orderId})" title="Убрать только у нас, у WB заказ останется как есть">Скрыть</button>
@@ -3065,6 +3065,7 @@ function renderFbsBody(){
     `).join('')}</div>`;
   } else if(fbsView==='confirm'){
     const missingKizCount = rows.filter(o=>o.requiresKiz && o.kizStatus!=='attached').length;
+    const outOfStockOrders = rows.filter(o=>o.outOfStock);
     body.innerHTML = `
       <div class="panel" style="padding:14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length}. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
@@ -3072,14 +3073,32 @@ function renderFbsBody(){
           ${rows.length ? `<button class="btn btn-primary" onclick="startAssemblyMode()">🚀 Режим сборки</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printFbsPickList()">📋 Лист сборки</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickers()">🖨 Все этикетки (${rows.length})</button>` : ''}
+          ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickersToThermalPrinter()">🖨️ На USB-принтер</button>` : ''}
           <button class="btn btn-accent" onclick="closeFbsSupply()">📦 Закрыть поставку и отправить</button>
         </div>
       </div>
       ${missingKizCount ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;background:var(--warn-bg);color:var(--warn);font-size:13px;font-weight:600">⚠ У ${missingKizCount} заказ(ов) требуется КИЗ, но он ещё не привязан — используйте «Режим сборки», прежде чем закрывать поставку</div>` : ''}
+      ${outOfStockOrders.length ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;background:var(--warn-bg);color:var(--warn);font-size:13px">
+        <div style="font-weight:600;margin-bottom:8px">❌ Отмечено как «нет на складе»: ${outOfStockOrders.length} — нужно решить, отменять у WB или перенести в отдельную поставку</div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${outOfStockOrders.map(o=>`
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+              <span>«${escapeHtml(o.name||o.article)}» · заказ №${o.orderId}</span>
+              ${o.movedToHolding
+                ? `<span style="color:var(--ok);font-weight:600;font-size:12px">✅ Перенесён в отдельную поставку</span>`
+                : `<div style="display:flex;gap:6px">
+                    <button class="btn btn-ghost" style="padding:3px 10px;font-size:12px" onclick="moveFbsOrderToHolding(${o.orderId})">📦 В отдельную поставку</button>
+                    <button class="btn btn-ghost" style="padding:3px 10px;font-size:12px" onclick="cancelFbsOrder(${o.orderId})">Отменить у WB</button>
+                  </div>`
+              }
+            </div>
+          `).join('')}
+        </div>
+      </div>` : ''}
       ${clientId ? `<div id="fbsTrbxPanel"></div>` : `<p style="font-size:12px;color:var(--ink-faint);margin-bottom:14px">Выберите конкретного клиента, чтобы работать с коробами поставки (короба WB привязаны к одному продавцу).</p>`}
       <div class="panel">${rows.map(o=>`
         <div class="pick-row">
-          <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${renderKizStatusLabel(o)}</div></div>
+          <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${renderKizStatusLabel(o)}</div></div>
           <div style="display:flex;gap:6px;align-items:center">
             ${clientId ? renderTrbxAssignControl(o) : ''}
             <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
@@ -3094,7 +3113,7 @@ function renderFbsBody(){
   } else {
     body.innerHTML = `<div class="panel">${rows.map(o=>`
       <div class="pick-row">
-        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId} · поставка ${o.wbSupplyId||'—'}</div></div>
+        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))} · поставка ${o.wbSupplyId||'—'}</div></div>
         <span class="status shipped">В доставке</span>
       </div>
     `).join('')}</div>`;
@@ -3141,12 +3160,14 @@ function renderAssemblyModeStepContent(order, requiresKiz){
           <div class="eyebrow">Режим сборки · заказ ${assemblyModeIndex+1} из ${assemblyModeQueue.length}</div>
           <h2 style="margin:6px 0 0 0">${escapeHtml(pi.name)}${pi.color?` · ${escapeHtml(pi.color)}`:''}${order.size?` · ${order.size}`:''}</h2>
         </div>
+        ${pi.cell ? `<div style="background:var(--accent);color:#fff;border-radius:10px;padding:10px 20px;text-align:center;line-height:1.1"><div style="font-size:11px;opacity:0.85">ЯЧЕЙКА</div><div style="font-size:26px;font-weight:800">${pi.cell}</div></div>` : ''}
         <button class="btn btn-ghost" onclick="exitAssemblyMode()">✕ Завершить режим</button>
       </div>
       <table style="margin-bottom:20px">
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Артикул</td><td class="mono">${escapeHtml(order.article)}</td></tr>
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Штрихкод</td><td class="mono">${order.barcode||'—'}</td></tr>
         ${pi.color?`<tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Цвет</td><td>${escapeHtml(pi.color)}</td></tr>`:''}
+        <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Ячейка</td><td style="font-weight:700">${pi.cell||'не назначена'}</td></tr>
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Размер</td><td>${order.size||'—'}</td></tr>
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Клиент</td><td>${escapeHtml(order.clientName)}</td></tr>
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Заказ №</td><td class="mono">${order.orderId}</td></tr>
@@ -3166,6 +3187,7 @@ function renderAssemblyModeStepContent(order, requiresKiz){
       <div style="display:flex;gap:8px">
         <button class="btn btn-accent" onclick="wizardNextOrder()">Следующий заказ →</button>
         <button class="btn btn-ghost" onclick="wizardSkipOrder()">Пропустить</button>
+        <button class="btn btn-ghost" style="color:var(--warn)" onclick="markOrderOutOfStock(${order.orderId})">❌ Нет на складе</button>
       </div>
     </div>
   `;
@@ -3193,6 +3215,7 @@ function renderAssemblyModeStepContent(order, requiresKiz){
     }
   });
   wireWizardKizInput(order);
+  if(pi.cell) announceCell(pi.cell);
 }
 function forceShowWizardKiz(orderId){
   const order = assemblyModeQueue[assemblyModeIndex];
@@ -3260,6 +3283,31 @@ function wizardNextOrder(){
   renderAssemblyModeStep();
 }
 function wizardSkipOrder(){
+  assemblyModeIndex++;
+  renderAssemblyModeStep();
+}
+function moveFbsOrderToHolding(orderId){
+  const order = fbsOrders.find(o=>o.orderId===orderId);
+  if(!order) return;
+  toast('Переносим заказ в отдельную поставку у WB…');
+  sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'move_to_holding_supply', orderId } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    order.movedToHolding = true;
+    order.wbSupplyId = data.holdingSupplyId;
+    toast(`Заказ №${orderId} перенесён в отдельную поставку — можно закрывать основную поставку без него`);
+    sb.from('wb_orders').update({wb_supply_id:data.holdingSupplyId}).eq('order_id', orderId).then(({error})=>{ if(error) console.error(error); });
+    renderFbsBody();
+  });
+}
+function markOrderOutOfStock(orderId){
+  const order = fbsOrders.find(o=>o.orderId===orderId);
+  if(!order) return;
+  if(!confirm(`Отметить «${order.name||order.article}» (заказ №${order.orderId}) как отсутствующий на складе? Заказ останется на сборке, но будет помечен — нужно будет вручную решить, отменять его у WB или искать замену.`)) return;
+  order.outOfStock = true;
+  toast(`Отмечено: нет на складе — «${order.name||order.article}»`);
+  sb.from('wb_orders').update({out_of_stock:true}).eq('order_id', orderId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить пометку в базе'); }
+  });
   assemblyModeIndex++;
   renderAssemblyModeStep();
 }
@@ -3603,7 +3651,13 @@ function closeFbsSupply(){
 function printFbsPickList(){
   const clientId = document.getElementById('fbsClientSelect').value;
   const items = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
-    .sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
+    .map(o=>({ order:o, pi:findLocalProductInfo(o) }))
+    .sort((a,b)=>{
+      if(a.pi.cell && b.pi.cell) return a.pi.cell - b.pi.cell;
+      if(a.pi.cell) return -1;
+      if(b.pi.cell) return 1;
+      return (a.order.article||'').localeCompare(b.order.article||'') || (a.order.barcode||'').localeCompare(b.order.barcode||'');
+    });
   if(!items.length){ toast('Нет заказов на сборке'); return; }
   const client = clients.find(c=>c.id===clientId);
   const win = window.open('', '_blank');
@@ -3621,12 +3675,11 @@ function printFbsPickList(){
       @media print{ body{padding:6px} }
     </style>
     </head><body>
-      <h1>Лист сборки${client?` · ${escapeHtml(client.name)}`:' (все клиенты)'} — ${items.length} поз.</h1>
+      <h1>Лист сборки${client?` · ${escapeHtml(client.name)}`:' (все клиенты)'} — ${items.length} поз. (по маршруту ячеек)</h1>
       <table>
-        <thead><tr><th style="width:34px">№</th><th>Наименование</th><th>Цвет</th><th>Размер</th><th>Артикул</th><th>ШК</th><th>Номер заказа</th></tr></thead>
+        <thead><tr><th style="width:34px">№</th><th>Ячейка</th><th>Наименование</th><th>Цвет</th><th>Размер</th><th>Артикул</th><th>ШК</th><th>Номер заказа</th></tr></thead>
         <tbody>
-          ${items.map((it,idx)=>{
-            const pi = findLocalProductInfo(it);
+          ${items.map(({order:it,pi},idx)=>{
             const bc = it.barcode || '';
             const bcHead = bc.length>4 ? bc.slice(0,-4) : '';
             const bcTail = bc.length>4 ? bc.slice(-4) : bc;
@@ -3636,6 +3689,7 @@ function printFbsPickList(){
             return `
             <tr>
               <td>${idx+1}</td>
+              <td class="barcode-tail">${pi.cell||'—'}</td>
               <td>${escapeHtml(pi.name)}</td>
               <td>${escapeHtml(pi.color)||'—'}</td>
               <td>${escapeHtml(pi.size)||'—'}</td>
@@ -3650,6 +3704,69 @@ function printFbsPickList(){
     </body></html>
   `);
   win.document.close();
+}
+async function printAllFbsStickersToThermalPrinter(){
+  const connected = thermalPrinterDevice || await connectThermalPrinter();
+  if(!connected) return;
+
+  const clientId = document.getElementById('fbsClientSelect').value;
+  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
+    .sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
+  if(!rows.length){ toast('Нет заказов на сборке'); return; }
+
+  const groups = {};
+  rows.forEach(o=>{
+    const key = (o.barcode || o.article || String(o.orderId));
+    if(!groups[key]){
+      const pi = findLocalProductInfo(o);
+      groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:o.barcode, color:pi.color, orders:[] };
+    }
+    groups[key].orders.push(o);
+  });
+  const groupList = Object.values(groups).sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
+
+  const byClient = {};
+  rows.forEach(o=>{ (byClient[o.clientId] = byClient[o.clientId] || []).push(o); });
+  toast(`Запрашиваем этикетки у WB для ${rows.length} заказ(ов)…`);
+  const calls = Object.entries(byClient).map(([cid, orders])=>
+    sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action:'get_sticker', orderIds: orders.map(o=>o.orderId) } })
+      .then(({data, error})=>({ orders, data, error }))
+  );
+  const results = await Promise.all(calls);
+  const stickerByOrderId = {};
+  let hadError = false;
+  results.forEach(({orders, data, error})=>{
+    if(error || (data && data.error)){ hadError = true; console.error(error||(data&&data.error)); return; }
+    const stickers = data.stickers || [];
+    orders.forEach((o, idx)=>{ if(stickers[idx] && stickers[idx].file) stickerByOrderId[o.orderId] = stickers[idx].file; });
+  });
+
+  toast(`Печатаем на принтере: ${groupList.length} карточек товара…`);
+  for(const g of groupList){
+    const infoHtml = `
+      <div style="padding:8px;box-sizing:border-box">
+        <div style="font-size:20pt;font-weight:bold;margin-bottom:4px">${g.orders.length} шт.</div>
+        <div style="font-size:13pt;font-weight:bold;margin-bottom:6px;line-height:1.2">${escapeHtml(g.name||g.article)}</div>
+        <table style="font-size:10pt;width:100%">
+          ${g.color?`<tr><td style="color:#555;padding-right:6px">Цвет</td><td style="font-weight:bold">${escapeHtml(g.color)}</td></tr>`:''}
+          ${g.size?`<tr><td style="color:#555;padding-right:6px">Размер</td><td style="font-weight:bold">${escapeHtml(g.size)}</td></tr>`:''}
+          <tr><td style="color:#555;padding-right:6px">Артикул</td><td style="font-weight:bold">${escapeHtml(g.article||'')}</td></tr>
+          <tr><td style="color:#555;padding-right:6px">ШК</td><td style="font-weight:bold">${g.barcode||'—'}</td></tr>
+          <tr><td style="color:#555;padding-right:6px">Заказов</td><td style="font-weight:bold">${g.orders.length}</td></tr>
+        </table>
+      </div>
+    `;
+    const bitmapInfo = await htmlToMonoBitmap(infoHtml, 58, 40);
+    const ok1 = await printBitmapOnThermalPrinter(58, 40, bitmapInfo);
+    if(!ok1){ toast('Печать остановлена — проблема с принтером'); return; }
+    for(const o of g.orders){
+      const file = stickerByOrderId[o.orderId];
+      if(!file) continue;
+      const ok2 = await printSvgOnThermalPrinter(file, 58, 40);
+      if(!ok2){ toast('Печать остановлена — проблема с принтером'); return; }
+    }
+  }
+  toast(`Готово: напечатано на принтере ${groupList.length} карточек товара${hadError?' (у части клиентов была ошибка получения этикеток)':''}`);
 }
 function printAllFbsStickers(){
   const clientId = document.getElementById('fbsClientSelect').value;
@@ -3736,13 +3853,131 @@ function findLocalProductInfo(order){
   return {
     name: (item && item.name) || order.name || order.article || '',
     color: (item && item.color) || '',
-    size: order.size || (item && item.size) || ''
+    size: order.size || (item && item.size) || '',
+    cell: (item && item.cell) || null
   };
 }
 function findLocalColor(order){
   const item = order.barcode ? inventory.find(i=>i.barcode===order.barcode && i.client===order.clientName) : null;
   return item ? (item.color || '') : '';
 }
+
+// ---------- Печать на локальный USB термопринтер (TSPL2, напр. Xprinter XP-420B) ----------
+let thermalPrinterDevice = null;
+let thermalPrinterEndpoint = null;
+async function connectThermalPrinter(){
+  if(!navigator.usb){ toast('Этот браузер не поддерживает прямую печать на USB (WebUSB) — нужен Chrome, Edge или Яндекс.Браузер'); return false; }
+  try{
+    const device = await navigator.usb.requestDevice({
+      filters: [{ vendorId: 0x2d84 }, { vendorId: 0x2d37 }]
+    });
+    await device.open();
+    if(device.configuration === null) await device.selectConfiguration(1);
+    let claimedInterface = null, outEndpoint = null;
+    for(const iface of device.configuration.interfaces){
+      for(const alt of iface.alternates){
+        const out = alt.endpoints.find(e=>e.direction==='out');
+        if(out){ claimedInterface = iface.interfaceNumber; outEndpoint = out.endpointNumber; break; }
+      }
+      if(claimedInterface !== null) break;
+    }
+    if(claimedInterface === null){ toast('Не нашли канал передачи данных у этого устройства — возможно, это не тот принтер'); return false; }
+    await device.claimInterface(claimedInterface);
+    thermalPrinterDevice = device;
+    thermalPrinterEndpoint = outEndpoint;
+    toast('Принтер подключён: ' + (device.productName || 'USB-принтер'));
+    return true;
+  }catch(e){
+    if(e.name==='NotFoundError'){ toast('Устройство не выбрано'); return false; }
+    toast('Не удалось подключить принтер: ' + e.message);
+    return false;
+  }
+}
+async function sendRawToPrinter(bytes){
+  if(!thermalPrinterDevice){
+    const ok = await connectThermalPrinter();
+    if(!ok) return false;
+  }
+  try{
+    await thermalPrinterDevice.transferOut(thermalPrinterEndpoint, bytes);
+    return true;
+  }catch(e){
+    toast('Ошибка при отправке на принтер: ' + e.message + ' — попробуйте подключить принтер заново');
+    thermalPrinterDevice = null;
+    return false;
+  }
+}
+// Рендерит DOM-узел (например, HTML-разметку этикетки) в чёрно-белый растр под 203 DPI
+async function htmlToMonoBitmap(html, widthMm, heightMm){
+  const dpi = 203;
+  const widthPx = Math.round(widthMm / 25.4 * dpi);
+  const heightPx = Math.round(heightMm / 25.4 * dpi);
+  const svgWrapped = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${heightPx}">
+      <foreignObject width="100%" height="100%">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="width:${widthPx}px;height:${heightPx}px;background:#fff;font-family:Arial,sans-serif;box-sizing:border-box">${html}</div>
+      </foreignObject>
+    </svg>
+  `;
+  const svgBase64 = btoa(unescape(encodeURIComponent(svgWrapped)));
+  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', widthPx, heightPx);
+}
+async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx){
+  const img = new Image();
+  await new Promise((resolve, reject)=>{
+    img.onload = resolve;
+    img.onerror = reject;
+    img.src = `data:${mime};base64,${base64}`;
+  });
+  const canvas = document.createElement('canvas');
+  canvas.width = widthPx;
+  canvas.height = heightPx;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, widthPx, heightPx);
+  ctx.drawImage(img, 0, 0, widthPx, heightPx);
+  const imageData = ctx.getImageData(0, 0, widthPx, heightPx);
+  const bytesPerRow = Math.ceil(widthPx / 8);
+  const bitmap = new Uint8Array(bytesPerRow * heightPx);
+  for(let y=0; y<heightPx; y++){
+    for(let x=0; x<widthPx; x++){
+      const idx = (y*widthPx + x) * 4;
+      const alpha = imageData.data[idx+3];
+      const gray = (imageData.data[idx] + imageData.data[idx+1] + imageData.data[idx+2]) / 3;
+      const isBlack = alpha > 40 && gray < 180;
+      if(isBlack){
+        const byteIndex = y*bytesPerRow + Math.floor(x/8);
+        const bitIndex = 7 - (x % 8);
+        bitmap[byteIndex] |= (1 << bitIndex);
+      }
+    }
+  }
+  return { bitmap, widthPx, heightPx, bytesPerRow };
+}
+async function printBitmapOnThermalPrinter(widthMm, heightMm, bitmapInfo){
+  const { bitmap, heightPx, bytesPerRow } = bitmapInfo;
+  const encoder = new TextEncoder();
+  const header = encoder.encode(
+    `SIZE ${widthMm} mm, ${heightMm} mm\r\n` +
+    `GAP 2 mm, 0 mm\r\n` +
+    `CLS\r\n` +
+    `BITMAP 0,0,${bytesPerRow},${heightPx},0,`
+  );
+  const footer = encoder.encode(`\r\nPRINT 1\r\n`);
+  const fullData = new Uint8Array(header.length + bitmap.length + footer.length);
+  fullData.set(header, 0);
+  fullData.set(bitmap, header.length);
+  fullData.set(footer, header.length + bitmap.length);
+  return sendRawToPrinter(fullData);
+}
+async function printSvgOnThermalPrinter(svgBase64, widthMm, heightMm){
+  const dpi = 203;
+  const widthPx = Math.round(widthMm / 25.4 * dpi);
+  const heightPx = Math.round(heightMm / 25.4 * dpi);
+  const bitmapInfo = await imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', widthPx, heightPx);
+  return printBitmapOnThermalPrinter(widthMm, heightMm, bitmapInfo);
+}
+
 function printFbsSticker(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
   if(!order) return;
@@ -3795,7 +4030,7 @@ async function loadFbsOrders(){
     orderId:o.order_id, clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
-    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null
+    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, outOfStock:o.out_of_stock||false
   }));
 }
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fetchNewFbsOrders(true); });
