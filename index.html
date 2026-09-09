@@ -1265,8 +1265,9 @@ function renderInventory(){
             </div>
             <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);cursor:pointer;align-self:flex-end;padding-bottom:8px">
               <input type="checkbox" id="editRequiresKiz-${escapeHtml(key)}" ${i.requiresKiz?'checked':''}>
-              Требует КИЗ (Честный Знак) на WB
+              Требует КИЗ (Честный Знак)
             </label>
+            <a href="https://xn--80ajghhoc2aj1c8b.xn--p1ai/business/projects/" target="_blank" rel="noopener" style="font-size:11px;color:var(--accent);align-self:flex-end;padding-bottom:10px;white-space:nowrap">проверить категорию →</a>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
             <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Кол-во</div><input class="search" type="number" min="0" style="width:90px" id="editQty-${escapeHtml(key)}" value="${i.qty}"></div>
@@ -3218,8 +3219,8 @@ function renderAssemblyModeStepContent(order, requiresKiz){
           <input class="search mono" id="wizardKizInput" placeholder="Отсканируйте КИЗ этой единицы…" style="width:100%;max-width:420px;margin-bottom:6px" autocomplete="off" disabled>
           <div id="wizardKizStatus" style="font-size:12px;margin-bottom:14px">${renderKizStatusLabel(order)}</div>
         ` : `
-          <p style="font-size:12px;color:var(--ink-faint);margin-bottom:10px">WB не подтвердил, что этому заказу нужен КИЗ. Если вы точно знаете, что нужен — добавьте поле вручную:</p>
-          <button class="btn btn-ghost" style="margin-bottom:14px" onclick="forceShowWizardKiz(${order.orderId})">+ Этому товару всё же нужен КИЗ</button>
+          <p style="font-size:12px;color:var(--ink-faint);margin-bottom:6px">По этому товару пока не отмечено, что нужна маркировка. Это решаете вы как продавец — сверьтесь с <a href="https://xn--80ajghhoc2aj1c8b.xn--p1ai/business/projects/" target="_blank" rel="noopener" style="color:var(--accent)">официальным перечнем категорий Честного Знака</a>, если не уверены.</p>
+          <button class="btn btn-ghost" style="margin-bottom:14px" onclick="forceShowWizardKiz(${order.orderId})">+ Этому товару нужен КИЗ</button>
         `}
       </div>
       <div style="display:flex;gap:8px">
