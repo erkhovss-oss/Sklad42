@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ТелеПак — прототип</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -881,6 +882,7 @@ function hasFullWarehouseAccess(){ return !myWarehouseId(); }
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
 let assemblyModeQueue = [];
+let expandedFbsSupplyIds = {};
 let assemblyModeIndex = 0;
 let fbsTrbxes = [];
 let fbsTrbxLoadedFor = '';
@@ -1008,6 +1010,7 @@ function undoLastScan(){
 }
 
 const MIN_KIZ_LENGTH = 20;
+const NEXT_ORDER_QR_CODE = 'ТЕЛЕПАК-СЛЕДУЮЩИЙ-ЗАКАЗ';
 const US_LAYOUT_MAP = {
   Digit0:['0',')'], Digit1:['1','!'], Digit2:['2','@'], Digit3:['3','#'], Digit4:['4','$'],
   Digit5:['5','%'], Digit6:['6','^'], Digit7:['7','&'], Digit8:['8','*'], Digit9:['9','('],
@@ -3020,6 +3023,53 @@ async function fetchNewFbsOrders(silent){
   if(!silent) toast(`Проверено — новых заказов: ${totalFetched}`);
   if(assemblyModeQueue.length === 0) renderFbsBody();
 }
+function renderFbsGroupedBySupply(rows, clientId, isDelivered){
+  if(!rows.length) return '';
+  const groups = {};
+  const order = [];
+  rows.forEach(o=>{
+    const key = o.wbSupplyId || '__none__';
+    if(!groups[key]){ groups[key] = { supplyId: o.wbSupplyId, clientName: o.clientName, orders: [] }; order.push(key); }
+    groups[key].orders.push(o);
+  });
+  return `<div>${order.map(key=>{
+    const g = groups[key];
+    const isExpanded = !!expandedFbsSupplyIds[key];
+    const missingKizInGroup = g.orders.filter(o=>o.requiresKiz && o.kizStatus!=='attached').length;
+    const outOfStockInGroup = g.orders.filter(o=>o.outOfStock).length;
+    return `
+      <div class="panel" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer" onclick="toggleFbsSupplyGroup('${escapeHtml(key)}')">
+          <div>
+            <div style="font-weight:600;font-size:14px">${g.supplyId ? 'Поставка ' + escapeHtml(g.supplyId) : 'Без номера поставки'}${!clientId?` · ${escapeHtml(g.clientName)}`:''}</div>
+            <div style="font-size:12px;color:var(--ink-faint)">${g.orders.length} заказ(ов)${missingKizInGroup?` · ⚠ КИЗ не привязан: ${missingKizInGroup}`:''}${outOfStockInGroup?` · ❌ нет на складе: ${outOfStockInGroup}`:''}</div>
+          </div>
+          <span style="font-size:18px;color:var(--ink-faint)">${isExpanded?'▾':'▸'}</span>
+        </div>
+        ${isExpanded ? `
+          <div style="border-top:1px solid var(--line)">
+            ${g.orders.map(o=>`
+              <div class="pick-row">
+                <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${isDelivered?'':renderKizStatusLabel(o)}</div></div>
+                ${isDelivered
+                  ? `<span class="status shipped">В доставке</span>`
+                  : `<div style="display:flex;gap:6px;align-items:center">
+                      ${clientId ? renderTrbxAssignControl(o) : ''}
+                      <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
+                    </div>`
+                }
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }).join('')}</div>`;
+}
+function toggleFbsSupplyGroup(key){
+  expandedFbsSupplyIds[key] = !expandedFbsSupplyIds[key];
+  renderFbsBody();
+}
 function renderFbsBody(){
   const clientId = document.getElementById('fbsClientSelect') ? document.getElementById('fbsClientSelect').value : '';
   const body = document.getElementById('fbsBody');
@@ -3096,27 +3146,14 @@ function renderFbsBody(){
         </div>
       </div>` : ''}
       ${clientId ? `<div id="fbsTrbxPanel"></div>` : `<p style="font-size:12px;color:var(--ink-faint);margin-bottom:14px">Выберите конкретного клиента, чтобы работать с коробами поставки (короба WB привязаны к одному продавцу).</p>`}
-      <div class="panel">${rows.map(o=>`
-        <div class="pick-row">
-          <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${renderKizStatusLabel(o)}</div></div>
-          <div style="display:flex;gap:6px;align-items:center">
-            ${clientId ? renderTrbxAssignControl(o) : ''}
-            <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
-          </div>
-        </div>
-      `).join('')}</div>
+      ${renderFbsGroupedBySupply(rows, clientId)}
     `;
     if(clientId){
       if(fbsTrbxLoadedFor !== clientId) loadFbsTrbxes(clientId);
       else renderFbsTrbxPanel(clientId);
     }
   } else {
-    body.innerHTML = `<div class="panel">${rows.map(o=>`
-      <div class="pick-row">
-        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))} · поставка ${o.wbSupplyId||'—'}</div></div>
-        <span class="status shipped">В доставке</span>
-      </div>
-    `).join('')}</div>`;
+    body.innerHTML = renderFbsGroupedBySupply(rows, clientId, true);
   }
 }
 function startAssemblyMode(){
@@ -3161,6 +3198,7 @@ function renderAssemblyModeStepContent(order, requiresKiz){
           <h2 style="margin:6px 0 0 0">${escapeHtml(pi.name)}${pi.color?` · ${escapeHtml(pi.color)}`:''}${order.size?` · ${order.size}`:''}</h2>
         </div>
         ${pi.cell ? `<div style="background:var(--accent);color:#fff;border-radius:10px;padding:10px 20px;text-align:center;line-height:1.1"><div style="font-size:11px;opacity:0.85">ЯЧЕЙКА</div><div style="font-size:26px;font-weight:800">${pi.cell}</div></div>` : ''}
+        <button class="btn btn-ghost" onclick="printNextOrderQrCard()">🖨 QR «Следующий»</button>
         <button class="btn btn-ghost" onclick="exitAssemblyMode()">✕ Завершить режим</button>
       </div>
       <table style="margin-bottom:20px">
@@ -3190,6 +3228,10 @@ function renderAssemblyModeStepContent(order, requiresKiz){
         <button class="btn btn-ghost" style="color:var(--warn)" onclick="markOrderOutOfStock(${order.orderId})">❌ Нет на складе</button>
       </div>
     </div>
+    <div style="position:fixed;bottom:16px;right:16px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,0.1);z-index:50">
+      <div id="fixedNextOrderQr"></div>
+      <div style="font-size:10px;color:var(--ink-faint);margin-top:4px;max-width:100px">скан = следующий заказ</div>
+    </div>
   `;
   const bcInput = document.getElementById('wizardBarcodeInput');
   bcInput.focus();
@@ -3198,6 +3240,7 @@ function renderAssemblyModeStepContent(order, requiresKiz){
     const code = bcInput.value.trim();
     bcInput.value='';
     if(!code) return;
+    if(code===NEXT_ORDER_QR_CODE){ wizardNextOrder(); return; }
     if(order.barcode && code!==order.barcode){
       playBeep('error');
       toast('Штрихкод не совпадает с товаром этого заказа');
@@ -3216,6 +3259,40 @@ function renderAssemblyModeStepContent(order, requiresKiz){
   });
   wireWizardKizInput(order);
   if(pi.cell) announceCell(pi.cell);
+  renderFixedNextOrderQr();
+}
+function renderFixedNextOrderQr(){
+  const holder = document.getElementById('fixedNextOrderQr');
+  if(!holder || holder.dataset.rendered) return;
+  holder.dataset.rendered = '1';
+  new QRCode(holder, {text: NEXT_ORDER_QR_CODE, width:90, height:90});
+}
+function printNextOrderQrCard(){
+  const win = window.open('', '_blank');
+  if(!win){ toast('Браузер заблокировал открытие окна'); return; }
+  win.document.write(`
+    <html><head><title>QR «Следующий заказ»</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
+    <style>
+      body{font-family:Arial,sans-serif;margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh}
+      .card{border:2px solid #333;border-radius:12px;padding:20px 30px;text-align:center}
+      h1{font-size:16px;margin:0 0 14px 0}
+      .qr-wrap{display:flex;justify-content:center;margin-bottom:10px}
+      p{font-size:11px;color:#666;margin:0;max-width:220px}
+    </style>
+    </head><body>
+      <div class="card">
+        <h1>Следующий заказ →</h1>
+        <div class="qr-wrap" id="qr"></div>
+        <p>Отсканируйте этот QR сканером в режиме сборки — вместо штрихкода или КИЗ, чтобы перейти к следующему заказу</p>
+      </div>
+      <script>
+        new QRCode(document.getElementById('qr'), {text: ${JSON.stringify(NEXT_ORDER_QR_CODE)}, width:180, height:180});
+        window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };
+      <\/script>
+    </body></html>
+  `);
+  win.document.close();
 }
 function forceShowWizardKiz(orderId){
   const order = assemblyModeQueue[assemblyModeIndex];
@@ -3240,6 +3317,7 @@ function wireWizardKizInput(order){
     const kizCode = kizInput.value.trim();
     kizInput.value='';
     if(!kizCode) return;
+    if(kizCode===NEXT_ORDER_QR_CODE){ wizardNextOrder(); return; }
     if(kizCode.length < MIN_KIZ_LENGTH){
       playBeep('error');
       toast(`Код слишком короткий (${kizCode.length} симв.) — отсканируйте ещё раз`);
