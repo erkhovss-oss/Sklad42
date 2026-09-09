@@ -544,7 +544,8 @@
     <div class="nav-item" data-tab="dds"><span class="num">07</span>ДДС</div>
     <div class="nav-item" data-tab="stocktake"><span class="num">08</span>Инвентаризация</div>
     <div class="nav-item" data-tab="warehouses"><span class="num">09</span>Склады</div>
-    <div class="nav-item" data-tab="employees"><span class="num">10</span>Сотрудники</div>
+    <div class="nav-item" data-tab="consumables"><span class="num">10</span>Расходники</div>
+    <div class="nav-item" data-tab="employees"><span class="num">11</span>Сотрудники</div>
     <div class="sidebar-foot" id="sidebarFoot">ТелеПак · WMS</div>
   </div>
 
@@ -787,6 +788,34 @@
         <div id="stocktakeListWrap"></div>
       </section>
 
+      <!-- CONSUMABLES -->
+      <section class="section" id="tab-consumables">
+        <div class="page-head">
+          <div>
+            <h1>Расходники</h1>
+            <p>Упаковочные материалы склада — пакеты, скотч, короба, этикетки. Не путать с товарами клиентов.</p>
+          </div>
+        </div>
+        <div class="panel" style="padding:20px;margin-bottom:18px">
+          <div class="eyebrow" style="margin-bottom:10px">Новый расходник</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <input class="search" id="newConsumableName" placeholder="Название, напр. Скотч 48мм" style="flex:1;min-width:180px">
+            <select class="search" id="newConsumableUnit" style="width:130px">
+              <option value="шт">шт</option>
+              <option value="рулон">рулон</option>
+              <option value="упаковка">упаковка</option>
+              <option value="метр">метр</option>
+              <option value="кг">кг</option>
+            </select>
+            <input class="search" id="newConsumableQty" type="number" min="0" value="0" placeholder="Кол-во" style="width:110px">
+            <input class="search" id="newConsumableMin" type="number" min="0" value="0" placeholder="Мин. остаток" style="width:120px">
+            <select class="search" id="newConsumableWarehouse" style="width:160px"></select>
+            <button class="btn btn-primary" onclick="createConsumable()">+ Добавить</button>
+          </div>
+        </div>
+        <div id="consumablesListWrap"></div>
+      </section>
+
       <!-- EMPLOYEES -->
       <section class="section" id="tab-employees">
         <div class="page-head">
@@ -882,6 +911,7 @@ function hasFullWarehouseAccess(){ return !myWarehouseId(); }
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
 let assemblyModeQueue = [];
+let consumables = [];
 let expandedFbsSupplyIds = {};
 let assemblyModeIndex = 0;
 let fbsTrbxes = [];
@@ -1119,6 +1149,7 @@ function switchTab(tab){
   if(tab==='dds') renderDds();
   if(tab==='stocktake') renderStocktakeList();
   if(tab==='warehouses') renderWarehouses();
+  if(tab==='consumables') renderConsumables();
   if(tab==='employees') renderEmployeesTab();
   try{ localStorage.setItem('sklad42_active_tab', tab); }catch(e){}
 }
@@ -4867,6 +4898,108 @@ function warehouseName(id){
   return w ? w.name : 'Основной склад';
 }
 
+// ---------- CONSUMABLES (расходные материалы склада) ----------
+async function loadConsumables(){
+  const { data, error } = await sb.from('consumables').select('*').order('name').limit(2000);
+  if(error){ console.error(error); return; }
+  consumables = data.map(c=>({id:c.id, name:c.name, unit:c.unit, qty:Number(c.qty), minThreshold:Number(c.min_threshold), warehouseId:c.warehouse_id||'MAIN'}));
+}
+function renderConsumables(){
+  const whSelect = document.getElementById('newConsumableWarehouse');
+  if(hasFullWarehouseAccess()){
+    whSelect.innerHTML = warehouses.map(w=>`<option value="${w.id}">${escapeHtml(w.name)}</option>`).join('');
+    whSelect.disabled = false;
+  } else {
+    whSelect.innerHTML = `<option value="${myWarehouseId()}">${escapeHtml(warehouseName(myWarehouseId()))}</option>`;
+    whSelect.disabled = true;
+  }
+  const visible = hasFullWarehouseAccess() ? consumables : consumables.filter(c=>c.warehouseId===myWarehouseId());
+  const wrap = document.getElementById('consumablesListWrap');
+  if(!visible.length){ wrap.innerHTML = `<div class="panel empty">Расходников пока нет</div>`; return; }
+  const lowCount = visible.filter(c=>c.qty<=c.minThreshold && c.minThreshold>0).length;
+  wrap.innerHTML = `
+    ${lowCount ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;background:var(--warn-bg);color:var(--warn);font-size:13px;font-weight:600">⚠ Заканчивается: ${lowCount} позиц(ий) — пора заказать</div>` : ''}
+    <div class="panel">
+      <table class="card-table">
+        <thead><tr><th>Название</th><th>Склад</th><th>Остаток</th><th>Мин. остаток</th><th></th></tr></thead>
+        <tbody>
+          ${visible.map(c=>{
+            const low = c.qty<=c.minThreshold && c.minThreshold>0;
+            return `
+            <tr>
+              <td data-label="Название">${escapeHtml(c.name)}</td>
+              <td data-label="Склад">${escapeHtml(warehouseName(c.warehouseId))}</td>
+              <td data-label="Остаток" style="${low?'color:var(--warn);font-weight:700':''}">${c.qty} ${escapeHtml(c.unit)}${low?' ⚠':''}</td>
+              <td data-label="Мин. остаток">${c.minThreshold} ${escapeHtml(c.unit)}</td>
+              <td style="text-align:right;white-space:nowrap">
+                <button class="btn btn-ghost" style="padding:4px 8px" onclick="adjustConsumableQty('${c.id}', -1)">−</button>
+                <button class="btn btn-ghost" style="padding:4px 8px" onclick="adjustConsumableQty('${c.id}', 1)">+</button>
+                <button class="btn btn-ghost" style="padding:4px 10px" onclick="openAdjustConsumableModal('${c.id}')">Списать/Пополнить…</button>
+                <button class="btn btn-ghost" style="padding:4px 10px;color:var(--warn)" onclick="deleteConsumable('${c.id}')">Удалить</button>
+              </td>
+            </tr>
+          `;}).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+function createConsumable(){
+  const name = document.getElementById('newConsumableName').value.trim();
+  const unit = document.getElementById('newConsumableUnit').value;
+  const qty = Math.max(0, parseFloat(document.getElementById('newConsumableQty').value) || 0);
+  const minThreshold = Math.max(0, parseFloat(document.getElementById('newConsumableMin').value) || 0);
+  const warehouseId = document.getElementById('newConsumableWarehouse').value || 'MAIN';
+  if(!name){ toast('Укажите название'); return; }
+  const id = 'CONS-' + Date.now();
+  consumables.push({id, name, unit, qty, minThreshold, warehouseId});
+  document.getElementById('newConsumableName').value = '';
+  document.getElementById('newConsumableQty').value = '0';
+  document.getElementById('newConsumableMin').value = '0';
+  toast(`«${name}» добавлен`);
+  renderConsumables();
+  sb.from('consumables').insert({id, name, unit, qty, min_threshold:minThreshold, warehouse_id:warehouseId}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
+  });
+}
+function adjustConsumableQty(id, delta, reason){
+  const c = consumables.find(x=>x.id===id);
+  if(!c) return;
+  const newQty = Math.max(0, c.qty + delta);
+  const actualDelta = newQty - c.qty;
+  c.qty = newQty;
+  renderConsumables();
+  sb.from('consumables').update({qty:newQty}).eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
+  });
+  if(actualDelta !== 0){
+    sb.from('consumable_movement_log').insert({consumable_id:id, consumable_name:c.name, delta:actualDelta, reason: reason || 'Вручную'}).then(({error})=>{
+      if(error) console.error(error);
+    });
+  }
+}
+function openAdjustConsumableModal(id){
+  const c = consumables.find(x=>x.id===id);
+  if(!c) return;
+  const input = prompt(`Текущий остаток «${c.name}»: ${c.qty} ${c.unit}.\nВведите изменение: положительное число — пополнить, отрицательное — списать (например: -50 или 200)`, '');
+  if(input===null) return;
+  const delta = parseFloat(input);
+  if(isNaN(delta) || delta===0){ toast('Введите ненулевое число'); return; }
+  const reasonInput = prompt('Комментарий (необязательно):', delta>0 ? 'Пополнение' : 'Списание') || (delta>0 ? 'Пополнение' : 'Списание');
+  adjustConsumableQty(id, delta, reasonInput);
+}
+function deleteConsumable(id){
+  const c = consumables.find(x=>x.id===id);
+  if(!c) return;
+  if(!confirm(`Удалить «${c.name}» из расходников?`)) return;
+  consumables = consumables.filter(x=>x.id!==id);
+  toast('Расходник удалён');
+  renderConsumables();
+  sb.from('consumables').delete().eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить в базе'); }
+  });
+}
+
 // ---------- COMPANY SETTINGS (реквизиты исполнителя) ----------
 async function loadCompanySettings(){
   const { data, error } = await sb.from('company_settings').select('*').eq('id','main').maybeSingle();
@@ -6588,7 +6721,7 @@ async function initApp(){
     return;
   }
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes()]);
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes(), loadConsumables()]);
   }catch(err){
     console.error(err);
   }
