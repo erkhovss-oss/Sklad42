@@ -3055,7 +3055,7 @@ function renderFbsBody(){
       <div class="panel">${rows.map(o=>`
       <div class="pick-row">
         <input type="checkbox" ${fbsSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsSelected(${o.orderId}, this.checked)">
-        <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}${o.wbWarehouseId ? renderFbsWarehouseBadge(o) : ' · <span style="color:var(--ink-faint)">склад не определён</span>'}</div></div>
+        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}${o.wbWarehouseId ? renderFbsWarehouseBadge(o) : ' · <span style="color:var(--ink-faint)">склад не определён</span>'}</div></div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-accent" style="padding:6px 12px" onclick="startAssembleOrder(${o.orderId})">Собрать</button>
           <button class="btn btn-ghost" style="padding:6px 12px" onclick="hideFbsOrder(${o.orderId})" title="Убрать только у нас, у WB заказ останется как есть">Скрыть</button>
@@ -3079,7 +3079,7 @@ function renderFbsBody(){
       ${clientId ? `<div id="fbsTrbxPanel"></div>` : `<p style="font-size:12px;color:var(--ink-faint);margin-bottom:14px">Выберите конкретного клиента, чтобы работать с коробами поставки (короба WB привязаны к одному продавцу).</p>`}
       <div class="panel">${rows.map(o=>`
         <div class="pick-row">
-          <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${renderKizStatusLabel(o)}</div></div>
+          <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${renderKizStatusLabel(o)}</div></div>
           <div style="display:flex;gap:6px;align-items:center">
             ${clientId ? renderTrbxAssignControl(o) : ''}
             <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
@@ -3094,7 +3094,7 @@ function renderFbsBody(){
   } else {
     body.innerHTML = `<div class="panel">${rows.map(o=>`
       <div class="pick-row">
-        <div><div class="sku-name">${o.name||o.article}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId} · поставка ${o.wbSupplyId||'—'}</div></div>
+        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId} · поставка ${o.wbSupplyId||'—'}</div></div>
         <span class="status shipped">В доставке</span>
       </div>
     `).join('')}</div>`;
@@ -3133,18 +3133,20 @@ function renderAssemblyModeStep(){
 }
 function renderAssemblyModeStepContent(order, requiresKiz){
   const body = document.getElementById('fbsBody');
+  const pi = findLocalProductInfo(order);
   body.innerHTML = `
     <div class="panel" style="padding:24px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:10px">
         <div>
           <div class="eyebrow">Режим сборки · заказ ${assemblyModeIndex+1} из ${assemblyModeQueue.length}</div>
-          <h2 style="margin:6px 0 0 0">${order.name||order.article}${order.size?` · ${order.size}`:''}</h2>
+          <h2 style="margin:6px 0 0 0">${escapeHtml(pi.name)}${pi.color?` · ${escapeHtml(pi.color)}`:''}${order.size?` · ${order.size}`:''}</h2>
         </div>
         <button class="btn btn-ghost" onclick="exitAssemblyMode()">✕ Завершить режим</button>
       </div>
       <table style="margin-bottom:20px">
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Артикул</td><td class="mono">${escapeHtml(order.article)}</td></tr>
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Штрихкод</td><td class="mono">${order.barcode||'—'}</td></tr>
+        ${pi.color?`<tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Цвет</td><td>${escapeHtml(pi.color)}</td></tr>`:''}
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Размер</td><td>${order.size||'—'}</td></tr>
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Клиент</td><td>${escapeHtml(order.clientName)}</td></tr>
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Заказ №</td><td class="mono">${order.orderId}</td></tr>
@@ -3621,9 +3623,10 @@ function printFbsPickList(){
     </head><body>
       <h1>Лист сборки${client?` · ${escapeHtml(client.name)}`:' (все клиенты)'} — ${items.length} поз.</h1>
       <table>
-        <thead><tr><th style="width:34px">№</th><th>Наименование</th><th>Артикул</th><th>ШК</th><th>Номер заказа</th></tr></thead>
+        <thead><tr><th style="width:34px">№</th><th>Наименование</th><th>Цвет</th><th>Размер</th><th>Артикул</th><th>ШК</th><th>Номер заказа</th></tr></thead>
         <tbody>
           ${items.map((it,idx)=>{
+            const pi = findLocalProductInfo(it);
             const bc = it.barcode || '';
             const bcHead = bc.length>4 ? bc.slice(0,-4) : '';
             const bcTail = bc.length>4 ? bc.slice(-4) : bc;
@@ -3633,7 +3636,9 @@ function printFbsPickList(){
             return `
             <tr>
               <td>${idx+1}</td>
-              <td>${escapeHtml(it.name||'')}${it.size?` · ${escapeHtml(it.size)}`:''}</td>
+              <td>${escapeHtml(pi.name)}</td>
+              <td>${escapeHtml(pi.color)||'—'}</td>
+              <td>${escapeHtml(pi.size)||'—'}</td>
               <td class="mono">${escapeHtml(it.article||'')}</td>
               <td class="mono">${escapeHtml(bcHead)}<span class="barcode-tail">${escapeHtml(bcTail)}</span></td>
               <td class="mono">${escapeHtml(oidHead)}<span class="barcode-tail">${escapeHtml(oidTail)}</span></td>
@@ -3655,7 +3660,10 @@ function printAllFbsStickers(){
   const groups = {};
   rows.forEach(o=>{
     const key = (o.barcode || o.article || String(o.orderId));
-    if(!groups[key]) groups[key] = { name:o.name, article:o.article, size:o.size, barcode:o.barcode, color:findLocalColor(o), orders:[] };
+    if(!groups[key]){
+      const pi = findLocalProductInfo(o);
+      groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:o.barcode, color:pi.color, orders:[] };
+    }
     groups[key].orders.push(o);
   });
   const groupList = Object.values(groups).sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
@@ -3723,6 +3731,14 @@ function printAllFbsStickers(){
     toast(`Готово: ${groupList.length} карточек товара, ${orderedStickers.length} QR-стикеров${hadError?' (у части клиентов была ошибка получения)':''}`);
   });
 }
+function findLocalProductInfo(order){
+  const item = order.barcode ? inventory.find(i=>i.barcode===order.barcode && i.client===order.clientName) : null;
+  return {
+    name: (item && item.name) || order.name || order.article || '',
+    color: (item && item.color) || '',
+    size: order.size || (item && item.size) || ''
+  };
+}
 function findLocalColor(order){
   const item = order.barcode ? inventory.find(i=>i.barcode===order.barcode && i.client===order.clientName) : null;
   return item ? (item.color || '') : '';
@@ -3730,7 +3746,7 @@ function findLocalColor(order){
 function printFbsSticker(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
   if(!order) return;
-  const color = findLocalColor(order);
+  const pi = findLocalProductInfo(order);
   toast('Запрашиваем этикетку у WB…');
   sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'get_sticker', orderId } }).then(({data, error})=>{
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
@@ -3757,10 +3773,10 @@ function printFbsSticker(orderId){
       </head><body>
         <div class="info-label">
           <div class="qty">1 шт.</div>
-          <div class="name">${escapeHtml(order.name||order.article)}</div>
+          <div class="name">${escapeHtml(pi.name)}</div>
           <table>
-            ${color?`<tr><td class="label-cell">Цвет</td><td class="value-cell">${escapeHtml(color)}</td></tr>`:''}
-            ${order.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(order.size)}</td></tr>`:''}
+            ${pi.color?`<tr><td class="label-cell">Цвет</td><td class="value-cell">${escapeHtml(pi.color)}</td></tr>`:''}
+            ${pi.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(pi.size)}</td></tr>`:''}
             <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(order.article||'')}</td></tr>
             <tr><td class="label-cell">ШК</td><td class="value-cell">${order.barcode||'—'}</td></tr>
             <tr><td class="label-cell">Заказов</td><td class="value-cell">1</td></tr>
