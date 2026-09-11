@@ -5354,6 +5354,21 @@ function toggleStocktakeFinish(){
   stocktakeFinishing = !stocktakeFinishing;
   renderStocktakeList();
 }
+function downloadStocktakeExcel(countId){
+  const c = stocktakes.find(x=>x.id===countId);
+  if(!c) return;
+  const rows = computeStocktakeReconciliation(c);
+  const data = [
+    ['Артикул','ШК','Размер','Клиент','Ячейка','По системе','Насчитано','Разница','Не сканировали'],
+    ...rows.map(r=>[r.sku, r.barcode||'', r.size||'', r.clientName||'', r.cell||'', r.systemQty, r.countedQty, r.diff, r.notScanned?'да':''])
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:18},{wch:16},{wch:10},{wch:20},{wch:8},{wch:12},{wch:12},{wch:10},{wch:14}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Инвентаризация');
+  const statusLabel = c.status==='completed' ? 'завершена' : 'в процессе';
+  XLSX.writeFile(wb, `Инвентаризация_${c.id}_(${statusLabel}).xlsx`);
+}
 function computeStocktakeReconciliation(c){
   const scope = stocktakeScopeItems(c);
   const rows = [];
@@ -5363,12 +5378,12 @@ function computeStocktakeReconciliation(c){
     seen.add(key);
     const sysItem = scope.find(i=>i.sku===it.sku && (i.client||'')===(it.clientName||'') && (i.size||'')===(it.size||''));
     const systemQty = sysItem ? sysItem.qty : 0;
-    rows.push({sku:it.sku, name:it.name, size:it.size, clientName:it.clientName, cell:it.cell, systemQty, countedQty:it.countedQty, diff: it.countedQty - systemQty});
+    rows.push({sku:it.sku, name:it.name, size:it.size, barcode:it.barcode||(sysItem?sysItem.barcode:''), clientName:it.clientName, cell:it.cell, systemQty, countedQty:it.countedQty, diff: it.countedQty - systemQty});
   });
   scope.forEach(i=>{
     const key = i.sku+'~~'+(i.client||'')+'~~'+(i.size||'');
     if(seen.has(key)) return;
-    rows.push({sku:i.sku, name:i.name, size:i.size||'', clientName:i.client||'', cell:i.cell, systemQty:i.qty, countedQty:0, diff: -i.qty, notScanned:true});
+    rows.push({sku:i.sku, name:i.name, size:i.size||'', barcode:i.barcode||'', clientName:i.client||'', cell:i.cell, systemQty:i.qty, countedQty:0, diff: -i.qty, notScanned:true});
   });
   return rows.sort((a,b)=> Math.abs(b.diff) - Math.abs(a.diff));
 }
@@ -5406,10 +5421,11 @@ function renderStocktakeDetail(c){
         <div class="eyebrow" style="margin-bottom:10px">Итог (уже применено к остаткам)</div>
         <div class="panel">
           <table>
-            <thead><tr><th>Артикул</th><th>Клиент</th><th>Ячейка</th><th>Было по системе</th><th>Насчитано</th><th>Разница</th></tr></thead>
+            <thead><tr><th>Артикул</th><th>ШК</th><th>Клиент</th><th>Ячейка</th><th>Было по системе</th><th>Насчитано</th><th>Разница</th></tr></thead>
             <tbody>
               ${rows.map(r=>`<tr>
                 <td class="mono">${escapeHtml(r.sku)}${r.size?` (${r.size})`:''}</td>
+                <td class="mono">${r.barcode||'—'}</td>
                 <td>${escapeHtml(r.clientName)||'—'}</td>
                 <td>${r.cell||'—'}</td>
                 <td>${r.systemQty}</td>
@@ -5419,6 +5435,7 @@ function renderStocktakeDetail(c){
             </tbody>
           </table>
         </div>
+        <button class="btn btn-ghost" style="margin-top:12px" onclick="downloadStocktakeExcel('${c.id}')">📊 Скачать Excel</button>
       </div>
     `;
   }
@@ -5431,10 +5448,11 @@ function renderStocktakeDetail(c){
         ${mismatches.length ? `<p style="font-size:12px;color:var(--warn);margin:0 0 10px 0">Расхождений: ${mismatches.length}. Совпадающие позиции ниже не показаны.</p>` : `<p style="font-size:12px;color:var(--ok);margin:0 0 10px 0">Расхождений нет — всё совпало.</p>`}
         <div class="panel" style="margin-bottom:14px">
           <table>
-            <thead><tr><th>Артикул</th><th>Клиент</th><th>Ячейка</th><th>По системе</th><th>Насчитано</th><th>Разница</th></tr></thead>
+            <thead><tr><th>Артикул</th><th>ШК</th><th>Клиент</th><th>Ячейка</th><th>По системе</th><th>Насчитано</th><th>Разница</th></tr></thead>
             <tbody>
               ${mismatches.map(r=>`<tr>
                 <td class="mono">${escapeHtml(r.sku)}${r.size?` (${r.size})`:''}</td>
+                <td class="mono">${r.barcode||'—'}</td>
                 <td>${escapeHtml(r.clientName)||'—'}</td>
                 <td>${r.cell||'—'}</td>
                 <td>${r.systemQty}</td>
@@ -5446,6 +5464,7 @@ function renderStocktakeDetail(c){
         </div>
         <button class="btn btn-accent" onclick="applyStocktakeCorrections('${c.id}')">✅ Применить корректировки к остаткам</button>
         <button class="btn btn-ghost" onclick="toggleStocktakeFinish()">← Вернуться к сканированию</button>
+        <button class="btn btn-ghost" onclick="downloadStocktakeExcel('${c.id}')">📊 Скачать Excel</button>
       </div>
     `;
   }
@@ -5467,7 +5486,7 @@ function renderStocktakeDetail(c){
       <div class="panel" style="margin-bottom:14px;max-height:320px;overflow-y:auto">
         ${c.items.length ? c.items.map(it=>`
           <div class="pick-row">
-            <div><div class="sku-name">${escapeHtml(it.name)}${it.size?` · ${it.size}`:''}</div><div class="sku-code mono">${escapeHtml(it.sku)}${it.clientName?` · ${escapeHtml(it.clientName)}`:''}${it.cell?` · яч. ${it.cell}`:''}</div></div>
+            <div><div class="sku-name">${escapeHtml(it.name)}${it.size?` · ${it.size}`:''}</div><div class="sku-code mono">${escapeHtml(it.sku)}${it.barcode?` · ШК ${escapeHtml(it.barcode)}`:''}${it.clientName?` · ${escapeHtml(it.clientName)}`:''}${it.cell?` · яч. ${it.cell}`:''}</div></div>
             <div class="qty-need">${it.countedQty} шт</div>
             <button class="btn btn-ghost" style="padding:3px 8px" onclick="removeStocktakeItem('${c.id}','${escapeHtml(it.sku)}','${escapeHtml(it.size||'')}','${escapeHtml(it.clientName||'')}')">✕</button>
           </div>
@@ -5476,6 +5495,7 @@ function renderStocktakeDetail(c){
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-ghost" ${lastStocktakeScanInfo&&lastStocktakeScanInfo.countId===c.id?'':'disabled'} onclick="undoLastStocktakeScan()">↩ Отменить скан</button>
         <button class="btn btn-accent" onclick="toggleStocktakeFinish()">Завершить инвентаризацию →</button>
+        <button class="btn btn-ghost" onclick="downloadStocktakeExcel('${c.id}')">📊 Скачать Excel</button>
       </div>
     </div>
   `;
