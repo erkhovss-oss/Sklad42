@@ -912,6 +912,7 @@ let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
 let assemblyModeQueue = [];
 let consumables = [];
+let kitComponents = [];
 let expandedFbsSupplyIds = {};
 let assemblyModeIndex = 0;
 let fbsTrbxes = [];
@@ -1300,8 +1301,44 @@ function renderInventory(){
             </label>
             <a href="https://xn--80ajghhoc2aj1c8b.xn--p1ai/business/projects/" target="_blank" rel="noopener" style="font-size:11px;color:var(--accent);align-self:flex-end;padding-bottom:10px;white-space:nowrap">проверить категорию →</a>
           </div>
+          <div style="margin-bottom:8px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);cursor:pointer">
+              <input type="checkbox" id="editIsKit-${escapeHtml(key)}" ${i.isKit?'checked':''} onchange="toggleKitEditor('${escapeHtml(key)}')">
+              🧩 Это набор/комплект
+            </label>
+            <div id="kitEditor-${escapeHtml(key)}" style="display:${i.isKit?'block':'none'};margin-top:8px;padding:12px;background:var(--bg);border-radius:8px">
+              <div style="display:flex;gap:16px;margin-bottom:10px;flex-wrap:wrap">
+                <label style="display:flex;align-items:center;gap:4px;font-size:12px">
+                  <input type="radio" name="kitMode-${escapeHtml(key)}" value="virtual" ${i.kitMode!=='assembled'?'checked':''}> Виртуальный (считать по составляющим)
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:12px">
+                  <input type="radio" name="kitMode-${escapeHtml(key)}" value="assembled" ${i.kitMode==='assembled'?'checked':''}> Собран заранее (свой остаток)
+                </label>
+              </div>
+              <div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">Состав набора:</div>
+              <div id="kitComponentsList-${escapeHtml(key)}" style="margin-bottom:8px">
+                ${getKitComponents(i).map(c=>{
+                  const compItem = findInventoryItem(c.componentSku, i.client, c.componentSize, i.warehouseId);
+                  return `<div class="kit-component-row" data-sku="${escapeHtml(c.componentSku)}" data-size="${escapeHtml(c.componentSize||'')}" style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+                    <span style="flex:1;font-size:12px">${escapeHtml(compItem?compItem.name:c.componentSku)}${c.componentSize?` (${c.componentSize})`:''}</span>
+                    <input class="search mono kit-comp-qty" type="number" min="0.01" step="0.01" value="${c.qtyNeeded}" style="width:70px">
+                    <span style="font-size:11px;color:var(--ink-faint)">шт/набор</span>
+                    <button class="btn btn-ghost" style="padding:2px 8px" onclick="this.parentElement.remove()">✕</button>
+                  </div>`;
+                }).join('')}
+              </div>
+              <div style="display:flex;gap:8px">
+                <select class="search" id="kitAddComponentSelect-${escapeHtml(key)}" style="flex:1;font-size:12px">
+                  <option value="">— добавить составляющую —</option>
+                  ${inventory.filter(x=>x.client===i.client && (x.warehouseId||'MAIN')===(i.warehouseId||'MAIN') && !(x.sku===i.sku && (x.size||'')===(i.size||'')) && !x.isKit).map(x=>`<option value="${escapeHtml(x.sku+'~~'+(x.size||''))}">${escapeHtml(x.name)}${x.size?` (${x.size})`:''}</option>`).join('')}
+                </select>
+                <button class="btn btn-ghost" onclick="addKitComponentFromSelect('${escapeHtml(key)}','${escapeHtml(i.client||'')}','${escapeHtml(i.warehouseId||'MAIN')}')">+ Добавить</button>
+              </div>
+              <p style="font-size:11px;color:var(--ink-faint);margin-top:8px">Виртуальный набор — остаток считается сам по тому, что реально есть в составляющих (поле «Кол-во» ниже станет нередактируемым). Собранный заранее — обычный товар со своим остатком, состав только для справки.</p>
+            </div>
+          </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-            <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Кол-во</div><input class="search" type="number" min="0" style="width:90px" id="editQty-${escapeHtml(key)}" value="${i.qty}"></div>
+            <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Кол-во</div><input class="search" type="number" min="0" style="width:90px" id="editQty-${escapeHtml(key)}" value="${i.isKit && i.kitMode!=='assembled' ? computeKitAvailability(i).available : i.qty}" ${i.isKit && i.kitMode!=='assembled' ? 'disabled title="Виртуальный набор — считается по составляющим"' : ''}></div>
             <div><div style="font-size:11px;color:var(--ink-faint);margin-bottom:2px">Ячейка</div><input class="search mono" type="number" min="1" style="width:90px" id="editCell-${escapeHtml(key)}" value="${i.cell||''}"></div>
           </div>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
@@ -1373,7 +1410,11 @@ function renderInventory(){
       <td class="mono" data-label="Штрихкод">${i.barcode||'—'}${i.barcode?`<div style="color:var(--ink-faint);font-size:11px">яч. ${i.cell||'—'}</div>`:''}</td>
       <td data-label="Клиент">${i.client||'—'}</td>
       <td data-label="Склад">${escapeHtml(warehouseName(i.warehouseId))}</td>
-      <td data-label="Остаток" class="${i.qty<=3?'qty-low':''}">${i.qty} шт${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}</td>
+      <td data-label="Остаток" class="${(i.isKit&&i.kitMode!=='assembled'?computeKitAvailability(i).available:i.qty)<=3?'qty-low':''}">${
+        i.isKit && i.kitMode!=='assembled'
+          ? (()=>{ const av=computeKitAvailability(i); return `${av.available} шт <span style="font-size:10px;color:var(--accent)">🧩 виртуальный</span>${av.bottleneck?`<div style="color:var(--ink-faint);font-size:10px">лимит: ${escapeHtml(av.bottleneck.name)} (${av.bottleneck.have} шт)</div>`:''}`; })()
+          : `${i.qty} шт${i.isKit?' <span style="font-size:10px;color:var(--accent)">🧩 собран</span>':''}${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}`
+      }</td>
       <td style="text-align:right;white-space:nowrap">
         ${readOnly ? `
         <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="openHistory" data-key="${escapeHtml(key)}">История</button>
@@ -1441,6 +1482,9 @@ async function saveEdit(key){
   const newWarehouseId = document.getElementById('editWarehouse-'+key).value;
   const requiresKiz = document.getElementById('editRequiresKiz-'+key).checked;
   const color = document.getElementById('editColor-'+key).value.trim();
+  const isKit = document.getElementById('editIsKit-'+key).checked;
+  const kitModeRadio = Array.from(document.getElementsByName('kitMode-'+key)).find(r=>r.checked);
+  const kitMode = kitModeRadio ? kitModeRadio.value : 'virtual';
   const qty = Math.max(0, parseInt(document.getElementById('editQty-'+key).value) || 0);
   const cellRaw = document.getElementById('editCell-'+key).value.trim();
   const newCell = cellRaw ? Math.max(1, parseInt(cellRaw) || 0) : null;
@@ -1465,6 +1509,8 @@ async function saveEdit(key){
   item.warehouseId = newWarehouseId || 'MAIN';
   item.requiresKiz = requiresKiz;
   item.color = color;
+  item.isKit = isKit;
+  item.kitMode = isKit ? kitMode : null;
   item.qty = qty;
   item.dims = (l>0 && w>0 && h>0) ? {l, w, h, weight:(item.dims&&item.dims.weight)||0} : null;
   if(newCell !== null){
@@ -1480,7 +1526,8 @@ async function saveEdit(key){
     });
   }
   syncInventoryRow(item.sku, item.client, item.size, item.warehouseId);
-  if(qtyDelta!==0) logMovement(item.sku, name, qtyDelta, 'Изменение карточки', item.client, item.size);
+  if(isKit) await saveKitComponents(item, draftKitComponentRows());
+  if(qtyDelta!==0 && !(isKit && kitMode!=='assembled')) logMovement(item.sku, name, qtyDelta, 'Изменение карточки', item.client, item.size);
   editingSku = null;
   toast('Изменения сохранены');
   renderInventory();
@@ -1580,6 +1627,8 @@ async function syncInventoryRow(sku, client, size, warehouseId){
       warehouse_id: item.warehouseId || 'MAIN',
       requires_kiz: item.requiresKiz || false,
       color: item.color || null,
+      is_kit: item.isKit || false,
+      kit_mode: item.kitMode || null,
       vendor_code: item.vendorCode || null,
       barcode: item.barcode || null,
       dims: item.dims || null,
@@ -2643,8 +2692,9 @@ function createOutboundSupply(){
 
   for(const d of draftOutboundItems){
     const item = resolveDraftItem(d, client.name, sourceWarehouseId);
-    if(!item || item.qty < d.qty){
-      toast(`Недостаточно на складе: «${d.name}» (нужно ${d.qty}, есть ${item?item.qty:0})`);
+    const available = item ? (item.isKit && item.kitMode!=='assembled' ? computeKitAvailability(item).available : item.qty) : 0;
+    if(!item || available < d.qty){
+      toast(`Недостаточно на складе: «${d.name}» (нужно ${d.qty}, есть ${available})`);
       return;
     }
   }
@@ -2655,8 +2705,7 @@ function createOutboundSupply(){
 
   draftOutboundItems.forEach(d=>{
     const item = resolveDraftItem(d, client.name, sourceWarehouseId);
-    item.qty -= d.qty;
-    logMovement(item.sku, item.name, -d.qty, `Отгрузка на склад: ${destination}`, client.name, item.size);
+    deductStockForShipment(item, d.qty, `Отгрузка на склад: ${destination}`);
   });
 
   outboundSupplies.unshift({
@@ -3566,12 +3615,12 @@ async function bulkAssembleSelectedFbsOrders(){
 function finishAssembleOrder(order, kizCode, skipViewSwitch){
   const client = clients.find(c=>c.id===order.clientId);
   const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
-  if(!inv || inv.qty < 1){
+  const available = inv ? (inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty) : 0;
+  if(!inv || available < 1){
     toast(`Недостаточно на складе «${order.name||order.article}» — нет в остатках`);
     return;
   }
-  inv.qty -= 1;
-  logMovement(inv.sku, inv.name, -1, `Сборка заказа FBS №${order.orderId}`, inv.client, inv.size);
+  deductStockForShipment(inv, 1, `Сборка заказа FBS №${order.orderId}`);
   if(inv.dims && inv.dims.l && inv.dims.w && inv.dims.h){
     const liters = (inv.dims.l * inv.dims.w * inv.dims.h) / 1000;
     const tariffPrice = getFbsTariffPrice(order.clientId, liters);
@@ -4998,6 +5047,93 @@ function deleteConsumable(id){
   sb.from('consumables').delete().eq('id', id).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось удалить в базе'); }
   });
+}
+
+// ---------- KITS (наборы/комплекты) ----------
+async function loadKitComponents(){
+  const { data, error } = await sb.from('kit_components').select('*').limit(20000);
+  if(error){ console.error(error); return; }
+  kitComponents = data.map(k=>({id:k.id, kitSku:k.kit_sku, kitClient:k.kit_client_name||'', kitSize:k.kit_size||'', kitWarehouseId:k.kit_warehouse_id||'MAIN', componentSku:k.component_sku, componentSize:k.component_size||'', qtyNeeded:Number(k.qty_needed)}));
+}
+function getKitComponents(item){
+  return kitComponents.filter(k=>k.kitSku===item.sku && k.kitClient===(item.client||'') && k.kitSize===(item.size||'') && k.kitWarehouseId===(item.warehouseId||'MAIN'));
+}
+function computeKitAvailability(item){
+  const comps = getKitComponents(item);
+  if(!comps.length) return {available:0, bottleneck:null};
+  let minAvail = Infinity, bottleneck = null;
+  comps.forEach(c=>{
+    const compItem = findInventoryItem(c.componentSku, item.client, c.componentSize, item.warehouseId);
+    const compQty = compItem ? compItem.qty : 0;
+    const possible = c.qtyNeeded>0 ? Math.floor(compQty / c.qtyNeeded) : 0;
+    if(possible < minAvail){ minAvail = possible; bottleneck = {sku:c.componentSku, size:c.componentSize, name:compItem?compItem.name:c.componentSku, have:compQty, needPerKit:c.qtyNeeded}; }
+  });
+  return {available: minAvail===Infinity?0:minAvail, bottleneck};
+}
+async function saveKitComponents(item, rows){
+  await sb.from('kit_components').delete()
+    .eq('kit_sku', item.sku).eq('kit_client_name', item.client||'').eq('kit_size', item.size||'').eq('kit_warehouse_id', item.warehouseId||'MAIN');
+  kitComponents = kitComponents.filter(k=>!(k.kitSku===item.sku && k.kitClient===(item.client||'') && k.kitSize===(item.size||'') && k.kitWarehouseId===(item.warehouseId||'MAIN')));
+  if(!rows.length) return;
+  const insertRows = rows.map(r=>({kit_sku:item.sku, kit_client_name:item.client||'', kit_size:item.size||'', kit_warehouse_id:item.warehouseId||'MAIN', component_sku:r.componentSku, component_size:r.componentSize||'', qty_needed:r.qtyNeeded}));
+  const { error } = await sb.from('kit_components').insert(insertRows);
+  if(error){ console.error(error); toast('Не удалось сохранить состав набора в базе'); return; }
+  kitComponents.push(...rows.map(r=>({kitSku:item.sku, kitClient:item.client||'', kitSize:item.size||'', kitWarehouseId:item.warehouseId||'MAIN', componentSku:r.componentSku, componentSize:r.componentSize||'', qtyNeeded:r.qtyNeeded})));
+}
+// Списывает qty единиц товара при отгрузке — если это виртуальный набор, списывает составляющие вместо самого набора
+function deductStockForShipment(item, qty, reasonText){
+  if(item.isKit && item.kitMode==='virtual'){
+    const comps = getKitComponents(item);
+    comps.forEach(c=>{
+      const compItem = findInventoryItem(c.componentSku, item.client, c.componentSize, item.warehouseId);
+      if(!compItem) return;
+      const deduct = c.qtyNeeded * qty;
+      compItem.qty = Math.max(0, compItem.qty - deduct);
+      logMovement(compItem.sku, compItem.name, -deduct, `${reasonText} (составляющая набора «${item.name}»)`, compItem.client, compItem.size);
+      syncInventoryRow(compItem.sku, compItem.client, compItem.size, compItem.warehouseId);
+    });
+  } else {
+    item.qty = Math.max(0, item.qty - qty);
+    logMovement(item.sku, item.name, -qty, reasonText, item.client, item.size);
+    syncInventoryRow(item.sku, item.client, item.size, item.warehouseId);
+  }
+}
+function draftKitComponentRows(){
+  return Array.from(document.querySelectorAll('.kit-component-row')).map(row=>({
+    componentSku: row.dataset.sku,
+    componentSize: row.dataset.size || '',
+    qtyNeeded: Math.max(0.01, parseFloat(row.querySelector('.kit-comp-qty').value) || 1)
+  }));
+}
+function addKitComponentRow(key, sku, size, name){
+  const list = document.getElementById('kitComponentsList-'+key);
+  if(!list) return;
+  if(list.querySelector(`[data-sku="${CSS.escape(sku)}"][data-size="${CSS.escape(size||'')}"]`)){ toast('Эта позиция уже добавлена в состав'); return; }
+  const row = document.createElement('div');
+  row.className = 'kit-component-row';
+  row.dataset.sku = sku;
+  row.dataset.size = size || '';
+  row.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:4px';
+  row.innerHTML = `
+    <span style="flex:1;font-size:12px">${escapeHtml(name)}${size?` (${size})`:''}</span>
+    <input class="search mono kit-comp-qty" type="number" min="0.01" step="0.01" value="1" style="width:70px">
+    <span style="font-size:11px;color:var(--ink-faint)">шт/набор</span>
+    <button class="btn btn-ghost" style="padding:2px 8px" onclick="this.parentElement.remove()">✕</button>
+  `;
+  list.appendChild(row);
+}
+function addKitComponentFromSelect(key, clientName, warehouseId){
+  const sel = document.getElementById('kitAddComponentSelect-'+key);
+  const v = sel.value;
+  if(!v) return;
+  const [sku, size] = v.split('~~');
+  const item = inventory.find(x=>x.sku===sku && (x.size||'')===size && x.client===clientName && (x.warehouseId||'MAIN')===warehouseId);
+  addKitComponentRow(key, sku, size, item?item.name:sku);
+  sel.value='';
+}
+function toggleKitEditor(key){
+  const el = document.getElementById('kitEditor-'+key);
+  if(el) el.style.display = el.style.display==='none' ? 'block' : 'none';
 }
 
 // ---------- COMPANY SETTINGS (реквизиты исполнителя) ----------
@@ -6579,7 +6715,7 @@ async function loadEmployees(){
 async function loadInventory(){
   const { data, error } = await sb.from('inventory').select('*').order('sku').limit(50000);
   if(error){ console.error(error); return; }
-  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', warehouseId:i.warehouse_id||'MAIN', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null, requiresKiz:i.requires_kiz||false, color:i.color||''}));
+  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', warehouseId:i.warehouse_id||'MAIN', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null, requiresKiz:i.requires_kiz||false, color:i.color||'', isKit:i.is_kit||false, kitMode:i.kit_mode||null}));
 }
 async function loadInventoryBarcodes(){
   const { data, error } = await sb.from('inventory_barcodes').select('*').limit(50000);
@@ -6721,7 +6857,7 @@ async function initApp(){
     return;
   }
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes(), loadConsumables()]);
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes(), loadConsumables(), loadKitComponents()]);
   }catch(err){
     console.error(err);
   }
