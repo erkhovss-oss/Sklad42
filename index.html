@@ -687,6 +687,7 @@
           <div style="display:flex;gap:8px;align-items:center">
             <select class="search" id="fbsClientSelect" style="width:220px"></select>
             <button class="btn btn-ghost" onclick="fetchNewFbsOrders()">🔄 Обновить сейчас</button>
+            <button class="btn btn-ghost" onclick="syncFbsOrderStatuses()">📡 Сверить статусы с WB</button>
           </div>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:16px">
@@ -3086,6 +3087,30 @@ function renderFbsOrders(){
     }, 30000);
   }
   fetchNewFbsOrders(true);
+}
+async function syncFbsOrderStatuses(){
+  const clientId = document.getElementById('fbsClientSelect').value;
+  const targets = clientId ? [clientId] : clients.filter(c=>c.wbConnected).map(c=>c.id);
+  if(!targets.length) return;
+  toast('Сверяем статусы заказов с WB…');
+  let totalChecked = 0;
+  const allChanged = [];
+  let hadError = false;
+  for(const cid of targets){
+    try{
+      const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action:'sync_order_statuses' } });
+      if(error || (data && data.error)){ hadError = true; console.error(error||(data&&data.error)); continue; }
+      totalChecked += data.total || 0;
+      if(data.changed && data.changed.length) allChanged.push(...data.changed);
+    }catch(e){ hadError = true; console.error(e); }
+  }
+  await loadFbsOrders();
+  renderFbsBody();
+  if(allChanged.length){
+    toast(`Сверено ${totalChecked} — обновлено статусов: ${allChanged.length}${hadError?' (у части клиентов была ошибка)':''}`);
+  } else {
+    toast(`Сверено ${totalChecked} заказ(ов) — все статусы совпадают${hadError?' (у части клиентов была ошибка)':''}`);
+  }
 }
 async function fetchNewFbsOrders(silent){
   const clientId = document.getElementById('fbsClientSelect').value;
