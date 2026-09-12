@@ -3157,7 +3157,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered){
           <div style="border-top:1px solid var(--line)">
             ${g.orders.map(o=>`
               <div class="pick-row">
-                <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${isDelivered?'':renderKizStatusLabel(o)}</div></div>
+                <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.orderCreatedAt?` · ${timeAgoRu(o.orderCreatedAt)}`:''}${isDelivered?'':renderKizStatusLabel(o)}</div></div>
                 <div style="display:flex;gap:6px;align-items:center">
                   ${!isDelivered && clientId ? renderTrbxAssignControl(o) : ''}
                   ${isDelivered ? `<span class="status shipped">В доставке</span>` : ''}
@@ -3210,7 +3210,7 @@ function renderFbsBody(){
       <div class="panel">${rows.map(o=>`
       <div class="pick-row">
         <input type="checkbox" ${fbsSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsSelected(${o.orderId}, this.checked)">
-        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}${o.wbWarehouseId ? renderFbsWarehouseBadge(o) : ' · <span style="color:var(--ink-faint)">склад не определён</span>'}</div></div>
+        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.orderCreatedAt?` <span style="color:var(--accent);font-weight:700;font-size:12px">· ${timeAgoRu(o.orderCreatedAt)}</span>`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}${o.wbWarehouseId ? renderFbsWarehouseBadge(o) : ' · <span style="color:var(--ink-faint)">склад не определён</span>'}</div></div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-accent" style="padding:6px 12px" onclick="startAssembleOrder(${o.orderId})">Собрать</button>
           <button class="btn btn-ghost" style="padding:6px 12px" onclick="hideFbsOrder(${o.orderId})" title="Убрать только у нас, у WB заказ останется как есть">Скрыть</button>
@@ -4004,7 +4004,7 @@ function printAllFbsStickers(){
         td.value-cell{font-weight:bold;word-break:break-all}
         .qr-page{width:58mm;height:40mm;display:flex;align-items:center;justify-content:center;overflow:hidden;page-break-after:always}
         .qr-page:last-child{page-break-after:avoid}
-        .qr-page img{width:100%;height:100%;object-fit:contain}
+        .qr-page img{width:100%;height:100%;object-fit:fill}
       </style>
       </head><body>
         ${groupList.map(g=>{
@@ -4030,6 +4030,18 @@ function printAllFbsStickers(){
     win.document.close();
     toast(`Готово: ${groupList.length} карточек товара, ${orderedStickers.length} QR-стикеров${hadError?' (у части клиентов была ошибка получения)':''}`);
   });
+}
+function timeAgoRu(isoString){
+  if(!isoString) return '';
+  const diffMs = Date.now() - new Date(isoString).getTime();
+  if(diffMs < 0) return '';
+  const mins = Math.floor(diffMs / 60000);
+  if(mins < 1) return 'только что';
+  if(mins < 60) return `${mins} мин назад`;
+  const hours = Math.floor(mins / 60);
+  if(hours < 24) return `${hours} ч ${mins%60} мин назад`;
+  const days = Math.floor(hours / 24);
+  return `${days} дн назад`;
 }
 function findLocalProductInfo(order){
   const item = order.barcode ? inventory.find(i=>i.barcode===order.barcode && i.client===order.clientName) : null;
@@ -4175,7 +4187,7 @@ function downloadSupplyBarcode(wbSupplyId, clientId){
         @page{ size: 58mm 40mm; margin: 0; }
         *{ box-sizing:border-box; }
         body{margin:0;padding:0;width:58mm;height:40mm;display:flex;align-items:center;justify-content:center;overflow:hidden}
-        img{width:100%;height:100%;object-fit:contain}
+        img{width:100%;height:100%;object-fit:fill}
       </style>
       </head><body>
         <img src="data:image/svg+xml;base64,${file}" onload="setTimeout(()=>window.print(), 300)">
@@ -4209,7 +4221,7 @@ function printFbsSticker(orderId){
         td.label-cell{color:#666;white-space:nowrap;padding-right:2mm}
         td.value-cell{font-weight:bold;word-break:break-all}
         .qr-page{width:58mm;height:40mm;display:flex;align-items:center;justify-content:center;overflow:hidden;page-break-after:avoid}
-        .qr-page img{width:100%;height:100%;object-fit:contain}
+        .qr-page img{width:100%;height:100%;object-fit:fill}
       </style>
       </head><body>
         <div class="info-label">
@@ -4236,7 +4248,7 @@ async function loadFbsOrders(){
     orderId:o.order_id, clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
-    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, outOfStock:o.out_of_stock||false
+    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
 }
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fetchNewFbsOrders(true); });
