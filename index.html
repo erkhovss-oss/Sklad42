@@ -4004,7 +4004,7 @@ function printAllFbsStickers(){
         td.value-cell{font-weight:bold;word-break:break-all}
         .qr-page{width:58mm;height:40mm;display:flex;align-items:center;justify-content:center;overflow:hidden;page-break-after:always}
         .qr-page:last-child{page-break-after:avoid}
-        .qr-page img{width:100%;height:100%;object-fit:fill}
+        .qr-page img{width:100%;height:100%;object-fit:contain}
       </style>
       </head><body>
         ${groupList.map(g=>{
@@ -4187,7 +4187,7 @@ function downloadSupplyBarcode(wbSupplyId, clientId){
         @page{ size: 58mm 40mm; margin: 0; }
         *{ box-sizing:border-box; }
         body{margin:0;padding:0;width:58mm;height:40mm;display:flex;align-items:center;justify-content:center;overflow:hidden}
-        img{width:100%;height:100%;object-fit:fill}
+        img{width:100%;height:100%;object-fit:contain}
       </style>
       </head><body>
         <img src="data:image/svg+xml;base64,${file}" onload="setTimeout(()=>window.print(), 300)">
@@ -4221,7 +4221,7 @@ function printFbsSticker(orderId){
         td.label-cell{color:#666;white-space:nowrap;padding-right:2mm}
         td.value-cell{font-weight:bold;word-break:break-all}
         .qr-page{width:58mm;height:40mm;display:flex;align-items:center;justify-content:center;overflow:hidden;page-break-after:avoid}
-        .qr-page img{width:100%;height:100%;object-fit:fill}
+        .qr-page img{width:100%;height:100%;object-fit:contain}
       </style>
       </head><body>
         <div class="info-label">
