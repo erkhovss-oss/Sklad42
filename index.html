@@ -3508,24 +3508,7 @@ function findLocalRequiresKiz(order){
 function startAssembleOrder(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
   if(!order) return;
-  assemblingOrder = order;
-  fbsPendingKiz = null;
-  const localKiz = findLocalRequiresKiz(order);
-  if(localKiz !== null){
-    order.requiresKiz = localKiz;
-    renderAssembleOrderForm(order, localKiz);
-    return;
-  }
-  const body = document.getElementById('fbsBody');
-  body.innerHTML = `<div class="panel" style="padding:20px"><p style="font-size:13px;color:var(--ink-soft)">Товар ещё не отмечен в «Остатках» — уточняем у WB напрямую…</p></div>`;
-  sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'check_meta', orderId } }).then(({data, error})=>{
-    let requiresKiz = order.requiresKiz;
-    if(!error && data && !data.error){
-      requiresKiz = !!data.requiresKiz;
-      order.requiresKiz = requiresKiz;
-    }
-    renderAssembleOrderForm(order, requiresKiz);
-  });
+  finishAssembleOrder(order, null);
 }
 function renderAssembleOrderForm(order, requiresKiz){
   const body = document.getElementById('fbsBody');
@@ -3625,8 +3608,9 @@ async function bulkAssembleSelectedFbsOrders(){
   }
   toast(`Собираем ${withoutKiz.length} заказ(ов)…`);
   for(const order of withoutKiz){
-    finishAssembleOrder(order, null, true);
-    await new Promise(resolve=>setTimeout(resolve, 400));
+    try{ await finishAssembleOrder(order, null, true); }
+    catch(e){ console.error(e); toast(`Ошибка при сборке заказа №${order.orderId}: ${e.message||e}`); }
+    await new Promise(resolve=>setTimeout(resolve, 300));
   }
   fbsSelectedOrders = withKiz.map(o=>o.orderId);
   if(withKiz.length){
@@ -3670,7 +3654,7 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
   toast(`Заказ №${order.orderId} отправлен на сборку`);
   renderFbsBody();
 
-  sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'assemble', orderId: order.orderId, kizCode } }).then(({data, error})=>{
+  return sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'assemble', orderId: order.orderId, kizCode } }).then(({data, error})=>{
     if(error || (data && data.error)){
       toast('WB (сборка): ' + (data && data.error ? data.error : (error?error.message:'ошибка')));
       return;
