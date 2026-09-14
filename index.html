@@ -3926,15 +3926,15 @@ async function printAllFbsStickersToThermalPrinter(){
   const mmPx = (mm)=> Math.round(mm / 25.4 * dpi203); // 1 мм = 1/25.4 дюйма
   for(const g of groupList){
     const infoHtml = `
-      <div style="padding:${mmPx(3)}px;box-sizing:border-box;font-family:Arial,sans-serif">
+      <div style="padding:${mmPx(3)}px;box-sizing:border-box;font-family:Arial,sans-serif;overflow:hidden;width:100%;height:100%">
         <div style="font-size:${ptPx(14)}px;font-weight:bold;margin-bottom:${mmPx(2)}px">${g.orders.length} шт.</div>
-        <div style="font-size:${ptPx(10)}px;font-weight:bold;margin-bottom:${mmPx(2)}px;line-height:1.3">${escapeHtml(g.name||g.article)}</div>
-        <table style="width:100%;font-size:${ptPx(8)}px;border-collapse:collapse">
-          ${g.color?`<tr><td style="color:#666;white-space:nowrap;padding:${mmPx(0.7)}px ${mmPx(2)}px ${mmPx(0.7)}px 0">Цвет</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.7)}px 0">${escapeHtml(g.color)}</td></tr>`:''}
-          ${g.size?`<tr><td style="color:#666;white-space:nowrap;padding:${mmPx(0.7)}px ${mmPx(2)}px ${mmPx(0.7)}px 0">Размер</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.7)}px 0">${escapeHtml(g.size)}</td></tr>`:''}
-          <tr><td style="color:#666;white-space:nowrap;padding:${mmPx(0.7)}px ${mmPx(2)}px ${mmPx(0.7)}px 0">Артикул</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.7)}px 0">${escapeHtml(g.article||'')}</td></tr>
-          <tr><td style="color:#666;white-space:nowrap;padding:${mmPx(0.7)}px ${mmPx(2)}px ${mmPx(0.7)}px 0">ШК</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.7)}px 0">${g.barcode||'—'}</td></tr>
-          <tr><td style="color:#666;white-space:nowrap;padding:${mmPx(0.7)}px ${mmPx(2)}px ${mmPx(0.7)}px 0">Заказов</td><td style="font-weight:bold;padding:${mmPx(0.7)}px 0">${g.orders.length}</td></tr>
+        <div style="font-size:${ptPx(10)}px;font-weight:bold;margin-bottom:${mmPx(2)}px;line-height:1.3;word-wrap:break-word;overflow-wrap:break-word;word-break:break-word">${escapeHtml(g.name||g.article)}</div>
+        <table style="width:100%;font-size:${ptPx(8)}px;border-collapse:collapse;table-layout:fixed">
+          ${g.color?`<tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.7)}px ${mmPx(2)}px ${mmPx(0.7)}px 0">Цвет</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.7)}px 0">${escapeHtml(g.color)}</td></tr>`:''}
+          ${g.size?`<tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.7)}px ${mmPx(2)}px ${mmPx(0.7)}px 0">Размер</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.7)}px 0">${escapeHtml(g.size)}</td></tr>`:''}
+          <tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.7)}px ${mmPx(2)}px ${mmPx(0.7)}px 0">Артикул</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.7)}px 0">${escapeHtml(g.article||'')}</td></tr>
+          <tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.7)}px ${mmPx(2)}px ${mmPx(0.7)}px 0">ШК</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.7)}px 0">${g.barcode||'—'}</td></tr>
+          <tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.7)}px ${mmPx(2)}px ${mmPx(0.7)}px 0">Заказов</td><td style="font-weight:bold;padding:${mmPx(0.7)}px 0">${g.orders.length}</td></tr>
         </table>
       </div>
     `;
