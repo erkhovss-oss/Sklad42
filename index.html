@@ -1840,7 +1840,9 @@ function computeClientStorageLiters(clientName){
 }
 function startEditClient(id){ editingClientId = id; deletingClientId = null; renderClients(); }
 function copyClientLink(id){
-  const url = window.location.origin + window.location.pathname + '?client=' + id;
+  const c = clients.find(x=>x.id===id);
+  if(!c || !c.portalToken){ toast('У клиента нет токена для ссылки — обновите страницу и попробуйте снова'); return; }
+  const url = window.location.origin + window.location.pathname + '?client=' + c.portalToken;
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(url).then(()=>{
       toast('Ссылка скопирована — отправьте её клиенту');
@@ -6890,6 +6892,7 @@ async function resolveCurrentEmployeeAndEnter(){
   const idx = employees.findIndex(e=>e.id===mapped.id);
   if(idx>=0) employees[idx] = {...employees[idx], ...mapped}; else employees.push(mapped);
   enterApp(mapped);
+  await loadStaffData();
 }
 async function attemptLogin(){
   const email = document.getElementById('loginInput').value.trim();
@@ -7234,7 +7237,8 @@ async function loadClients(){
   clients = data.map(c=>({
     id:c.id, name:c.name, contact:c.contact||'—', telegram:c.telegram||'', wbKey:c.wb_key||'', wbConnected:c.wb_connected||false,
     wbWarehouseId:c.wb_warehouse_id||'', wbAutoSync: c.wb_auto_sync!==false, wbProducts:[], storageLiters:c.storage_liters||0, pricePerLiter:c.price_per_liter||0,
-    inn:c.inn||'', kpp:c.kpp||'', legalAddress:c.legal_address||'', bankDetails:c.bank_details||'', directorName:c.director_name||''
+    inn:c.inn||'', kpp:c.kpp||'', legalAddress:c.legal_address||'', bankDetails:c.bank_details||'', directorName:c.director_name||'',
+    portalToken:c.portal_token||''
   }));
 }
 async function loadStorageHistory(){
@@ -7285,8 +7289,17 @@ async function loadKizScans(){
 }
 
 // ---------- INIT ----------
-function enterClientViewMode(client){
-  clientViewMode = client;
+async function enterClientPortal(token){
+  const { data, error } = await sb.rpc('client_portal_snapshot', { p_token: token });
+  if(error || !data){
+    console.error(error);
+    toast('Ссылка недействительна или устарела');
+    return false;
+  }
+  inventory = (data.inventory||[]).map(i=>({...i, client: data.client.name}));
+  clientViewMode = { id: data.client.id, name: data.client.name };
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appRoot').style.display = 'flex';
   document.querySelectorAll('.nav-item[data-tab]').forEach(el=>{
     el.style.display = el.dataset.tab==='inventory' ? '' : 'none';
   });
@@ -7302,18 +7315,14 @@ function enterClientViewMode(client){
   if(writeoffsBtn) writeoffsBtn.style.display = 'none';
   setInventoryView('stock');
   const heading = document.querySelector('#tab-inventory h1');
-  if(heading) heading.textContent = 'Остатки — ' + client.name;
+  if(heading) heading.textContent = 'Остатки — ' + clientViewMode.name;
   const sub = document.querySelector('#tab-inventory .page-head p');
   if(sub) sub.textContent = 'Только просмотр';
   switchTab('inventory');
   renderInventory();
+  return true;
 }
-async function initApp(){
-  if(!sb){
-    toast('Не удалось загрузить библиотеку базы данных. Проверьте интернет и обновите страницу (F5)');
-    showLoginForm();
-    return;
-  }
+async function loadStaffData(){
   try{
     await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes(), loadConsumables(), loadKitComponents()]);
   }catch(err){
@@ -7327,18 +7336,26 @@ async function initApp(){
   recordAllStorageSnapshots().then(()=>{
     if(document.getElementById('tab-storage').classList.contains('active')) renderStorage();
   });
+  let savedTab = null;
+  try{ savedTab = localStorage.getItem('sklad42_active_tab'); }catch(e){}
+  const validTabs = ['inventory','clients','storage','supplies','employees'];
+  if(savedTab && validTabs.includes(savedTab) && savedTab!=='inventory'){
+    switchTab(savedTab);
+  }
+}
+async function initApp(){
+  if(!sb){
+    toast('Не удалось загрузить библиотеку базы данных. Проверьте интернет и обновите страницу (F5)');
+    showLoginForm();
+    return;
+  }
 
   const urlParams = new URLSearchParams(window.location.search);
-  const clientViewId = urlParams.get('client');
-  if(clientViewId){
-    const cv = clients.find(c=>c.id===clientViewId);
-    if(cv){
-      document.getElementById('loginScreen').style.display = 'none';
-      document.getElementById('appRoot').style.display = 'flex';
-      enterClientViewMode(cv);
-      return;
-    }
-    toast('Ссылка недействительна — клиент не найден');
+  const portalToken = urlParams.get('client');
+  if(portalToken){
+    const ok = await enterClientPortal(portalToken);
+    if(ok) return;
+    // токен неверный/устарел — продолжаем как обычный вход сотрудника
   }
 
   const { data: { session } } = await sb.auth.getSession();
@@ -7346,13 +7363,6 @@ async function initApp(){
     await resolveCurrentEmployeeAndEnter();
   } else {
     showLoginForm();
-  }
-
-  let savedTab = null;
-  try{ savedTab = localStorage.getItem('sklad42_active_tab'); }catch(e){}
-  const validTabs = ['inventory','clients','storage','supplies','employees'];
-  if(savedTab && validTabs.includes(savedTab) && savedTab!=='inventory'){
-    switchTab(savedTab);
   }
 }
 initApp();
