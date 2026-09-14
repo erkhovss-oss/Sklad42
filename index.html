@@ -3884,7 +3884,7 @@ function printFbsPickList(){
   win.document.close();
 }
 async function printAllFbsStickersToThermalPrinter(){
-  const connected = thermalPrinterDevice || await connectThermalPrinter();
+  const connected = await connectThermalPrinter();
   if(!connected) return;
 
   const clientId = document.getElementById('fbsClientSelect').value;
@@ -3934,8 +3934,8 @@ async function printAllFbsStickersToThermalPrinter(){
         </table>
       </div>
     `;
-    const bitmapInfo = await htmlToMonoBitmap(infoHtml, 58, 40);
-    const ok1 = await printBitmapOnThermalPrinter(58, 40, bitmapInfo);
+    const bitmapInfo = await htmlToMonoBitmap(infoHtml, 40, 58);
+    const ok1 = await printBitmapOnThermalPrinter(40, 58, bitmapInfo);
     if(!ok1){ toast('Печать остановлена — проблема с принтером'); return; }
     for(const o of g.orders){
       const file = stickerByOrderId[o.orderId];
@@ -4117,7 +4117,7 @@ async function htmlToMonoBitmap(html, widthMm, heightMm){
   const svgBase64 = btoa(unescape(encodeURIComponent(svgWrapped)));
   return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', widthPx, heightPx);
 }
-async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx){
+async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotate90){
   const img = new Image();
   await new Promise((resolve, reject)=>{
     img.onload = resolve;
@@ -4130,7 +4130,16 @@ async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx){
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, widthPx, heightPx);
-  ctx.drawImage(img, 0, 0, widthPx, heightPx);
+  if(rotate90){
+    // исходная картинка альбомная (шире, чем выше) — рисуем её повёрнутой на 90°, чтобы она легла в книжный холст
+    ctx.save();
+    ctx.translate(widthPx, 0);
+    ctx.rotate(Math.PI/2);
+    ctx.drawImage(img, 0, 0, heightPx, widthPx);
+    ctx.restore();
+  } else {
+    ctx.drawImage(img, 0, 0, widthPx, heightPx);
+  }
   const imageData = ctx.getImageData(0, 0, widthPx, heightPx);
   const bytesPerRow = Math.ceil(widthPx / 8);
   const bitmap = new Uint8Array(bytesPerRow * heightPx);
@@ -4169,7 +4178,9 @@ async function printSvgOnThermalPrinter(svgBase64, widthMm, heightMm){
   const dpi = 203;
   const widthPx = Math.round(widthMm / 25.4 * dpi);
   const heightPx = Math.round(heightMm / 25.4 * dpi);
-  const bitmapInfo = await imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', widthPx, heightPx);
+  // QR-картинка от WB всегда альбомная (шире, чем выше) — поворачиваем на 90°, чтобы легла в книжную этикетку
+  const rotate90 = heightMm > widthMm;
+  const bitmapInfo = await imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', widthPx, heightPx, rotate90);
   return printBitmapOnThermalPrinter(widthMm, heightMm, bitmapInfo);
 }
 
