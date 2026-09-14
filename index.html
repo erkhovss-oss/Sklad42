@@ -3119,16 +3119,22 @@ async function fetchNewFbsOrders(silent){
   const targets = clientId ? [clientId] : clients.filter(c=>c.wbConnected).map(c=>c.id);
   if(!targets.length) return;
   let totalFetched = 0;
+  const errors = [];
   for(const cid of targets){
+    const client = clients.find(c=>c.id===cid);
+    const clientLabel = client ? client.name : cid;
     try{
       const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action: 'fetch_new' } });
-      if(error){ if(!silent) toast('WB: ' + await extractFnErrorMessage(error)); continue; }
-      if(data && data.error){ if(!silent) toast('WB: ' + data.error); continue; }
+      if(error){ errors.push(`«${clientLabel}»: ${await extractFnErrorMessage(error)}`); continue; }
+      if(data && data.error){ errors.push(`«${clientLabel}»: ${data.error}`); continue; }
       totalFetched += data.fetched||0;
-    }catch(e){ /* пропускаем клиента при сбое, идём дальше */ }
+    }catch(e){ errors.push(`«${clientLabel}»: ${e.message||e}`); }
   }
   await loadFbsOrders();
-  if(!silent) toast(`Проверено — новых заказов: ${totalFetched}`);
+  if(!silent){
+    if(errors.length) toast(`Ошибки у ${errors.length} клиент(ов): ${errors.join(' | ')}`);
+    else toast(`Проверено — новых заказов: ${totalFetched}`);
+  }
   if(assemblyModeQueue.length === 0) renderFbsBody();
 }
 function renderFbsGroupedBySupply(rows, clientId, isDelivered){
