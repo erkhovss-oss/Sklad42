@@ -3155,6 +3155,7 @@ async function discoverMissingFbsOrders(){
       totalFound += data.found||0;
       totalMissing += data.missingCount||0;
       totalInserted += data.inserted||0;
+      if(data.insertError) errors.push(`«${clientLabel}»: ошибка записи в базу — ${data.insertError}`);
     }catch(e){ errors.push(`«${clientLabel}»: ${e.message||e}`); }
   }
   await loadFbsOrders();
