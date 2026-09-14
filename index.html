@@ -4289,9 +4289,9 @@ async function htmlToMonoBitmap(html, widthMm, heightMm){
   const svgBase64 = btoa(unescape(encodeURIComponent(svgWrapped)));
   const finalWidthPx = Math.round(widthMm / 25.4 * dpi);
   const finalHeightPx = Math.round(heightMm / 25.4 * dpi);
-  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', finalWidthPx, finalHeightPx, true, false);
+  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', finalWidthPx, finalHeightPx, true, false, true);
 }
-async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotate90, rotateCcw){
+async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotate90, rotateCcw, flip180){
   const img = new Image();
   await new Promise((resolve, reject)=>{
     img.onload = resolve;
@@ -4320,6 +4320,13 @@ async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotate90
     ctx.drawImage(img, 0, 0, widthPx, heightPx);
   }
   const imageData = ctx.getImageData(0, 0, widthPx, heightPx);
+  if(flip180){
+    // разворот на 180° — переставляем блоки RGBA местами от конца к началу
+    const d = imageData.data;
+    for(let i=0, j=d.length-4; i<j; i+=4, j-=4){
+      for(let k=0;k<4;k++){ const tmp=d[i+k]; d[i+k]=d[j+k]; d[j+k]=tmp; }
+    }
+  }
   const bytesPerRow = Math.ceil(widthPx / 8);
   const bitmap = new Uint8Array(bytesPerRow * heightPx);
   for(let y=0; y<heightPx; y++){
@@ -4342,6 +4349,7 @@ async function printBitmapOnThermalPrinter(widthMm, heightMm, bitmapInfo){
   const encoder = new TextEncoder();
   const header = encoder.encode(
     `SIZE ${widthMm} mm, ${heightMm} mm\r\n` +
+    `GAP 2 mm, 0 mm\r\n` +
     `CLS\r\n` +
     `BITMAP 0,0,${bytesPerRow},${heightPx},0,`
   );
