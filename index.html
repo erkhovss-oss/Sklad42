@@ -1152,7 +1152,37 @@ if('speechSynthesis' in window){
   }, 12000);
 }
 
+function hasPermission(key){
+  if(clientViewMode) return key==='inventory';
+  if(!currentUser) return false;
+  const role = roles.find(r=>r.id===currentUser.roleId);
+  if(!role) return true; // роль не назначена — не блокируем интерфейс из-за отсутствующих данных
+  return role.permissions[key] !== false;
+}
+function applyNavPermissions(){
+  if(clientViewMode) return; // в клиентском портале навигация уже настроена отдельно
+  let firstVisible = null;
+  document.querySelectorAll('.nav-item[data-tab]').forEach(el=>{
+    const tab = el.dataset.tab;
+    const allowed = hasPermission(tab);
+    el.style.display = allowed ? '' : 'none';
+    if(allowed && !firstVisible) firstVisible = tab;
+  });
+  const activeEl = document.querySelector('.nav-item.active[data-tab]');
+  const activeTab = activeEl ? activeEl.dataset.tab : null;
+  if(!activeTab || !hasPermission(activeTab)){
+    if(firstVisible){ switchTab(firstVisible); }
+    else {
+      document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+      toast('У вашей роли нет доступа ни к одному разделу — обратитесь к администратору');
+    }
+  }
+}
 function switchTab(tab){
+  if(!clientViewMode && !hasPermission(tab)){
+    toast('Нет доступа к этому разделу');
+    return;
+  }
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.tab===tab));
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
   document.getElementById('tab-'+tab).classList.add('active');
@@ -7013,7 +7043,7 @@ function createRole(){
   const name = nameInput.value.trim();
   if(!name){ toast('Укажите название роли'); return; }
   const id = 'ROLE-' + Date.now();
-  const permissions = {inventory:true, clients:true, storage:true, supplies:true, outbound:true, fbs:true, dds:true, employees:true};
+  const permissions = {inventory:true, clients:true, storage:true, supplies:true, outbound:true, fbs:true, dds:true, stocktake:true, warehouses:true, consumables:true, employees:true};
   roles.push({id, name, permissions});
   toast(`Роль «${name}» создана со всеми правами`);
   renderEmployeesTab();
@@ -7043,7 +7073,7 @@ function renderEmployeesTab(){
   const body = document.getElementById('employeesBody');
 
   if(currentEmployeesView==='roles'){
-    const permLabels = [['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['outbound','Поставка на склад'],['fbs','Заказы FBS'],['dds','ДДС'],['employees','Сотрудники']];
+    const permLabels = [['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['outbound','Поставка на склад'],['fbs','Заказы FBS'],['dds','ДДС'],['stocktake','Инвентаризация'],['warehouses','Склады'],['consumables','Расходники'],['employees','Сотрудники']];
     body.innerHTML = `
       <div class="panel" style="padding:18px;margin-bottom:18px">
         <div class="eyebrow" style="margin-bottom:10px">Новая роль</div>
@@ -7342,6 +7372,7 @@ async function loadStaffData(){
   if(savedTab && validTabs.includes(savedTab) && savedTab!=='inventory'){
     switchTab(savedTab);
   }
+  applyNavPermissions();
 }
 async function initApp(){
   if(!sb){
