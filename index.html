@@ -3231,6 +3231,7 @@ function renderFbsBody(){
           ${rows.length ? `<button class="btn btn-ghost" onclick="printFbsPickList()">📋 Лист сборки</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickers()">🖨 Все этикетки (${rows.length})</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickersToThermalPrinter()">🖨️ На принтер (QZ Tray)</button>` : ''}
+          <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="openLabelSettingsModal()">⚙️ Настройки этикетки</button>
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="forgetQzPrinter()" title="Выбрать другой принтер при следующей печати">⚙️ Сменить принтер</button>
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="previewThermalInfoCard()" title="Посмотреть, что именно генерируется для принтера">👁 Предпросмотр растра</button>
           <button class="btn btn-accent" onclick="closeFbsSupply()">📦 Закрыть поставку и отправить</button>
@@ -3928,7 +3929,8 @@ async function previewThermalInfoCard(){
       </table>
     </div>
   `;
-  const bitmapInfo = await htmlToMonoBitmap(infoHtml, 40, 58);
+  const labelSettingsPreview = getLabelSettings();
+  const bitmapInfo = await htmlToMonoBitmap(infoHtml, labelSettingsPreview.widthMm, labelSettingsPreview.heightMm);
   // рисуем результат ещё раз как обычную картинку (не растр для принтера), чтобы можно было увидеть глазами
   const previewCanvas = document.createElement('canvas');
   previewCanvas.width = bitmapInfo.widthPx;
@@ -4007,13 +4009,14 @@ async function printAllFbsStickersToThermalPrinter(){
         </table>
       </div>
     `;
-    const bitmapInfo = await htmlToMonoBitmap(infoHtml, 40, 58);
-    const ok1 = await printBitmapOnThermalPrinter(40, 58, bitmapInfo);
+    const labelSettings = getLabelSettings();
+    const bitmapInfo = await htmlToMonoBitmap(infoHtml, labelSettings.widthMm, labelSettings.heightMm);
+    const ok1 = await printBitmapOnThermalPrinter(labelSettings.widthMm, labelSettings.heightMm, bitmapInfo);
     if(!ok1){ toast('Печать остановлена — проблема с принтером'); return; }
     for(const o of g.orders){
       const file = stickerByOrderId[o.orderId];
       if(!file) continue;
-      const ok2 = await printSvgOnThermalPrinter(file, 58, 40);
+      const ok2 = await printSvgOnThermalPrinter(file, labelSettings.widthMm, labelSettings.heightMm);
       if(!ok2){ toast('Печать остановлена — проблема с принтером'); return; }
     }
   }
@@ -4252,6 +4255,87 @@ function forgetQzPrinter(){
   try{ localStorage.removeItem('teleshop_qz_printer_name'); }catch(e){}
   toast('Принтер сброшен — при следующей печати выбор появится заново');
 }
+function getLabelSettings(){
+  const defaults = { widthMm: 40, heightMm: 58, qrRotation: 90, textRotation: 180 };
+  try{
+    const stored = localStorage.getItem('teleshop_label_settings');
+    if(stored) return Object.assign({}, defaults, JSON.parse(stored));
+  }catch(e){}
+  return defaults;
+}
+function saveLabelSettings(settings){
+  try{ localStorage.setItem('teleshop_label_settings', JSON.stringify(settings)); }catch(e){}
+}
+function openLabelSettingsModal(){
+  const s = getLabelSettings();
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:24px;max-width:380px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.2)">
+      <div style="font-weight:700;font-size:15px;margin-bottom:4px">⚙️ Настройки этикетки</div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-bottom:16px">Для печати через QZ Tray на термопринтер. Хранится в этом браузере.</div>
+      <div style="display:flex;gap:10px;margin-bottom:12px">
+        <div style="flex:1"><div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">Ширина, мм</div><input class="search" type="number" id="lblSetWidth" value="${s.widthMm}" style="width:100%"></div>
+        <div style="flex:1"><div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">Высота, мм</div><input class="search" type="number" id="lblSetHeight" value="${s.heightMm}" style="width:100%"></div>
+      </div>
+      <div style="margin-bottom:12px">
+        <div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">Поворот QR-кода</div>
+        <select class="search" id="lblSetQrRot" style="width:100%">
+          ${[0,90,180,270].map(d=>`<option value="${d}" ${s.qrRotation===d?'selected':''}>${d}°</option>`).join('')}
+        </select>
+      </div>
+      <div style="margin-bottom:16px">
+        <div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">Поворот текстовой карточки</div>
+        <select class="search" id="lblSetTextRot" style="width:100%">
+          ${[0,90,180,270].map(d=>`<option value="${d}" ${s.textRotation===d?'selected':''}>${d}°</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+        <button class="btn btn-ghost" id="lblSetPreview">👁 Предпросмотр (без принтера)</button>
+        <button class="btn btn-ghost" id="lblSetTestPrint">🖨 Пробная печать на принтере</button>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-ghost" id="lblSetCancel">Закрыть без сохранения</button>
+        <button class="btn btn-primary" id="lblSetSave">Сохранить</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  function readForm(){
+    return {
+      widthMm: parseFloat(document.getElementById('lblSetWidth').value) || 40,
+      heightMm: parseFloat(document.getElementById('lblSetHeight').value) || 58,
+      qrRotation: parseInt(document.getElementById('lblSetQrRot').value) || 0,
+      textRotation: parseInt(document.getElementById('lblSetTextRot').value) || 0,
+    };
+  }
+  document.getElementById('lblSetSave').onclick = ()=>{
+    saveLabelSettings(readForm());
+    document.body.removeChild(overlay);
+    toast('Настройки этикетки сохранены');
+  };
+  document.getElementById('lblSetCancel').onclick = ()=>{ document.body.removeChild(overlay); };
+  document.getElementById('lblSetPreview').onclick = async ()=>{
+    saveLabelSettings(readForm());
+    await previewThermalInfoCard();
+  };
+  document.getElementById('lblSetTestPrint').onclick = async ()=>{
+    saveLabelSettings(readForm());
+    const test = readForm();
+    const nameLines = wrapTextManually('Тестовая этикетка настроек', 22);
+    const dpi203 = 203;
+    const ptPx = (pt)=> Math.round(pt / 72 * dpi203);
+    const mmPx = (mm)=> Math.round(mm / 25.4 * dpi203);
+    const infoHtml = `
+      <div style="padding:${mmPx(2)}px;box-sizing:border-box;font-family:Arial,sans-serif;overflow:hidden;width:100%;height:100%">
+        <div style="font-size:${ptPx(11)}px;font-weight:bold;margin-bottom:${mmPx(1.2)}px">ТЕСТ</div>
+        <div style="font-size:${ptPx(8)}px;font-weight:bold;margin-bottom:${mmPx(1.2)}px;line-height:1.2">${nameLines.map(l=>`<div>${escapeHtml(l)}</div>`).join('')}</div>
+      </div>
+    `;
+    const bitmapInfo = await htmlToMonoBitmap(infoHtml, test.widthMm, test.heightMm);
+    await printBitmapOnThermalPrinter(test.widthMm, test.heightMm, bitmapInfo);
+  };
+}
 function uint8ArrayToBase64(bytes){
   let binary = '';
   for(let i=0; i<bytes.length; i++) binary += String.fromCharCode(bytes[i]);
@@ -4289,7 +4373,7 @@ async function htmlToMonoBitmap(html, widthMm, heightMm){
   const svgBase64 = btoa(unescape(encodeURIComponent(svgWrapped)));
   const finalWidthPx = Math.round(widthMm / 25.4 * dpi);
   const finalHeightPx = Math.round(heightMm / 25.4 * dpi);
-  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', finalWidthPx, finalHeightPx, 180);
+  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', finalWidthPx, finalHeightPx, getLabelSettings().textRotation);
 }
 async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotationDeg){
   rotationDeg = ((rotationDeg||0) % 360 + 360) % 360;
@@ -4360,8 +4444,8 @@ async function printSvgOnThermalPrinter(svgBase64, widthMm, heightMm){
   const dpi = 203;
   const widthPx = Math.round(widthMm / 25.4 * dpi);
   const heightPx = Math.round(heightMm / 25.4 * dpi);
-  // QR-картинка от WB всегда альбомная (шире, чем выше) — поворачиваем на 90°, чтобы легла в книжную этикетку
-  const rotationDeg = heightMm > widthMm ? 90 : 0;
+  // QR-картинка от WB всегда альбомная (шире, чем выше) — поворот берём из настроек этикетки
+  const rotationDeg = getLabelSettings().qrRotation;
   const bitmapInfo = await imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', widthPx, heightPx, rotationDeg);
   return printBitmapOnThermalPrinter(widthMm, heightMm, bitmapInfo);
 }
