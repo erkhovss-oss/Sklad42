@@ -4244,7 +4244,7 @@ async function htmlToMonoBitmap(html, widthMm, heightMm){
   const svgBase64 = btoa(unescape(encodeURIComponent(svgWrapped)));
   const finalWidthPx = Math.round(widthMm / 25.4 * dpi);
   const finalHeightPx = Math.round(heightMm / 25.4 * dpi);
-  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', finalWidthPx, finalHeightPx, true, true);
+  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', finalWidthPx, finalHeightPx, true, false);
 }
 async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotate90, rotateCcw){
   const img = new Image();
