@@ -4206,17 +4206,21 @@ async function sendRawToPrinter(bytes){
 // Рендерит DOM-узел (например, HTML-разметку этикетки) в чёрно-белый растр под 203 DPI
 async function htmlToMonoBitmap(html, widthMm, heightMm){
   const dpi = 203;
-  const widthPx = Math.round(widthMm / 25.4 * dpi);
-  const heightPx = Math.round(heightMm / 25.4 * dpi);
+  // Содержимое вёрстаем как альбомное (ширина и высота меняются местами), затем весь
+  // холст поворачивается на 90° при растеризации — так же, как и с QR-картинкой от WB.
+  const contentWidthPx = Math.round(heightMm / 25.4 * dpi);
+  const contentHeightPx = Math.round(widthMm / 25.4 * dpi);
   const svgWrapped = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${heightPx}">
+    <svg xmlns="http://www.w3.org/2000/svg" width="${contentWidthPx}" height="${contentHeightPx}">
       <foreignObject width="100%" height="100%">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="width:${widthPx}px;height:${heightPx}px;background:#fff;font-family:Arial,sans-serif;box-sizing:border-box">${html}</div>
+        <div xmlns="http://www.w3.org/1999/xhtml" style="width:${contentWidthPx}px;height:${contentHeightPx}px;background:#fff;font-family:Arial,sans-serif;box-sizing:border-box">${html}</div>
       </foreignObject>
     </svg>
   `;
   const svgBase64 = btoa(unescape(encodeURIComponent(svgWrapped)));
-  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', widthPx, heightPx);
+  const finalWidthPx = Math.round(widthMm / 25.4 * dpi);
+  const finalHeightPx = Math.round(heightMm / 25.4 * dpi);
+  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', finalWidthPx, finalHeightPx, true);
 }
 async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotate90){
   const img = new Image();
