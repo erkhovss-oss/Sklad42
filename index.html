@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsrsasign/10.9.0/jsrsasign-all-min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -3922,15 +3923,15 @@ async function printAllFbsStickersToThermalPrinter(){
   toast(`Печатаем на принтере: ${groupList.length} карточек товара…`);
   for(const g of groupList){
     const infoHtml = `
-      <div style="padding:8px;box-sizing:border-box">
-        <div style="font-size:20pt;font-weight:bold;margin-bottom:4px">${g.orders.length} шт.</div>
-        <div style="font-size:13pt;font-weight:bold;margin-bottom:6px;line-height:1.2">${escapeHtml(g.name||g.article)}</div>
-        <table style="font-size:10pt;width:100%">
-          ${g.color?`<tr><td style="color:#555;padding-right:6px">Цвет</td><td style="font-weight:bold">${escapeHtml(g.color)}</td></tr>`:''}
-          ${g.size?`<tr><td style="color:#555;padding-right:6px">Размер</td><td style="font-weight:bold">${escapeHtml(g.size)}</td></tr>`:''}
-          <tr><td style="color:#555;padding-right:6px">Артикул</td><td style="font-weight:bold">${escapeHtml(g.article||'')}</td></tr>
-          <tr><td style="color:#555;padding-right:6px">ШК</td><td style="font-weight:bold">${g.barcode||'—'}</td></tr>
-          <tr><td style="color:#555;padding-right:6px">Заказов</td><td style="font-weight:bold">${g.orders.length}</td></tr>
+      <div style="padding:4px;box-sizing:border-box">
+        <div style="font-size:12pt;font-weight:bold;margin-bottom:3px">${g.orders.length} шт.</div>
+        <div style="font-size:9pt;font-weight:bold;margin-bottom:5px;line-height:1.15;word-break:break-word">${escapeHtml(g.name||g.article)}</div>
+        <table style="font-size:7pt;width:100%;border-collapse:collapse">
+          ${g.color?`<tr><td style="color:#555;padding-right:4px;padding-bottom:2px">Цвет</td><td style="font-weight:bold;padding-bottom:2px">${escapeHtml(g.color)}</td></tr>`:''}
+          ${g.size?`<tr><td style="color:#555;padding-right:4px;padding-bottom:2px">Размер</td><td style="font-weight:bold;padding-bottom:2px">${escapeHtml(g.size)}</td></tr>`:''}
+          <tr><td style="color:#555;padding-right:4px;padding-bottom:2px">Артикул</td><td style="font-weight:bold;padding-bottom:2px;word-break:break-all">${escapeHtml(g.article||'')}</td></tr>
+          <tr><td style="color:#555;padding-right:4px;padding-bottom:2px">ШК</td><td style="font-weight:bold;padding-bottom:2px">${g.barcode||'—'}</td></tr>
+          <tr><td style="color:#555;padding-right:4px">Заказов</td><td style="font-weight:bold">${g.orders.length}</td></tr>
         </table>
       </div>
     `;
@@ -4053,8 +4054,81 @@ function findLocalColor(order){
 }
 
 // ---------- Печать на локальный принтер через QZ Tray (TSPL2, напр. Xprinter XP-420B) ----------
+const QZ_CERT_PEM = `-----BEGIN CERTIFICATE-----
+MIIDqzCCApOgAwIBAgIUQrP0nY+6LZuJODIPEuL5iwxLV/gwDQYJKoZIhvcNAQEL
+BQAwZTELMAkGA1UEBhMCUlUxDzANBgNVBAgMBlJ1c3NpYTENMAsGA1UEBwwEQ2l0
+eTERMA8GA1UECgwIVGVsZVBhY2sxDDAKBgNVBAsMA1dNUzEVMBMGA1UEAwwMdGVs
+ZXBhY2std21zMB4XDTI2MDkxNDEwMzEwM1oXDTM2MDkxMTEwMzEwM1owZTELMAkG
+A1UEBhMCUlUxDzANBgNVBAgMBlJ1c3NpYTENMAsGA1UEBwwEQ2l0eTERMA8GA1UE
+CgwIVGVsZVBhY2sxDDAKBgNVBAsMA1dNUzEVMBMGA1UEAwwMdGVsZXBhY2std21z
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5UpUSbzFCoEjfpWR0KT7
+jvEb/XyivisiCEe95iMbdKtJ0PES1qzGfXjP/jZjUwsLWWjLhW790ghKn1vHVAD+
+vHwJmU/0KEpYgOIg9yQ/YczmnSuIuFNHRgI00qrIhjZiktSB3QdjF0hq5Mw0PEsc
+99d0lpFv/EphfHq74SHxEhpePM33t+kg332154KX6BkFnqKzc6jNAQl9UXi2caQR
+Qh8E4eDnZ8/Q5zOCqFemErDjlF/hIJxq8hopg9ni0CmQaQMRTmCU5v5Rhm6N5vh5
+QJ4IMPrPwu013s7rrO/OFag9slHyyfTiNc7CtTbuz0wYZnSrwOg5FEk05Zcw9E6C
++QIDAQABo1MwUTAdBgNVHQ4EFgQU7vjREV45b7E4Ca0ESzup0K6yx6IwHwYDVR0j
+BBgwFoAU7vjREV45b7E4Ca0ESzup0K6yx6IwDwYDVR0TAQH/BAUwAwEB/zANBgkq
+hkiG9w0BAQsFAAOCAQEAt/KGpHIHsGQX9CU8NkWY49lDqwxYxHRQQiIr0iprM6cT
+79COfyOeQZNo/qwXzryt8jYzBv9S8qktjboWZgRKNCXIwXTx5yjC04BYD1f4Xsrr
++nAVCztWbRBY8ojcbH1X9/rGxsAMiua0MBYNoTBKm6O70QvPjiue7f+tRZPDyqyT
+g+C152+ov4/uzlYocz95Th0NlDvGmw5bIbEuyJFJlzmFk3byk7Rnes5FaZZ7H601
+9PRYFdYDUBbkGUMvHBWRLjz2X4QhrXhUfC1yEuTxD89+QTAA0YgdsgYebd2mLMlZ
+VzXH8SD0MrPnj70qaChRfsZSp/DYaA9YAc9O2mZZ2A==
+-----END CERTIFICATE-----`;
+const QZ_PRIVATE_KEY_PEM = `-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDlSlRJvMUKgSN+
+lZHQpPuO8Rv9fKK+KyIIR73mIxt0q0nQ8RLWrMZ9eM/+NmNTCwtZaMuFbv3SCEqf
+W8dUAP68fAmZT/QoSliA4iD3JD9hzOadK4i4U0dGAjTSqsiGNmKS1IHdB2MXSGrk
+zDQ8Sxz313SWkW/8SmF8ervhIfESGl48zfe36SDffbXngpfoGQWeorNzqM0BCX1R
+eLZxpBFCHwTh4Odnz9DnM4KoV6YSsOOUX+EgnGryGimD2eLQKZBpAxFOYJTm/lGG
+bo3m+HlAnggw+s/C7TXezuus784VqD2yUfLJ9OI1zsK1Nu7PTBhmdKvA6DkUSTTl
+lzD0ToL5AgMBAAECggEACu/OsW21oFikjscnm2IjNaA+i4rEYHnCN87kOfP2vUvm
+S3cURPUcyqNWmHOTrURbmDotawHuTXRjytIf4dviSq9H7e4oYTuamRswI1mxREL3
+xQtsjA482hQE3P+UbQJvFT3Zq+dMTLIBl0Q+QZn7mb7HKt9pDgmmOL/J8mUiEJDm
+SQmg7JQYIbopmuJNTcquZZA1hhTASo0Ydf39PuymKgU4L+Y9FxlYtl8/nr4nlA3d
+y4arMlxkdtLqDwfgYK+sKyRwgKv4Fp3US0mhC+ep2LikjnY9oOqcnHIYKNkUHqm5
+YXtXsBsEYADHRMm5fCK2j8aAawPRESLg68gJRYpK4QKBgQD7QyxABPzNdT/SbYNS
+PyukH362PGif59orUaWpz560sVp30vZ2bTf65sZqSaQ23Ra4r0PttJvPwBIdqWoc
+F4o/Q+7/PEHzIMYhJDXUS/If4DL7WrH/A2132jh1rq6RHPTl1HLNTHICy9eocYB1
+HMaHthKFiWyxsjlztPSzycoo3QKBgQDpnRlJIBYIlCWz5Hd6EHE25E/LkH4OsOcB
+0W+HZhVS2OKB1D61/NmxqfMS9zSi8vxz1IdWGfp6gIldwGZTNHEPEltY5lmIgMfB
+kmGlAalWj4yFny+/no7ZcphgdbfnqMj1qL7I1OqCyld4Jnot4AnZNPbaQkX2rjor
+wvuAzdlSzQKBgQDBvgwS2UWtj2lE8ti9xKP8C6UDFBWAp6CconphNAymO9MMbglJ
+S/JMb0IzltEe1N++TLbOReOXD/1oDcgaHTSmj9VrzaT0uiLMT0WKi30JgzEMi+SQ
+RK5WKlg6thU5I+DajzRuhTGsYk3KPqrUovmaj5Q8j7jWVBzk0XWWZFSTqQKBgFEM
+aOZe1GYbh80WmYDmzXB+21RDiAhuxWZzE9+EwichCcyDJ1KaK6igzq0oyMEzzfQd
+quprTuRLTd0R0C5Txlm1Q63fFPbvvt3gfDH0FpzqZpVBOh6f0u2L/WOR08DyZO4d
+ojso60d/DcOojcD2tlP+NRpZ3c4MejAOkJUKVbiNAoGBAJ5gtO4bN16X4ecKEwLW
+vJmR359N42uYaEPX7oRVyz4iQQ0vdowqeVi8otwfqW7/k4vjSmh57KJPF3r204rI
+fFujtmYIHlzbLVhCyyy8AN0q+Zs+k6B/W39pqOPABBZ9XkekQQFlP/Xh7uHwjqy3
+slZXD2BF2QqR48gNcGOBexdQ
+-----END PRIVATE KEY-----`;
+let qzSigningConfigured = false;
+function setupQzSigning(){
+  if(qzSigningConfigured || !window.qz) return;
+  qz.security.setCertificatePromise(function(resolve){ resolve(QZ_CERT_PEM); });
+  qz.security.setSignatureAlgorithm('SHA512');
+  qz.security.setSignaturePromise(function(toSign){
+    return function(resolve, reject){
+      try{
+        const pk = KEYUTIL.getKey(QZ_PRIVATE_KEY_PEM);
+        const sig = new KJUR.crypto.Signature({alg:'SHA512withRSA'});
+        sig.init(pk);
+        sig.updateString(toSign);
+        const hex = sig.sign();
+        resolve(stob64(hextorstr(hex)));
+      }catch(err){
+        console.error(err);
+        reject(err);
+      }
+    };
+  });
+  qzSigningConfigured = true;
+}
 async function connectThermalPrinter(){
   if(!window.qz){ toast('Библиотека QZ Tray не загрузилась — проверьте интернет-соединение и обновите страницу'); return false; }
+  setupQzSigning();
   try{
     if(qz.websocket.isActive()) return true;
     await qz.websocket.connect();
