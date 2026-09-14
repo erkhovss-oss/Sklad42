@@ -6,6 +6,7 @@
 <title>ТелеПак — прототип</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -3228,7 +3229,8 @@ function renderFbsBody(){
           ${rows.length ? `<button class="btn btn-primary" onclick="startAssemblyMode()">🚀 Режим сборки</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printFbsPickList()">📋 Лист сборки</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickers()">🖨 Все этикетки (${rows.length})</button>` : ''}
-          ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickersToThermalPrinter()">🖨️ На USB-принтер</button>` : ''}
+          ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickersToThermalPrinter()">🖨️ На принтер (QZ Tray)</button>` : ''}
+          <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="forgetQzPrinter()" title="Выбрать другой принтер при следующей печати">⚙️ Сменить принтер</button>
           <button class="btn btn-accent" onclick="closeFbsSupply()">📦 Закрыть поставку и отправить</button>
         </div>
       </div>
@@ -4050,48 +4052,53 @@ function findLocalColor(order){
   return item ? (item.color || '') : '';
 }
 
-// ---------- Печать на локальный USB термопринтер (TSPL2, напр. Xprinter XP-420B) ----------
-let thermalPrinterDevice = null;
-let thermalPrinterEndpoint = null;
+// ---------- Печать на локальный принтер через QZ Tray (TSPL2, напр. Xprinter XP-420B) ----------
 async function connectThermalPrinter(){
-  if(!navigator.usb){ toast('Этот браузер не поддерживает прямую печать на USB (WebUSB) — нужен Chrome, Edge или Яндекс.Браузер'); return false; }
+  if(!window.qz){ toast('Библиотека QZ Tray не загрузилась — проверьте интернет-соединение и обновите страницу'); return false; }
   try{
-    const device = await navigator.usb.requestDevice({
-      filters: [{ vendorId: 0x2d84 }, { vendorId: 0x2d37 }]
-    });
-    await device.open();
-    if(device.configuration === null) await device.selectConfiguration(1);
-    let claimedInterface = null, outEndpoint = null;
-    for(const iface of device.configuration.interfaces){
-      for(const alt of iface.alternates){
-        const out = alt.endpoints.find(e=>e.direction==='out');
-        if(out){ claimedInterface = iface.interfaceNumber; outEndpoint = out.endpointNumber; break; }
-      }
-      if(claimedInterface !== null) break;
-    }
-    if(claimedInterface === null){ toast('Не нашли канал передачи данных у этого устройства — возможно, это не тот принтер'); return false; }
-    await device.claimInterface(claimedInterface);
-    thermalPrinterDevice = device;
-    thermalPrinterEndpoint = outEndpoint;
-    toast('Принтер подключён: ' + (device.productName || 'USB-принтер'));
+    if(qz.websocket.isActive()) return true;
+    await qz.websocket.connect();
+    toast('QZ Tray подключён');
     return true;
   }catch(e){
-    if(e.name==='NotFoundError'){ toast('Устройство не выбрано'); return false; }
-    toast('Не удалось подключить принтер: ' + e.message);
+    toast('Не удалось подключиться к QZ Tray — убедитесь, что программа запущена на компьютере (значок в трее). Ошибка: ' + (e.message||e));
     return false;
   }
 }
+async function getQzPrinterName(){
+  let stored = null;
+  try{ stored = localStorage.getItem('teleshop_qz_printer_name'); }catch(e){}
+  if(stored) return stored;
+  let printers;
+  try{ printers = await qz.printers.find(); }catch(e){ toast('Не удалось получить список принтеров: ' + (e.message||e)); return null; }
+  if(!printers || !printers.length){ toast('QZ Tray не видит ни одного принтера — проверьте, что принтер включён и подключён'); return null; }
+  const list = Array.isArray(printers) ? printers : [printers];
+  const chosen = prompt(`Выберите принтер для этикеток — введите точное имя из списка:\n\n${list.join('\n')}`, list[0]);
+  if(!chosen) return null;
+  try{ localStorage.setItem('teleshop_qz_printer_name', chosen); }catch(e){}
+  return chosen;
+}
+function forgetQzPrinter(){
+  try{ localStorage.removeItem('teleshop_qz_printer_name'); }catch(e){}
+  toast('Принтер сброшен — при следующей печати выбор появится заново');
+}
+function uint8ArrayToBase64(bytes){
+  let binary = '';
+  for(let i=0; i<bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
 async function sendRawToPrinter(bytes){
-  if(!thermalPrinterDevice){
-    const ok = await connectThermalPrinter();
-    if(!ok) return false;
-  }
+  const connected = await connectThermalPrinter();
+  if(!connected) return false;
+  const printerName = await getQzPrinterName();
+  if(!printerName) return false;
   try{
-    await thermalPrinterDevice.transferOut(thermalPrinterEndpoint, bytes);
+    const config = qz.configs.create(printerName);
+    const base64Data = uint8ArrayToBase64(bytes);
+    await qz.print(config, [{ type: 'raw', format: 'base64', data: base64Data }]);
     return true;
   }catch(e){
-    toast('Ошибка при отправке на принтер: ' + e.message + ' — попробуйте подключить принтер заново');
-    thermalPrinterDevice = null;
+    toast('Ошибка печати через QZ Tray: ' + (e.message||e));
     return false;
   }
 }
