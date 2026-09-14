@@ -691,6 +691,7 @@
             <button class="btn btn-ghost" onclick="fetchNewFbsOrders()">🔄 Обновить сейчас</button>
             <button class="btn btn-ghost" onclick="syncFbsOrderStatuses()">📡 Сверить статусы с WB</button>
             <button class="btn btn-ghost" onclick="discoverMissingFbsOrders()">🔍 Найти пропущенные заказы</button>
+            <button class="btn btn-ghost" onclick="backfillFbsSupplyIds()">🔗 Донабрать номера поставок</button>
           </div>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:16px">
@@ -3137,6 +3138,29 @@ async function fetchNewFbsOrders(silent){
     else toast(`Проверено — новых заказов: ${totalFetched}`);
   }
   if(assemblyModeQueue.length === 0) renderFbsBody();
+}
+async function backfillFbsSupplyIds(){
+  const clientId = document.getElementById('fbsClientSelect').value;
+  const targets = clientId ? [clientId] : clients.filter(c=>c.wbConnected).map(c=>c.id);
+  if(!targets.length) return;
+  toast('Донабираем номера поставок для заказов без них — это может занять время…');
+  let totalOrphans = 0, totalMatched = 0;
+  const errors = [];
+  for(const cid of targets){
+    const client = clients.find(c=>c.id===cid);
+    const clientLabel = client ? client.name : cid;
+    try{
+      const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action:'backfill_supply_ids' } });
+      if(error){ errors.push(`«${clientLabel}»: ${await extractFnErrorMessage(error)}`); continue; }
+      if(data && data.error){ errors.push(`«${clientLabel}»: ${data.error}`); continue; }
+      totalOrphans += data.orphans||0;
+      totalMatched += data.matched||0;
+    }catch(e){ errors.push(`«${clientLabel}»: ${e.message||e}`); }
+  }
+  await loadFbsOrders();
+  renderFbsBody();
+  if(errors.length) toast(`Ошибки у ${errors.length} клиент(ов): ${errors.join(' | ')}`);
+  else toast(`Заказов без номера поставки было: ${totalOrphans}. Найдено и подставлено: ${totalMatched}.`);
 }
 async function discoverMissingFbsOrders(){
   const clientId = document.getElementById('fbsClientSelect').value;
