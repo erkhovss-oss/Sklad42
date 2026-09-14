@@ -3923,15 +3923,15 @@ async function printAllFbsStickersToThermalPrinter(){
   toast(`Печатаем на принтере: ${groupList.length} карточек товара…`);
   for(const g of groupList){
     const infoHtml = `
-      <div style="padding:4px;box-sizing:border-box">
-        <div style="font-size:12pt;font-weight:bold;margin-bottom:3px">${g.orders.length} шт.</div>
-        <div style="font-size:9pt;font-weight:bold;margin-bottom:5px;line-height:1.15;word-break:break-word">${escapeHtml(g.name||g.article)}</div>
-        <table style="font-size:7pt;width:100%;border-collapse:collapse">
-          ${g.color?`<tr><td style="color:#555;padding-right:4px;padding-bottom:2px">Цвет</td><td style="font-weight:bold;padding-bottom:2px">${escapeHtml(g.color)}</td></tr>`:''}
-          ${g.size?`<tr><td style="color:#555;padding-right:4px;padding-bottom:2px">Размер</td><td style="font-weight:bold;padding-bottom:2px">${escapeHtml(g.size)}</td></tr>`:''}
-          <tr><td style="color:#555;padding-right:4px;padding-bottom:2px">Артикул</td><td style="font-weight:bold;padding-bottom:2px;word-break:break-all">${escapeHtml(g.article||'')}</td></tr>
-          <tr><td style="color:#555;padding-right:4px;padding-bottom:2px">ШК</td><td style="font-weight:bold;padding-bottom:2px">${g.barcode||'—'}</td></tr>
-          <tr><td style="color:#555;padding-right:4px">Заказов</td><td style="font-weight:bold">${g.orders.length}</td></tr>
+      <div style="padding:6.3mm;box-sizing:border-box;font-family:Arial,sans-serif">
+        <div style="font-size:30pt;font-weight:bold;margin-bottom:4.2mm">${g.orders.length} шт.</div>
+        <div style="font-size:21pt;font-weight:bold;margin-bottom:4.2mm;line-height:1.3">${escapeHtml(g.name||g.article)}</div>
+        <table style="width:100%;font-size:17pt;border-collapse:collapse">
+          ${g.color?`<tr><td style="color:#666;white-space:nowrap;padding:1.5mm 4.2mm 1.5mm 0">Цвет</td><td style="font-weight:bold;word-break:break-all;padding:1.5mm 0">${escapeHtml(g.color)}</td></tr>`:''}
+          ${g.size?`<tr><td style="color:#666;white-space:nowrap;padding:1.5mm 4.2mm 1.5mm 0">Размер</td><td style="font-weight:bold;word-break:break-all;padding:1.5mm 0">${escapeHtml(g.size)}</td></tr>`:''}
+          <tr><td style="color:#666;white-space:nowrap;padding:1.5mm 4.2mm 1.5mm 0">Артикул</td><td style="font-weight:bold;word-break:break-all;padding:1.5mm 0">${escapeHtml(g.article||'')}</td></tr>
+          <tr><td style="color:#666;white-space:nowrap;padding:1.5mm 4.2mm 1.5mm 0">ШК</td><td style="font-weight:bold;word-break:break-all;padding:1.5mm 0">${g.barcode||'—'}</td></tr>
+          <tr><td style="color:#666;white-space:nowrap;padding:1.5mm 4.2mm 1.5mm 0">Заказов</td><td style="font-weight:bold;padding:1.5mm 0">${g.orders.length}</td></tr>
         </table>
       </div>
     `;
