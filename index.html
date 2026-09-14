@@ -6929,17 +6929,19 @@ function closeNewEmployeeForm(){ showingNewEmployeeForm = false; renderEmployees
 function createEmployee(){
   const name = document.getElementById('newEmpName').value.trim();
   const login = document.getElementById('newEmpLogin').value.trim();
-  const pin = document.getElementById('newEmpPin').value.trim() || '1234';
+  const authUserId = document.getElementById('newEmpAuthId').value.trim() || null;
   const roleId = document.getElementById('newEmpRole').value;
   const warehouseId = document.getElementById('newEmpWarehouse').value || null;
   if(!name || !login){ toast('Укажите имя и логин'); return; }
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if(authUserId && !uuidRe.test(authUserId)){ toast('Auth User ID должен быть в формате UUID (скопируйте из Supabase → Authentication → Users)'); return; }
   const id = 'EMP-' + Date.now();
-  employees.push({id, name, login, pin, roleId, active:true, warehouseId});
+  employees.push({id, name, login, authUserId, roleId, active:true, warehouseId});
   showingNewEmployeeForm = false;
   toast('Сотрудник добавлен');
   renderEmployeesTab();
-  sb.from('employees').insert({id, name, login, pin, role_id: roleId, active:true, warehouse_id: warehouseId}).then(({error})=>{
-    if(error){ console.error(error); toast('Не удалось сохранить сотрудника в базе (возможно, такой логин уже есть)'); }
+  sb.from('employees').insert({id, name, login, auth_user_id: authUserId, role_id: roleId, active:true, warehouse_id: warehouseId}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить сотрудника в базе (возможно, такой логин или Auth User ID уже есть)'); }
   });
 }
 function toggleEmployeeActive(id){
@@ -6975,22 +6977,24 @@ function saveEmployee(id){
   const emp = employees.find(e=>e.id===id);
   const name = document.getElementById('editEmpName-'+id).value.trim();
   const login = document.getElementById('editEmpLogin-'+id).value.trim();
-  const newPin = document.getElementById('editEmpPin-'+id).value.trim();
+  const authUserIdRaw = document.getElementById('editEmpAuthId-'+id).value.trim();
+  const authUserId = authUserIdRaw || null;
   const roleId = document.getElementById('editEmpRole-'+id).value;
   const warehouseId = document.getElementById('editEmpWarehouse-'+id).value || null;
   if(!name || !login){ toast('Укажите имя и логин'); return; }
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if(authUserId && !uuidRe.test(authUserId)){ toast('Auth User ID должен быть в формате UUID (скопируйте из Supabase → Authentication → Users)'); return; }
   emp.name = name;
   emp.login = login;
   emp.roleId = roleId;
   emp.warehouseId = warehouseId;
-  if(newPin) emp.pin = newPin;
+  emp.authUserId = authUserId;
   editingEmployeeId = null;
   toast('Данные сотрудника сохранены');
   renderEmployeesTab();
-  const update = {name, login, role_id: roleId, warehouse_id: warehouseId};
-  if(newPin) update.pin = newPin;
+  const update = {name, login, role_id: roleId, warehouse_id: warehouseId, auth_user_id: authUserId};
   sb.from('employees').update(update).eq('id', id).then(({error})=>{
-    if(error){ console.error(error); toast('Не удалось сохранить в базе (возможно, такой логин уже занят)'); }
+    if(error){ console.error(error); toast('Не удалось сохранить в базе (возможно, такой логин или Auth User ID уже занят)'); }
   });
 }
 function togglePermission(roleId, key){
@@ -7070,7 +7074,7 @@ function renderEmployeesTab(){
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
         <input class="search" id="newEmpName" placeholder="ФИО" style="flex:1;min-width:180px">
         <input class="search" id="newEmpLogin" placeholder="Логин" style="width:150px">
-        <input class="search" id="newEmpPin" placeholder="Пароль (по умолч. 1234)" style="width:170px">
+        <input class="search" id="newEmpAuthId" placeholder="Auth User ID (UUID, необязательно)" style="width:280px">
         <select class="search" id="newEmpRole" style="width:200px">
           ${roles.map(r=>`<option value="${r.id}">${r.name}</option>`).join('')}
         </select>
@@ -7097,7 +7101,7 @@ function renderEmployeesTab(){
                   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:8px 0">
                     <input class="search" id="editEmpName-${escapeHtml(e.id)}" value="${escapeHtml(e.name)}" placeholder="ФИО" style="flex:1;min-width:160px">
                     <input class="search" id="editEmpLogin-${escapeHtml(e.id)}" value="${escapeHtml(e.login)}" placeholder="Логин" style="width:140px">
-                    <input class="search" id="editEmpPin-${escapeHtml(e.id)}" placeholder="Новый пароль (оставить пустым — не менять)" style="width:260px">
+                    <input class="search" id="editEmpAuthId-${escapeHtml(e.id)}" value="${escapeHtml(e.authUserId||'')}" placeholder="Auth User ID (UUID)" style="width:280px">
                     <select class="search" id="editEmpRole-${escapeHtml(e.id)}" style="width:190px">
                       ${roles.map(r=>`<option value="${r.id}" ${e.roleId===r.id?'selected':''}>${r.name}</option>`).join('')}
                     </select>
@@ -7164,7 +7168,7 @@ async function loadRoles(){
 async function loadEmployees(){
   const { data, error } = await sb.from('employees').select('*').order('id').limit(50000);
   if(error){ console.error(error); return; }
-  employees = data.map(e=>({id:e.id, name:e.name, login:e.login, pin:e.pin, roleId:e.role_id, active:e.active, warehouseId:e.warehouse_id||null}));
+  employees = data.map(e=>({id:e.id, name:e.name, login:e.login, authUserId:e.auth_user_id||null, roleId:e.role_id, active:e.active, warehouseId:e.warehouse_id||null}));
 }
 async function loadInventory(){
   const { data, error } = await sb.from('inventory').select('*').order('sku').limit(50000);
