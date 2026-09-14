@@ -3620,6 +3620,14 @@ async function bulkAssembleSelectedFbsOrders(){
     setFbsView('confirm');
   }
 }
+async function extractEdgeFunctionError(data, error, fallback){
+  let msg = data && data.error ? data.error : (error ? error.message : (fallback||'ошибка'));
+  if(error && error.context){
+    try{ const body = await error.context.clone().json(); if(body && body.error) msg = body.error; }
+    catch(e){ try{ const text = await error.context.clone().text(); if(text) msg = text; }catch(e2){} }
+  }
+  return msg;
+}
 function finishAssembleOrder(order, kizCode, skipViewSwitch){
   const client = clients.find(c=>c.id===order.clientId);
   const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
@@ -3654,9 +3662,10 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
   toast(`Заказ №${order.orderId} отправлен на сборку`);
   renderFbsBody();
 
-  return sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'assemble', orderId: order.orderId, kizCode } }).then(({data, error})=>{
+  return sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'assemble', orderId: order.orderId, kizCode } }).then(async ({data, error})=>{
     if(error || (data && data.error)){
-      toast('WB (сборка): ' + (data && data.error ? data.error : (error?error.message:'ошибка')));
+      const msg = await extractEdgeFunctionError(data, error);
+      toast('WB (сборка): ' + msg);
       return;
     }
     order.supplierStatus = 'confirm';
