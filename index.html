@@ -3168,7 +3168,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered){
   const groups = {};
   const order = [];
   rows.forEach(o=>{
-    const key = o.wbSupplyId || '__none__';
+    const key = o.wbSupplyId || ('__none__' + o.clientId);
     if(!groups[key]){ groups[key] = { supplyId: o.wbSupplyId, clientName: o.clientName, orders: [] }; order.push(key); }
     groups[key].orders.push(o);
   });
@@ -4551,9 +4551,15 @@ function printFbsSticker(orderId){
   });
 }
 async function loadFbsOrders(){
-  const { data, error } = await sb.from('wb_orders').select('*').order('created_at',{ascending:false}).limit(500);
-  if(error){ console.error(error); return; }
-  fbsOrders = data.map(o=>({
+  let allRows = [];
+  const pageSize = 1000;
+  for(let from = 0; from < 15000; from += pageSize){
+    const { data, error } = await sb.from('wb_orders').select('*').order('created_at',{ascending:false}).range(from, from+pageSize-1);
+    if(error){ console.error(error); break; }
+    allRows = allRows.concat(data);
+    if(!data || data.length < pageSize) break;
+  }
+  fbsOrders = allRows.map(o=>({
     orderId:o.order_id, clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
