@@ -703,10 +703,16 @@
             <button class="btn btn-ghost" onclick="backfillFbsSupplyIds()">🔗 Донабрать номера поставок</button>
           </div>
         </div>
-        <div style="display:flex;gap:8px;margin-bottom:16px">
+        <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
           <button class="btn btn-accent" id="fbsTabNew" onclick="setFbsView('new')">Новый</button>
           <button class="btn btn-ghost" id="fbsTabConfirm" onclick="setFbsView('confirm')">На сборке</button>
           <button class="btn btn-ghost" id="fbsTabComplete" onclick="setFbsView('complete')">В доставке</button>
+          <select class="search" id="fbsCompletePageSize" style="width:150px;display:none">
+            <option value="10">По 10</option>
+            <option value="50">По 50</option>
+            <option value="100">По 100</option>
+            <option value="200">По 200</option>
+          </select>
         </div>
         <div id="fbsBody"></div>
       </section>
