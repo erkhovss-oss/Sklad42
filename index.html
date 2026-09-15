@@ -547,7 +547,9 @@
     <div class="nav-item" data-tab="stocktake"><span class="num">08</span>Инвентаризация</div>
     <div class="nav-item" data-tab="warehouses"><span class="num">09</span>Склады</div>
     <div class="nav-item" data-tab="consumables"><span class="num">10</span>Расходники</div>
-    <div class="nav-item" data-tab="employees"><span class="num">11</span>Сотрудники</div>
+    <div class="nav-item" data-tab="returns"><span class="num">11</span>Возвраты</div>
+    <div class="nav-item" data-tab="journal"><span class="num">12</span>Журнал</div>
+    <div class="nav-item" data-tab="employees"><span class="num">13</span>Сотрудники</div>
     <div class="sidebar-foot" id="sidebarFoot">ТелеПак · WMS</div>
   </div>
 
@@ -579,6 +581,12 @@
               <option value="">Все ячейки</option>
             </select>
             <input class="search" id="invSearch" placeholder="Поиск по названию, артикулу или штрихкоду (можно частично)…" style="flex:1;min-width:220px">
+            <select class="search" id="invPageSize" style="width:150px">
+              <option value="10">По 10</option>
+              <option value="50">По 50</option>
+              <option value="100">По 100</option>
+              <option value="200">По 200</option>
+            </select>
           </div>
           <div class="stat-row" id="invStats"></div>
           <div class="panel">
@@ -588,6 +596,7 @@
               <tbody id="invBody"></tbody>
             </table>
             </div>
+            <div id="invPagination" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-top:1px solid var(--line);flex-wrap:wrap"></div>
           </div>
         </div>
 
@@ -735,6 +744,15 @@
           </div>
           <button class="btn btn-accent" onclick="generateStorageIncome()">📥 Подтянуть приход по хранению</button>
         </div>
+        <div class="panel" style="padding:20px;margin-bottom:18px">
+          <div class="eyebrow" style="margin-bottom:10px">Счёт клиенту за месяц</div>
+          <p style="font-size:12px;color:var(--ink-faint);margin:0 0 12px 0">Соберёт весь приход по клиенту за выбранный месяц (хранение, приёмка, отгрузки FBS, прочее) в один документ на печать/PDF.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select class="search" id="invoiceClient" style="width:240px"></select>
+            <input class="search" id="invoiceMonth" type="month" style="width:170px">
+            <button class="btn btn-primary" onclick="generateClientInvoice()">📄 Сформировать счёт</button>
+          </div>
+        </div>
         <div id="tochkaPanelWrap"></div>
         <div class="stat-row" id="ddsStats" style="margin-bottom:16px"></div>
         <div class="panel" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -819,6 +837,63 @@
           </div>
         </div>
         <div id="consumablesListWrap"></div>
+      </section>
+
+      <!-- RETURNS -->
+      <section class="section" id="tab-returns">
+        <div class="page-head">
+          <div>
+            <h1>Возвраты</h1>
+            <p>Приёмка возвратов от маркетплейса — обратно на склад или в брак.</p>
+          </div>
+        </div>
+        <div class="panel" style="padding:20px;margin-bottom:18px">
+          <div class="eyebrow" style="margin-bottom:10px">Найти товар по штрихкоду/артикулу</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <input class="search" id="returnBarcode" placeholder="Штрихкод или артикул" style="flex:1;min-width:220px" onkeydown="if(event.key==='Enter') findReturnItem()">
+            <select class="search" id="returnClientFilter" style="width:200px">
+              <option value="">Любой клиент</option>
+            </select>
+            <button class="btn btn-primary" onclick="findReturnItem()">Найти</button>
+          </div>
+          <p id="returnFindError" style="font-size:12px;color:var(--warn);margin-top:10px;display:none"></p>
+          <div id="returnFoundWrap"></div>
+        </div>
+        <div id="returnsStats" class="stats" style="margin-bottom:14px"></div>
+        <div style="display:flex;gap:10px;margin-bottom:14px">
+          <input class="search" id="returnsSearch" placeholder="Поиск по артикулу, товару, клиенту" style="flex:1;max-width:320px" oninput="renderReturns()">
+        </div>
+        <div id="returnsTableWrap"></div>
+      </section>
+
+      <!-- JOURNAL -->
+      <section class="section" id="tab-journal">
+        <div class="page-head">
+          <div>
+            <h1>Журнал</h1>
+            <p>Все движения товара по складу — приёмка, списания, отгрузки, возвраты, корректировки.</p>
+          </div>
+        </div>
+        <div class="panel" style="padding:16px 20px;margin-bottom:16px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <input class="search" id="journalSearch" placeholder="Поиск по артикулу или товару" style="flex:1;min-width:200px">
+            <select class="search" id="journalClientFilter" style="width:190px"><option value="">Все клиенты</option></select>
+            <select class="search" id="journalEmployeeFilter" style="width:190px"><option value="">Все сотрудники</option></select>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input class="search" id="journalTypeFilter" placeholder="Тип операции (часть текста)" style="width:220px">
+            <input class="search" id="journalDateFrom" type="date" style="width:160px">
+            <span style="font-size:12px;color:var(--ink-faint)">—</span>
+            <input class="search" id="journalDateTo" type="date" style="width:160px">
+            <select class="search" id="journalPageSize" style="width:130px">
+              <option value="50">По 50</option>
+              <option value="100">По 100</option>
+              <option value="200">По 200</option>
+            </select>
+            <button class="btn btn-ghost" onclick="resetJournalFilters()">Сбросить</button>
+          </div>
+        </div>
+        <div id="journalTableWrap"></div>
       </section>
 
       <!-- EMPLOYEES -->
@@ -1196,6 +1271,8 @@ function switchTab(tab){
   if(tab==='stocktake') renderStocktakeList();
   if(tab==='warehouses') renderWarehouses();
   if(tab==='consumables') renderConsumables();
+  if(tab==='returns') renderReturns();
+  if(tab==='journal') renderJournal();
   if(tab==='employees') renderEmployeesTab();
   try{ localStorage.setItem('sklad42_active_tab', tab); }catch(e){}
 }
@@ -1242,7 +1319,7 @@ function renderWriteoffsView(){
   wrap.innerHTML = `
     <div class="panel">
       <table>
-        <thead><tr><th>Дата и время</th><th>Артикул</th><th>Товар</th><th>Кол-во</th><th>Причина</th></tr></thead>
+        <thead><tr><th>Дата и время</th><th>Артикул</th><th>Товар</th><th>Кол-во</th><th>Причина</th><th>Сотрудник</th></tr></thead>
         <tbody>
           ${filtered.length ? filtered.slice().reverse().map(w=>`
             <tr>
@@ -1251,8 +1328,9 @@ function renderWriteoffsView(){
               <td>${w.name}</td>
               <td style="color:var(--warn);font-weight:600">−${w.qty} шт</td>
               <td>${w.reason}</td>
+              <td style="font-size:12px;color:var(--ink-soft)">${escapeHtml(w.employeeName||'—')}</td>
             </tr>
-          `).join('') : `<tr><td colspan="5" class="empty">Списаний не найдено</td></tr>`}
+          `).join('') : `<tr><td colspan="6" class="empty">Списаний не найдено</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1268,8 +1346,20 @@ function parseItemKey(key){
   const parts = key.split('~~');
   return {sku:parts[0], client:parts[1], size:parts[2], warehouseId:parts[3]||'MAIN'};
 }
+let invPage = 1;
+let invPageSize = parseInt(localStorage.getItem('sklad42_inv_page_size')) || 50;
+function resetInventoryPageAndRender(){ invPage = 1; renderInventory(); }
+function goInvPage(delta){ invPage += delta; renderInventory(); }
+function changeInvPageSize(val){
+  invPageSize = parseInt(val) || 50;
+  try{ localStorage.setItem('sklad42_inv_page_size', invPageSize); }catch(e){}
+  invPage = 1;
+  renderInventory();
+}
 function renderInventory(){
   const q = (document.getElementById('invSearch').value || '').toLowerCase();
+  const pageSizeSelect = document.getElementById('invPageSize');
+  if(pageSizeSelect) pageSizeSelect.value = String(invPageSize);
   const clientFilter = document.getElementById('invClientFilter').value;
   const cellFilter = document.getElementById('invCellFilter').value;
   const warehouseFilter = hasFullWarehouseAccess()
@@ -1318,7 +1408,13 @@ function renderInventory(){
     return a.cell - b.cell;
   });
 
-  body.innerHTML = rows.map(i => {
+  const totalItems = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / invPageSize));
+  if(invPage > totalPages) invPage = totalPages;
+  if(invPage < 1) invPage = 1;
+  const pageRows = rows.slice((invPage-1)*invPageSize, invPage*invPageSize);
+
+  body.innerHTML = pageRows.map(i => {
     const key = itemKey(i);
     if(!readOnly && editingSku === key){
       return `<tr>
@@ -1484,7 +1580,7 @@ function renderInventory(){
             </div>
             ${moves.length ? moves.map(m=>`
               <div class="pick-row" style="background:transparent">
-                <div><div class="sku-name" style="font-size:13px">${m.type}</div><div class="sku-code mono">${m.time}</div></div>
+                <div><div class="sku-name" style="font-size:13px">${m.type}</div><div class="sku-code mono">${m.time}${m.employeeName?` · ${escapeHtml(m.employeeName)}`:''}</div></div>
                 <div class="qty-need" style="color:${m.delta>=0?'var(--ok)':'var(--warn)'};font-weight:600">${m.delta>=0?'+':''}${m.delta} шт</div>
               </div>
             `).join('') : `<p style="font-size:13px;color:var(--ink-faint);margin:0">Движений пока не было</p>`}
@@ -1503,6 +1599,24 @@ function renderInventory(){
     <div class="stat"><div class="val">${total}</div><div class="lbl">Единиц товара всего</div></div>
     <div class="stat"><div class="val" style="color:${low?'var(--warn)':'var(--ink)'}">${low}</div><div class="lbl">Позиций заканчивается</div></div>
   `;
+
+  const paginationEl = document.getElementById('invPagination');
+  if(paginationEl){
+    if(!totalItems){
+      paginationEl.innerHTML = '';
+    } else {
+      const from = (invPage-1)*invPageSize + 1;
+      const to = Math.min(invPage*invPageSize, totalItems);
+      paginationEl.innerHTML = `
+        <span style="font-size:13px;color:var(--ink-soft)">Показано ${from}–${to} из ${totalItems}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn btn-ghost" style="padding:5px 12px" onclick="goInvPage(-1)" ${invPage<=1?'disabled':''}>← Назад</button>
+          <span style="font-size:13px;color:var(--ink-soft);white-space:nowrap">Стр. ${invPage} из ${totalPages}</span>
+          <button class="btn btn-ghost" style="padding:5px 12px" onclick="goInvPage(1)" ${invPage>=totalPages?'disabled':''}>Вперёд →</button>
+        </div>
+      `;
+    }
+  }
 }
 function adjustQty(key, delta){
   const {sku, client, size} = parseItemKey(key);
@@ -1600,8 +1714,8 @@ function logWriteOff(sku, name, qty, reason, client, size){
   const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   const dd = now.getDate().toString().padStart(2,'0');
   const mm = (now.getMonth()+1).toString().padStart(2,'0');
-  writeOffLog.push({sku, name, qty, reason, time: `${dd}.${mm} ${time}`});
-  sb.from('write_off_log').insert({sku, name, qty, reason}).then(({error})=>{ if(error) console.error(error); });
+  writeOffLog.push({sku, name, qty, reason, time: `${dd}.${mm} ${time}`, employeeName: currentUser?currentUser.name:''});
+  sb.from('write_off_log').insert({sku, name, qty, reason, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
   logMovement(sku, name, -qty, 'Списание: '+reason, client, size);
 }
 function openDelete(key){ deletingSku = key; editingSku = null; writeOffSku = null; historySku = null; renderInventory(); }
@@ -1612,7 +1726,7 @@ function confirmDelete(key){
   inventory = inventory.filter(i=>itemKey(i)!==key);
   deletingSku = null;
   if(item){
-    sb.from('movement_log').insert({sku, name:item.name, delta:-item.qty, type:'Удаление карточки', client_name:item.client||null, size:item.size||null}).then(({error})=>{ if(error) console.error(error); });
+    sb.from('movement_log').insert({sku, name:item.name, delta:-item.qty, type:'Удаление карточки', client_name:item.client||null, size:item.size||null, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
   }
   sb.from('inventory').delete().eq('sku', sku).eq('client_name', client||'').eq('size', size||'').then(({error})=>{ if(error){ console.error(error); toast('Не удалось удалить в базе'); } });
   toast(`Карточка «${item ? item.name : sku}» удалена`);
@@ -1656,7 +1770,7 @@ function logMovement(sku, name, delta, type, client, size){
   const now = new Date();
   const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   movementLog.push({sku, name, delta, type, time, client, size});
-  sb.from('movement_log').insert({sku, name, delta, type, client_name: client||null, size: size||null})
+  sb.from('movement_log').insert({sku, name, delta, type, client_name: client||null, size: size||null, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null})
     .then(({error})=>{ if(error) console.error(error); })
     .catch(e=>{ console.error(e); toast('Нет связи с базой — запись истории не сохранилась'); });
   syncInventoryRow(sku, client, size);
@@ -1705,10 +1819,18 @@ async function pushStocksToWbSilent(clientId){
     toast(`WB: остатки обновлены автоматически (${data.sent} поз.)`);
   }catch(e){ /* тихо игнорируем — не спамим, если сервер недоступен */ }
 }
-document.getElementById('invSearch').addEventListener('input', renderInventory);
-document.getElementById('invClientFilter').addEventListener('change', renderInventory);
-document.getElementById('invCellFilter').addEventListener('change', renderInventory);
-document.getElementById('invWarehouseFilter').addEventListener('change', renderInventory);
+document.getElementById('invSearch').addEventListener('input', resetInventoryPageAndRender);
+document.getElementById('invClientFilter').addEventListener('change', resetInventoryPageAndRender);
+document.getElementById('invCellFilter').addEventListener('change', resetInventoryPageAndRender);
+document.getElementById('invWarehouseFilter').addEventListener('change', resetInventoryPageAndRender);
+document.getElementById('invPageSize').addEventListener('change', function(){ changeInvPageSize(this.value); });
+document.getElementById('journalSearch').addEventListener('input', debouncedJournalQuery);
+document.getElementById('journalClientFilter').addEventListener('change', resetJournalPageAndQuery);
+document.getElementById('journalEmployeeFilter').addEventListener('change', resetJournalPageAndQuery);
+document.getElementById('journalTypeFilter').addEventListener('input', debouncedJournalQuery);
+document.getElementById('journalDateFrom').addEventListener('change', resetJournalPageAndQuery);
+document.getElementById('journalDateTo').addEventListener('change', resetJournalPageAndQuery);
+document.getElementById('journalPageSize').addEventListener('change', function(){ changeJournalPageSize(this.value); });
 
 // ---------- RECEIVING ----------
 function renderReceiving(mode){
@@ -1837,10 +1959,24 @@ function logReceipt(sku, name, qty, client, size){
   const now = new Date();
   const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   receivingLog.push({sku, name, qty, time});
-  sb.from('receiving_log').insert({sku, name, qty})
+  sb.from('receiving_log').insert({sku, name, qty, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null})
     .then(({error})=>{ if(error) console.error(error); })
     .catch(e=>{ console.error(e); toast('Нет связи с базой — запись приёмки не сохранилась'); });
   logMovement(sku, name, qty, 'Приёмка', client, size);
+  if(client){
+    const cl = clients.find(c=>c.name===client);
+    if(cl && cl.receivingPricePerUnit > 0){
+      const amount = qty * cl.receivingPricePerUnit;
+      const id = 'RECV-' + Date.now() + '-' + Math.random().toString(36).slice(2,7);
+      const description = `Приёмка: ${name}${size?` (${size})`:''} × ${qty} шт`;
+      const dateStr = new Date().toISOString().slice(0,10);
+      const entry = {id, type:'income', category:'Приёмка', amount, description, clientId:cl.id, clientName:cl.name, date:dateStr, warehouseId:'MAIN', createdAt:new Date().toISOString()};
+      ddsEntries.unshift(entry);
+      sb.from('dds_entries').insert({id, type:'income', category:'Приёмка', amount, description, client_id:cl.id, client_name:cl.name, date:dateStr, warehouse_id:'MAIN', employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
+        if(error) console.error(error);
+      });
+    }
+  }
 }
 
 // ---------- CLIENTS ----------
@@ -1852,7 +1988,7 @@ function createClient(){
   if(!name){ toast('Укажите название клиента'); return; }
   const id = 'CL-' + Date.now();
   const finalContact = contact || '—';
-  const newClient = {id, name, contact: finalContact, telegram:'', wbKey:'', wbConnected:false, wbProducts:[], storageLiters:0, pricePerLiter:3};
+  const newClient = {id, name, contact: finalContact, telegram:'', wbKey:'', wbConnected:false, wbProducts:[], storageLiters:0, pricePerLiter:3, receivingPricePerUnit:0};
   clients.push(newClient);
   showingNewClientForm = false;
   toast('Клиент добавлен');
@@ -1956,6 +2092,16 @@ function saveTariff(clientId){
     if(error){ console.error(error); toast('Не удалось сохранить цену в базе'); }
   });
   recordStorageSnapshot(c);
+}
+function saveReceivingTariff(clientId){
+  const c = clients.find(x=>x.id===clientId);
+  const price = Math.max(0, parseFloat(document.getElementById('receivingTariffPrice-'+clientId).value) || 0);
+  c.receivingPricePerUnit = price;
+  toast('Цена приёмки сохранена');
+  renderClients();
+  sb.from('clients').update({receiving_price_per_unit: price}).eq('id', clientId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить цену в базе'); }
+  });
 }
 async function loadFbsTariffs(){
   const { data, error } = await sb.from('fbs_tariffs').select('*').order('max_liters').limit(50000);
@@ -2314,6 +2460,17 @@ function renderClientDetail(body){
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:baseline;gap:8px">
         <span style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700">${(liters*c.pricePerLiter).toFixed(2)} ₽</span>
         <span style="font-size:12px;color:var(--ink-soft)">в сутки, при текущем объёме</span>
+      </div>
+      <div style="margin-top:22px;padding-top:18px;border-top:1px solid var(--line)">
+        <h3 style="font-size:16px;margin-bottom:10px">Приёмка</h3>
+        <p style="font-size:12px;color:var(--ink-soft);margin:0 0 12px 0">Списывается автоматически при приёмке поставки от этого клиента — приходует в ДДС как «Приёмка». 0 = не тарифицируется.</p>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">
+          <div>
+            <div class="eyebrow" style="margin-bottom:6px">Цена за единицу, ₽</div>
+            <input class="search mono" id="receivingTariffPrice-${c.id}" type="number" min="0" step="0.1" value="${c.receivingPricePerUnit||0}" style="width:150px">
+          </div>
+          <button class="btn btn-primary" onclick="saveReceivingTariff('${c.id}')">Сохранить цену</button>
+        </div>
       </div>
     </div>
 
@@ -3543,7 +3700,7 @@ function wizardAttachKiz(order, kizCode){
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus;
     kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||'', clientName:order.clientName, time:new Date().toISOString()});
-    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName}).then(({error})=>{ if(error) console.error(error); });
+    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
     sb.from('wb_orders').update({kiz_code:kizCode, kiz_status:data.kizStatus, requires_kiz:true}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
     if(data.kizStatus==='attached'){
       playBeep('ok');
@@ -3749,7 +3906,7 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
         const description = `Отгрузка FBS №${order.orderId} · ${liters.toFixed(2)} л`;
         const entry = {id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, clientId:order.clientId, clientName:order.clientName, date:new Date().toISOString().slice(0,10), warehouseId: inv.warehouseId||'MAIN', createdAt:new Date().toISOString()};
         ddsEntries.unshift(entry);
-        sb.from('dds_entries').insert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, client_id:order.clientId, client_name:order.clientName, date:entry.date, warehouse_id: inv.warehouseId||'MAIN'}).then(({error})=>{
+        sb.from('dds_entries').insert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, client_id:order.clientId, client_name:order.clientName, date:entry.date, warehouse_id: inv.warehouseId||'MAIN', employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
           if(error) console.error(error);
         });
       }
@@ -3757,7 +3914,7 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
   }
   if(kizCode){
     kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, size:inv.size||'', clientName:order.clientName, time:new Date().toISOString()});
-    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, size:inv.size||null, client_name:order.clientName}).then(({error})=>{
+    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, size:inv.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
       if(error) console.error(error);
     });
   }
@@ -5050,7 +5207,8 @@ async function loadDdsEntries(){
   if(error){ console.error(error); return; }
   ddsEntries = data.map(d=>({
     id:d.id, type:d.type, category:d.category, amount:Number(d.amount), description:d.description||'',
-    clientId:d.client_id, clientName:d.client_name||'', date:d.date, warehouseId:d.warehouse_id||'MAIN', createdAt:d.created_at
+    clientId:d.client_id, clientName:d.client_name||'', date:d.date, warehouseId:d.warehouse_id||'MAIN', createdAt:d.created_at,
+    employeeName:d.employee_name||''
   }));
 }
 function updateDdsCategoryOptions(){
@@ -5086,6 +5244,14 @@ function renderDds(){
   updateDdsCategoryOptions();
   const dateInput = document.getElementById('ddsDate');
   if(dateInput && !dateInput.value) dateInput.value = new Date().toISOString().slice(0,10);
+  const invoiceClientSelect = document.getElementById('invoiceClient');
+  if(invoiceClientSelect){
+    const prev = invoiceClientSelect.value;
+    invoiceClientSelect.innerHTML = clients.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    if(clients.some(c=>c.id===prev)) invoiceClientSelect.value = prev;
+  }
+  const invoiceMonthInput = document.getElementById('invoiceMonth');
+  if(invoiceMonthInput && !invoiceMonthInput.value) invoiceMonthInput.value = new Date().toISOString().slice(0,7);
   document.getElementById('tochkaPanelWrap').innerHTML = renderTochkaPanel();
   renderDdsTable();
 }
@@ -5126,13 +5292,13 @@ function createDdsEntry(){
   const description = document.getElementById('ddsDescription').value.trim();
   if(!amount){ toast('Укажите сумму'); return; }
   const id = 'DDS-' + Date.now();
-  const entry = {id, type, category, amount, description, clientId: clientId||null, clientName: client?client.name:'', date, warehouseId, createdAt: new Date().toISOString()};
+  const entry = {id, type, category, amount, description, clientId: clientId||null, clientName: client?client.name:'', date, warehouseId, createdAt: new Date().toISOString(), employeeName: currentUser?currentUser.name:''};
   ddsEntries.unshift(entry);
   document.getElementById('ddsAmount').value = '';
   document.getElementById('ddsDescription').value = '';
   toast(`${type==='income'?'Приход':'Расход'} добавлен: ${amount.toFixed(2)} ₽`);
   renderDdsTable();
-  sb.from('dds_entries').insert({id, type, category, amount, description, client_id: clientId||null, client_name: client?client.name:null, date, warehouse_id: warehouseId}).then(({error})=>{
+  sb.from('dds_entries').insert({id, type, category, amount, description, client_id: clientId||null, client_name: client?client.name:null, date, warehouse_id: warehouseId, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить операцию в базе'); }
   });
 }
@@ -5187,7 +5353,7 @@ async function fetchTochkaStatement(){
       };
       ddsEntries.unshift(entry);
       created++;
-      sb.from('dds_entries').insert({id, type:entry.type, category:entry.category, amount:entry.amount, description:entry.description, client_id:null, client_name:entry.clientName||null, date:entry.date}).then(({error})=>{
+      sb.from('dds_entries').insert({id, type:entry.type, category:entry.category, amount:entry.amount, description:entry.description, client_id:null, client_name:entry.clientName||null, date:entry.date, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
         if(error) console.error(error);
       });
     });
@@ -5211,6 +5377,85 @@ function editDdsCategory(id){
       if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
     });
   }
+}
+function generateClientInvoice(){
+  const clientId = document.getElementById('invoiceClient').value;
+  const monthStr = document.getElementById('invoiceMonth').value;
+  if(!clientId){ toast('Выберите клиента'); return; }
+  if(!monthStr){ toast('Выберите месяц'); return; }
+  const client = clients.find(c=>c.id===clientId);
+  if(!client){ toast('Клиент не найден'); return; }
+  const [year, month] = monthStr.split('-').map(Number);
+  const periodStart = `${monthStr}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const periodEnd = `${monthStr}-${String(lastDay).padStart(2,'0')}`;
+
+  const rows = ddsEntries.filter(d=>d.type==='income' && d.clientId===clientId && d.date>=periodStart && d.date<=periodEnd);
+  if(!rows.length){ toast('За этот месяц по клиенту нет ни одной операции прихода'); return; }
+
+  const byCategory = {};
+  rows.forEach(r=>{ byCategory[r.category] = (byCategory[r.category]||0) + r.amount; });
+  const total = rows.reduce((s,r)=>s+r.amount,0);
+
+  let wh = getWarehouseInfo();
+  if(!wh.name){
+    editWarehouseInfo();
+    wh = getWarehouseInfo();
+    if(!wh.name) wh.name = 'ТелеПак';
+  }
+
+  const monthName = new Date(year, month-1, 1).toLocaleDateString('ru-RU', {month:'long', year:'numeric'});
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('ru-RU', {day:'2-digit', month:'long', year:'numeric'});
+
+  const win = window.open('', '_blank');
+  if(!win){ toast('Браузер заблокировал открытие окна — разрешите всплывающие окна для этого сайта и попробуйте снова'); return; }
+  win.document.write(`
+    <!DOCTYPE html><html><head><meta charset="utf-8"><title>Счёт за ${monthName}</title>
+    <style>
+      body{font-family:Arial,sans-serif;padding:40px;color:#111;max-width:850px;margin:0 auto;line-height:1.5}
+      h1{text-align:center;font-size:18px;margin-bottom:4px}
+      .sub{text-align:center;color:#555;margin-bottom:24px}
+      table{width:100%;border-collapse:collapse;margin-top:16px}
+      th,td{border:1px solid #333;padding:7px;font-size:13px;text-align:left}
+      th{background:#f2f2f2}
+      td.num,th.num{text-align:right}
+      tr.total td{font-weight:bold;background:#f7f7f7}
+      .sign{margin-top:60px;display:flex;justify-content:space-between;gap:40px}
+      .sign > div{width:100%}
+      .line{border-bottom:1px solid #333;margin-top:44px;margin-bottom:4px}
+      .small{font-size:11px;color:#666}
+      @media print{ body{padding:20px} }
+    </style></head><body>
+      <h1>СЧЁТ ЗА УСЛУГИ ФУЛФИЛМЕНТА</h1>
+      <div class="sub">за ${monthName} · составлен ${dateStr}</div>
+      <p><b>Исполнитель:</b> ${wh.name}${companySettings.inn?` (ИНН ${companySettings.inn}${companySettings.kpp?`, КПП ${companySettings.kpp}`:''})`:''}</p>
+      ${companySettings.legalAddress?`<p style="margin-top:-10px"><span class="small">${companySettings.legalAddress}</span></p>`:''}
+      ${companySettings.bankDetails?`<p style="margin-top:-10px"><span class="small">${companySettings.bankDetails.replace(/\n/g,'<br>')}</span></p>`:''}
+      <p><b>Заказчик:</b> ${client.name}${client.inn?` (ИНН ${client.inn}${client.kpp?`, КПП ${client.kpp}`:''})`:''}</p>
+      ${client.legalAddress?`<p style="margin-top:-10px"><span class="small">${client.legalAddress}</span></p>`:''}
+      <table>
+        <thead><tr><th>№</th><th>Статья</th><th class="num">Сумма, ₽</th></tr></thead>
+        <tbody>
+          ${Object.entries(byCategory).map(([cat,sum],idx)=>`
+            <tr><td>${idx+1}</td><td>${cat}</td><td class="num">${sum.toFixed(2)}</td></tr>
+          `).join('')}
+          <tr class="total"><td colspan="2">Итого к оплате</td><td class="num">${total.toFixed(2)} ₽</td></tr>
+        </tbody>
+      </table>
+      <div class="sign">
+        <div>
+          <div class="line"></div>
+          <div class="small">Исполнитель ${companySettings.directorName?`(${companySettings.directorName})`:''}</div>
+        </div>
+        <div>
+          <div class="line"></div>
+          <div class="small">Заказчик ${client.directorName?`(${client.directorName})`:''}</div>
+        </div>
+      </div>
+    </body></html>
+  `);
+  win.document.close();
 }
 function generateStorageIncome(){
   let created = 0, updated = 0, skipped = 0;
@@ -5274,7 +5519,7 @@ function renderDdsTable(){
       <table class="card-table">
         <thead><tr>
           <th style="width:30px"><input type="checkbox" ${allSelected?'checked':''} onchange="toggleAllDdsSelected(this.checked)"></th>
-          <th>Дата</th><th>Тип</th><th>Категория</th><th>Клиент</th><th>Комментарий</th><th>Сумма</th><th></th>
+          <th>Дата</th><th>Тип</th><th>Категория</th><th>Клиент</th><th>Комментарий</th><th>Сотрудник</th><th>Сумма</th><th></th>
         </tr></thead>
         <tbody>
           ${rows.map(d=>`
@@ -5285,6 +5530,7 @@ function renderDdsTable(){
               <td data-label="Категория" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" title="Нажмите, чтобы изменить категорию" onclick="editDdsCategory('${escapeHtml(d.id)}')">${escapeHtml(d.category)}</td>
               <td data-label="Клиент">${d.clientName?escapeHtml(d.clientName):'—'}</td>
               <td data-label="Комментарий" style="color:var(--ink-soft);font-size:13px">${escapeHtml(d.description)||'—'}</td>
+              <td data-label="Сотрудник" style="color:var(--ink-soft);font-size:12px">${d.employeeName?escapeHtml(d.employeeName):'—'}</td>
               <td class="mono" data-label="Сумма" style="font-weight:600;color:${d.type==='income'?'var(--ok)':'var(--warn)'}">${d.type==='income'?'+':'−'}${d.amount.toFixed(2)} ₽</td>
               <td style="text-align:right"><button class="btn btn-ghost" style="padding:4px 10px" onclick="deleteDdsEntry('${d.id}')">Удалить</button></td>
             </tr>
@@ -5462,7 +5708,7 @@ function adjustConsumableQty(id, delta, reason){
     if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
   });
   if(actualDelta !== 0){
-    sb.from('consumable_movement_log').insert({consumable_id:id, consumable_name:c.name, delta:actualDelta, reason: reason || 'Вручную'}).then(({error})=>{
+    sb.from('consumable_movement_log').insert({consumable_id:id, consumable_name:c.name, delta:actualDelta, reason: reason || 'Вручную', employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
       if(error) console.error(error);
     });
   }
@@ -5490,6 +5736,245 @@ function deleteConsumable(id){
 }
 
 // ---------- KITS (наборы/комплекты) ----------
+async function loadReturns(){
+  const { data, error } = await sb.from('returns').select('*').order('created_at',{ascending:false}).limit(500);
+  if(error){ console.error(error); return; }
+  returns_ = data.map(r=>({id:r.id, sku:r.sku, name:r.name, size:r.size||'', clientName:r.client_name||'', warehouseId:r.warehouse_id||'MAIN', qty:r.qty, orderId:r.order_id||'', reason:r.reason||'', resolution:r.resolution, employeeName:r.employee_name||'', createdAt:r.created_at}));
+}
+let returns_ = [];
+let foundReturnItem = null;
+function populateReturnClientFilter(){
+  const sel = document.getElementById('returnClientFilter');
+  if(!sel) return;
+  const current = sel.value;
+  sel.innerHTML = `<option value="">Любой клиент</option>` + clients.map(c=>`<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('');
+  sel.value = current;
+}
+function findReturnItem(){
+  const code = document.getElementById('returnBarcode').value.trim();
+  const clientFilter = document.getElementById('returnClientFilter').value;
+  const errEl = document.getElementById('returnFindError');
+  errEl.style.display = 'none';
+  if(!code) return;
+  let item = findInventoryItemByBarcode(code, clientFilter || undefined)
+    || (clientFilter ? findInventoryItem(code, clientFilter, undefined) : null)
+    || findInventoryItemByBarcode(code)
+    || inventory.find(i => i.sku === code && (!clientFilter || i.client === clientFilter));
+  if(!item){
+    foundReturnItem = null;
+    errEl.textContent = 'Товар не найден в остатках — проверьте штрихкод/артикул, либо сначала заведите карточку во вкладке «Остатки»';
+    errEl.style.display = 'block';
+    renderReturnForm();
+    return;
+  }
+  foundReturnItem = item;
+  renderReturnForm();
+}
+function cancelReturnItem(){ foundReturnItem = null; renderReturnForm(); }
+function submitReturn(resolution){
+  if(!foundReturnItem){ toast('Сначала найдите товар'); return; }
+  const item = foundReturnItem;
+  const qty = Math.max(1, parseInt(document.getElementById('returnQty').value) || 1);
+  const reason = document.getElementById('returnReason').value;
+  const orderId = document.getElementById('returnOrderId').value.trim();
+  const id = 'RET-' + Date.now();
+  const createdAt = new Date().toISOString();
+  const entry = {id, sku:item.sku, name:item.name, size:item.size||'', clientName:item.client||'', warehouseId:item.warehouseId||'MAIN', qty, orderId:orderId||'', reason:reason||'', resolution, employeeName: currentUser?currentUser.name:'', createdAt};
+  returns_.unshift(entry);
+  sb.from('returns').insert({id, sku:item.sku, name:item.name, size:item.size||null, client_name:item.client||null, warehouse_id:item.warehouseId||'MAIN', qty, order_id:orderId||null, reason:reason||null, resolution, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить возврат в базе'); }
+  });
+  if(resolution==='restock'){
+    item.qty += qty;
+    logMovement(item.sku, item.name, qty, 'Возврат на склад' + (reason?(': '+reason):''), item.client, item.size);
+    toast(`Возврат оформлен: +${qty} шт на склад`);
+  } else {
+    logMovement(item.sku, item.name, 0, 'Возврат: брак' + (reason?(': '+reason):''), item.client, item.size);
+    toast(`Возврат оформлен как брак: ${qty} шт`);
+  }
+  foundReturnItem = null;
+  document.getElementById('returnBarcode').value = '';
+  document.getElementById('returnOrderId').value = '';
+  renderReturns();
+}
+function renderReturnForm(){
+  const wrap = document.getElementById('returnFoundWrap');
+  if(!wrap) return;
+  if(!foundReturnItem){ wrap.innerHTML = ''; return; }
+  const item = foundReturnItem;
+  wrap.innerHTML = `
+    <div class="panel" style="padding:16px;margin-top:12px;background:var(--bg)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div>
+          <div class="sku-name">${escapeHtml(item.name)}</div>
+          <div class="sku-code mono">${escapeHtml(item.sku)}${item.size?' · '+escapeHtml(item.size):''} · ${escapeHtml(item.client||'без клиента')} · сейчас на складе: ${item.qty} шт</div>
+        </div>
+        <button class="btn btn-ghost" style="padding:4px 10px" onclick="cancelReturnItem()">✕</button>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <input class="search" id="returnQty" type="number" min="1" value="1" style="width:90px" placeholder="Кол-во">
+        <select class="search" id="returnReason" style="width:230px">
+          <option value="">Причина не указана</option>
+          <option value="Брак упаковки">Брак упаковки</option>
+          <option value="Брак товара">Брак товара</option>
+          <option value="Не подошёл размер">Не подошёл размер</option>
+          <option value="Отказ при получении">Отказ при получении</option>
+          <option value="Истёк срок хранения на ПВЗ">Истёк срок хранения на ПВЗ</option>
+          <option value="Другое">Другое</option>
+        </select>
+        <input class="search" id="returnOrderId" placeholder="№ заказа WB (необязательно)" style="width:200px">
+      </div>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn btn-accent" onclick="submitReturn('restock')">↩ Вернуть на склад</button>
+        <button class="btn btn-ghost" style="color:var(--warn)" onclick="submitReturn('defect')">🗑 Списать в брак</button>
+      </div>
+    </div>
+  `;
+}
+function renderReturns(){
+  populateReturnClientFilter();
+  renderReturnForm();
+  const wrap = document.getElementById('returnsTableWrap');
+  if(!wrap) return;
+  const q = (document.getElementById('returnsSearch')?.value || '').toLowerCase();
+  const filtered = returns_.filter(r=>!q || r.sku.toLowerCase().includes(q) || (r.name||'').toLowerCase().includes(q) || (r.clientName||'').toLowerCase().includes(q));
+  const restockQty = filtered.filter(r=>r.resolution==='restock').reduce((s,r)=>s+r.qty,0);
+  const defectQty = filtered.filter(r=>r.resolution==='defect').reduce((s,r)=>s+r.qty,0);
+  document.getElementById('returnsStats').innerHTML = `
+    <div class="stat"><div class="val">${filtered.length}</div><div class="lbl">Оформлено возвратов</div></div>
+    <div class="stat"><div class="val" style="color:var(--ok)">${restockQty}</div><div class="lbl">Возвращено на склад, шт</div></div>
+    <div class="stat"><div class="val" style="color:var(--warn)">${defectQty}</div><div class="lbl">Списано в брак, шт</div></div>
+  `;
+  wrap.innerHTML = `
+    <div class="panel">
+      <table class="card-table">
+        <thead><tr><th>Дата</th><th>Артикул</th><th>Товар</th><th>Клиент</th><th>Кол-во</th><th>Причина</th><th>Решение</th><th>Сотрудник</th></tr></thead>
+        <tbody>
+          ${filtered.length ? filtered.map(r=>`
+            <tr>
+              <td class="mono" data-label="Дата" style="font-size:12px;color:var(--ink-soft)">${formatLogDateTime(r.createdAt)}</td>
+              <td class="mono" data-label="Артикул">${escapeHtml(r.sku)}${r.size?' / '+escapeHtml(r.size):''}</td>
+              <td data-label="Товар">${escapeHtml(r.name||'')}</td>
+              <td data-label="Клиент">${escapeHtml(r.clientName||'—')}</td>
+              <td data-label="Кол-во">${r.qty} шт</td>
+              <td data-label="Причина" style="color:var(--ink-soft);font-size:13px">${escapeHtml(r.reason||'—')}</td>
+              <td data-label="Решение"><span class="status ${r.resolution==='restock'?'assembled':'overdue'}">${r.resolution==='restock'?'На склад':'Брак'}</span></td>
+              <td data-label="Сотрудник" style="font-size:12px;color:var(--ink-soft)">${escapeHtml(r.employeeName||'—')}</td>
+            </tr>
+          `).join('') : `<tr><td colspan="8" class="empty">Возвратов пока нет</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+let journalPage = 1;
+let journalPageSize = parseInt(localStorage.getItem('sklad42_journal_page_size')) || 50;
+let journalTotal = 0;
+let journalDebounceTimer = null;
+function populateJournalFilters(){
+  const clientSel = document.getElementById('journalClientFilter');
+  if(clientSel){
+    const prev = clientSel.value;
+    clientSel.innerHTML = `<option value="">Все клиенты</option>` + [...new Set(clients.map(c=>c.name))].sort().map(n=>`<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+    if([...clientSel.options].some(o=>o.value===prev)) clientSel.value = prev;
+  }
+  const empSel = document.getElementById('journalEmployeeFilter');
+  if(empSel){
+    const prev = empSel.value;
+    empSel.innerHTML = `<option value="">Все сотрудники</option>` + [...new Set(employees.map(e=>e.name))].sort().map(n=>`<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+    if([...empSel.options].some(o=>o.value===prev)) empSel.value = prev;
+  }
+  const pageSizeSel = document.getElementById('journalPageSize');
+  if(pageSizeSel) pageSizeSel.value = String(journalPageSize);
+}
+function resetJournalFilters(){
+  document.getElementById('journalSearch').value = '';
+  document.getElementById('journalClientFilter').value = '';
+  document.getElementById('journalEmployeeFilter').value = '';
+  document.getElementById('journalTypeFilter').value = '';
+  document.getElementById('journalDateFrom').value = '';
+  document.getElementById('journalDateTo').value = '';
+  journalPage = 1;
+  queryJournal();
+}
+function resetJournalPageAndQuery(){ journalPage = 1; queryJournal(); }
+function debouncedJournalQuery(){
+  clearTimeout(journalDebounceTimer);
+  journalDebounceTimer = setTimeout(resetJournalPageAndQuery, 350);
+}
+function goJournalPage(delta){ journalPage += delta; queryJournal(); }
+function changeJournalPageSize(val){
+  journalPageSize = parseInt(val) || 50;
+  try{ localStorage.setItem('sklad42_journal_page_size', journalPageSize); }catch(e){}
+  journalPage = 1;
+  queryJournal();
+}
+async function queryJournal(){
+  const wrap = document.getElementById('journalTableWrap');
+  if(!wrap) return;
+  const q = document.getElementById('journalSearch').value.trim();
+  const clientFilter = document.getElementById('journalClientFilter').value;
+  const employeeFilter = document.getElementById('journalEmployeeFilter').value;
+  const typeFilter = document.getElementById('journalTypeFilter').value.trim();
+  const dateFrom = document.getElementById('journalDateFrom').value;
+  const dateTo = document.getElementById('journalDateTo').value;
+
+  let query = sb.from('movement_log').select('*', {count:'exact'});
+  if(q) query = query.or(`sku.ilike.%${q}%,name.ilike.%${q}%`);
+  if(clientFilter) query = query.eq('client_name', clientFilter);
+  if(employeeFilter) query = query.eq('employee_name', employeeFilter);
+  if(typeFilter) query = query.ilike('type', `%${typeFilter}%`);
+  if(dateFrom) query = query.gte('created_at', dateFrom+'T00:00:00');
+  if(dateTo) query = query.lte('created_at', dateTo+'T23:59:59');
+  query = query.order('created_at', {ascending:false});
+  const from = (journalPage-1)*journalPageSize;
+  const to = from + journalPageSize - 1;
+  query = query.range(from, to);
+
+  const { data, error, count } = await query;
+  if(error){ console.error(error); wrap.innerHTML = `<div class="panel empty">Не удалось загрузить журнал</div>`; return; }
+  journalTotal = count || 0;
+  const totalPages = Math.max(1, Math.ceil(journalTotal / journalPageSize));
+  if(journalPage > totalPages) journalPage = totalPages;
+
+  const rowsHtml = (data||[]).map(m=>`
+    <tr>
+      <td class="mono" data-label="Дата" style="font-size:12px;color:var(--ink-soft)">${formatLogDateTime(m.created_at)}</td>
+      <td data-label="Тип">${escapeHtml(m.type||'')}</td>
+      <td class="mono" data-label="Артикул">${escapeHtml(m.sku)}${m.size?' / '+escapeHtml(m.size):''}</td>
+      <td data-label="Товар">${escapeHtml(m.name||'')}</td>
+      <td data-label="Клиент">${escapeHtml(m.client_name||'—')}</td>
+      <td data-label="Изменение" style="color:${m.delta>=0?'var(--ok)':'var(--warn)'};font-weight:600">${m.delta>=0?'+':''}${m.delta} шт</td>
+      <td data-label="Сотрудник" style="font-size:12px;color:var(--ink-soft)">${escapeHtml(m.employee_name||'—')}</td>
+    </tr>
+  `).join('') || `<tr><td colspan="7" class="empty">Ничего не найдено</td></tr>`;
+
+  const fromShown = journalTotal ? from+1 : 0;
+  const toShown = Math.min(to+1, journalTotal);
+
+  wrap.innerHTML = `
+    <div class="panel">
+      <div style="overflow-x:auto">
+        <table class="card-table">
+          <thead><tr><th>Дата и время</th><th>Тип</th><th>Артикул</th><th>Товар</th><th>Клиент</th><th>Изменение</th><th>Сотрудник</th></tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-top:1px solid var(--line);flex-wrap:wrap">
+        <span style="font-size:13px;color:var(--ink-soft)">${journalTotal ? `Показано ${fromShown}–${toShown} из ${journalTotal}` : 'Пусто'}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn btn-ghost" style="padding:5px 12px" onclick="goJournalPage(-1)" ${journalPage<=1?'disabled':''}>← Назад</button>
+          <span style="font-size:13px;color:var(--ink-soft);white-space:nowrap">Стр. ${journalPage} из ${totalPages}</span>
+          <button class="btn btn-ghost" style="padding:5px 12px" onclick="goJournalPage(1)" ${journalPage>=totalPages?'disabled':''}>Вперёд →</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+function renderJournal(){
+  populateJournalFilters();
+  queryJournal();
+}
 async function loadKitComponents(){
   const { data, error } = await sb.from('kit_components').select('*').limit(20000);
   if(error){ console.error(error); return; }
@@ -6780,7 +7265,7 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   if(kizCode){
     const scan = {kizCode, supplyId:supply.id, sku, name:item.name, size:size||'', clientName:supply.clientName, time:new Date().toISOString()};
     kizScans.push(scan);
-    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:supply.id, sku, name:item.name, size:size||null, client_name:supply.clientName}).then(({error})=>{
+    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:supply.id, sku, name:item.name, size:size||null, client_name:supply.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
       if(error){ console.error(error); toast('Не удалось сохранить КИЗ в базе — возможно, дубль'); }
     });
   }
@@ -7043,7 +7528,7 @@ function createRole(){
   const name = nameInput.value.trim();
   if(!name){ toast('Укажите название роли'); return; }
   const id = 'ROLE-' + Date.now();
-  const permissions = {inventory:true, clients:true, storage:true, supplies:true, outbound:true, fbs:true, dds:true, stocktake:true, warehouses:true, consumables:true, employees:true};
+  const permissions = {inventory:true, clients:true, storage:true, supplies:true, outbound:true, fbs:true, dds:true, stocktake:true, warehouses:true, consumables:true, returns:true, employees:true};
   roles.push({id, name, permissions});
   toast(`Роль «${name}» создана со всеми правами`);
   renderEmployeesTab();
@@ -7073,7 +7558,7 @@ function renderEmployeesTab(){
   const body = document.getElementById('employeesBody');
 
   if(currentEmployeesView==='roles'){
-    const permLabels = [['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['outbound','Поставка на склад'],['fbs','Заказы FBS'],['dds','ДДС'],['stocktake','Инвентаризация'],['warehouses','Склады'],['consumables','Расходники'],['employees','Сотрудники']];
+    const permLabels = [['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['outbound','Поставка на склад'],['fbs','Заказы FBS'],['dds','ДДС'],['stocktake','Инвентаризация'],['warehouses','Склады'],['consumables','Расходники'],['returns','Возвраты'],['employees','Сотрудники']];
     body.innerHTML = `
       <div class="panel" style="padding:18px;margin-bottom:18px">
         <div class="eyebrow" style="margin-bottom:10px">Новая роль</div>
@@ -7249,24 +7734,24 @@ function removeExtraBarcode(key, barcode){
 async function loadMovementLog(){
   const { data, error } = await sb.from('movement_log').select('*').order('created_at',{ascending:true}).limit(500);
   if(error){ console.error(error); return; }
-  movementLog = data.map(m=>({sku:m.sku, name:m.name, delta:m.delta, type:m.type, time: formatLogTime(m.created_at), client:m.client_name, size:m.size}));
+  movementLog = data.map(m=>({sku:m.sku, name:m.name, delta:m.delta, type:m.type, time: formatLogTime(m.created_at), client:m.client_name, size:m.size, employeeName:m.employee_name||''}));
 }
 async function loadWriteOffLog(){
   const { data, error } = await sb.from('write_off_log').select('*').order('created_at',{ascending:true}).limit(200);
   if(error){ console.error(error); return; }
-  writeOffLog = data.map(w=>({sku:w.sku, name:w.name, qty:w.qty, reason:w.reason, time: formatLogDateTime(w.created_at)}));
+  writeOffLog = data.map(w=>({sku:w.sku, name:w.name, qty:w.qty, reason:w.reason, time: formatLogDateTime(w.created_at), employeeName:w.employee_name||''}));
 }
 async function loadReceivingLog(){
   const { data, error } = await sb.from('receiving_log').select('*').order('created_at',{ascending:true}).limit(200);
   if(error){ console.error(error); return; }
-  receivingLog = data.map(r=>({sku:r.sku, name:r.name, qty:r.qty, time: formatLogTime(r.created_at)}));
+  receivingLog = data.map(r=>({sku:r.sku, name:r.name, qty:r.qty, time: formatLogTime(r.created_at), employeeName:r.employee_name||''}));
 }
 async function loadClients(){
   const { data, error } = await sb.from('clients').select('*').order('name').limit(50000);
   if(error){ console.error(error); return; }
   clients = data.map(c=>({
     id:c.id, name:c.name, contact:c.contact||'—', telegram:c.telegram||'', wbKey:c.wb_key||'', wbConnected:c.wb_connected||false,
-    wbWarehouseId:c.wb_warehouse_id||'', wbAutoSync: c.wb_auto_sync!==false, wbProducts:[], storageLiters:c.storage_liters||0, pricePerLiter:c.price_per_liter||0,
+    wbWarehouseId:c.wb_warehouse_id||'', wbAutoSync: c.wb_auto_sync!==false, wbProducts:[], storageLiters:c.storage_liters||0, pricePerLiter:c.price_per_liter||0, receivingPricePerUnit:c.receiving_price_per_unit||0,
     inn:c.inn||'', kpp:c.kpp||'', legalAddress:c.legal_address||'', bankDetails:c.bank_details||'', directorName:c.director_name||'',
     portalToken:c.portal_token||''
   }));
@@ -7315,7 +7800,7 @@ async function loadOutboundSupplies(){
 async function loadKizScans(){
   const { data, error } = await sb.from('kiz_scans').select('*').order('created_at',{ascending:true}).limit(50000);
   if(error){ console.error(error); return; }
-  kizScans = data.map(k=>({kizCode:k.kiz_code, supplyId:k.supply_id, sku:k.sku, name:k.name, size:k.size||'', clientName:k.client_name, time:k.created_at}));
+  kizScans = data.map(k=>({kizCode:k.kiz_code, supplyId:k.supply_id, sku:k.sku, name:k.name, size:k.size||'', clientName:k.client_name, time:k.created_at, employeeName:k.employee_name||''}));
 }
 
 // ---------- INIT ----------
@@ -7354,7 +7839,7 @@ async function enterClientPortal(token){
 }
 async function loadStaffData(){
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes(), loadConsumables(), loadKitComponents()]);
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadKizScans(), loadFbsOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes(), loadConsumables(), loadKitComponents(), loadReturns()]);
   }catch(err){
     console.error(err);
   }
