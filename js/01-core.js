@@ -59,6 +59,15 @@ let deletingOutboundId = null;
 
 let fbsOrders = [];
 let fbsView = 'new';
+let fbsCompletePage = 1;
+let fbsCompletePageSize = parseInt(localStorage.getItem('sklad42_fbs_complete_page_size')) || 50;
+function goFbsCompletePage(delta){ fbsCompletePage += delta; renderFbsBody(); }
+function changeFbsCompletePageSize(val){
+  fbsCompletePageSize = parseInt(val) || 50;
+  try{ localStorage.setItem('sklad42_fbs_complete_page_size', fbsCompletePageSize); }catch(e){}
+  fbsCompletePage = 1;
+  renderFbsBody();
+}
 let fbsSelectedClientId = '';
 let assemblingOrder = null;
 let fbsPendingKiz = null;
@@ -352,6 +361,7 @@ function switchTab(tab){
   if(tab==='warehouses') renderWarehouses();
   if(tab==='consumables') renderConsumables();
   if(tab==='returns') renderReturns();
+  if(tab==='portal-supplies'){ renderPortalSupplyDraftRows(); renderPortalSuppliesList(); }
   if(tab==='journal') renderJournal();
   if(tab==='employees') renderEmployeesTab();
   try{ localStorage.setItem('sklad42_active_tab', tab); }catch(e){}

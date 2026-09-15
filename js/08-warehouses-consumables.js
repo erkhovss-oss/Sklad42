@@ -42,15 +42,25 @@ function createWarehouse(){
   });
 }
 function deleteWarehouse(id){
-  const inUse = inventory.some(i=>(i.warehouseId||'MAIN')===id);
-  if(inUse){ toast('На этом складе ещё числится товар — сначала переместите или спишите его'); return; }
+  const blockers = [];
+  if(inventory.some(i=>(i.warehouseId||'MAIN')===id)) blockers.push('остатки');
+  if(supplies.some(s=>(s.warehouseId||'MAIN')===id)) blockers.push('плановые поставки');
+  if(outboundSupplies.some(s=>(s.sourceWarehouseId||'MAIN')===id || s.destWarehouseId===id)) blockers.push('поставки на склад');
+  if(employees.some(e=>e.warehouseId===id)) blockers.push('сотрудники');
+  if(ddsEntries.some(d=>(d.warehouseId||'MAIN')===id)) blockers.push('операции ДДС');
+  if(stocktakes.some(s=>s.warehouseId===id)) blockers.push('инвентаризации');
+  if(consumables.some(c=>(c.warehouseId||'MAIN')===id)) blockers.push('расходники');
+  if(blockers.length){
+    toast(`Нельзя удалить склад — с ним ещё связаны: ${blockers.join(', ')}. Сначала перенесите или удалите эти записи.`);
+    return;
+  }
   const w = warehouses.find(x=>x.id===id);
   if(!confirm(`Удалить склад «${w?w.name:id}»?`)) return;
   warehouses = warehouses.filter(x=>x.id!==id);
   toast('Склад удалён');
   renderWarehouses();
   sb.from('warehouses').delete().eq('id', id).then(({error})=>{
-    if(error){ console.error(error); toast('Не удалось удалить склад в базе'); }
+    if(error){ console.error(error); toast('Не удалось удалить склад в базе — возможно, появились новые связанные записи. Обновите страницу и попробуйте снова'); }
   });
 }
 function warehouseName(id){
