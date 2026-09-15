@@ -538,6 +538,7 @@
     <div class="logo"><b>ТелеПак</b><span>WMS</span></div>
     <div class="nav-group-label">Склад</div>
     <div class="nav-item active" data-tab="inventory" style="padding-left:26px"><span class="num">01</span>Остатки</div>
+    <div class="nav-item" data-tab="portal-supplies" style="display:none"><span class="num">02</span>Плановые поставки</div>
     <div class="nav-item" data-tab="clients"><span class="num">02</span>Клиенты</div>
     <div class="nav-item" data-tab="storage"><span class="num">03</span>Хранение</div>
     <div class="nav-item" data-tab="supplies"><span class="num">04</span>Плановые поставки</div>
@@ -615,6 +616,28 @@
           <div class="stat-row" id="writeoffStats"></div>
           <div id="writeoffsTableWrap"></div>
         </div>
+      </section>
+
+      <!-- CLIENT PORTAL: SUPPLY REQUESTS -->
+      <section class="section" id="tab-portal-supplies">
+        <div class="page-head">
+          <div>
+            <h1>Плановые поставки</h1>
+            <p>Подайте заявку на отправку товара на склад и следите за статусом уже поданных.</p>
+          </div>
+        </div>
+        <div class="panel" style="padding:20px;margin-bottom:18px">
+          <div class="eyebrow" style="margin-bottom:12px">Новая заявка</div>
+          <div id="portalSupplyDraftRows"></div>
+          <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+            <button class="btn btn-ghost" onclick="addPortalSupplyDraftRow()">+ Добавить позицию</button>
+          </div>
+          <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+            <button class="btn btn-accent" onclick="submitPortalSupply()">Отправить заявку</button>
+          </div>
+        </div>
+        <div class="eyebrow" style="margin-bottom:10px">Поданные заявки</div>
+        <div id="portalSuppliesListWrap"></div>
       </section>
 
       <!-- CLIENTS -->
