@@ -11,9 +11,15 @@ function renderFbsClientSelect(){
 }
 function setFbsView(view){
   fbsView = view;
+  fbsCompletePage = 1;
   document.getElementById('fbsTabNew').className = 'btn ' + (view==='new'?'btn-accent':'btn-ghost');
   document.getElementById('fbsTabConfirm').className = 'btn ' + (view==='confirm'?'btn-accent':'btn-ghost');
   document.getElementById('fbsTabComplete').className = 'btn ' + (view==='complete'?'btn-accent':'btn-ghost');
+  const pageSizeSelect = document.getElementById('fbsCompletePageSize');
+  if(pageSizeSelect){
+    pageSizeSelect.style.display = view==='complete' ? '' : 'none';
+    pageSizeSelect.value = String(fbsCompletePageSize);
+  }
   renderFbsBody();
 }
 function renderFbsOrders(){
@@ -121,7 +127,7 @@ async function discoverMissingFbsOrders(){
   if(errors.length) toast(`Ошибки у ${errors.length} клиент(ов): ${errors.join(' | ')}`);
   else toast(`У WB за 30 дней: ${totalFound}. Не было в системе: ${totalMissing}. Добавлено: ${totalInserted}.`);
 }
-function renderFbsGroupedBySupply(rows, clientId, isDelivered){
+function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
   if(!rows.length) return '';
   const groups = {};
   const order = [];
@@ -130,7 +136,29 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered){
     if(!groups[key]){ groups[key] = { supplyId: o.wbSupplyId, clientName: o.clientName, orders: [] }; order.push(key); }
     groups[key].orders.push(o);
   });
-  return `<div>${order.map(key=>{
+  let pageOrder = order;
+  let paginationHtml = '';
+  if(page && pageSize){
+    const totalGroups = order.length;
+    const totalPages = Math.max(1, Math.ceil(totalGroups / pageSize));
+    if(page > totalPages) page = totalPages;
+    if(page < 1) page = 1;
+    if(fbsCompletePage !== page) fbsCompletePage = page;
+    const from = (page-1)*pageSize;
+    const to = Math.min(from+pageSize, totalGroups);
+    pageOrder = order.slice(from, to);
+    paginationHtml = `
+      <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;margin-top:4px;flex-wrap:wrap">
+        <span style="font-size:13px;color:var(--ink-soft)">Показано поставок ${totalGroups?from+1:0}–${to} из ${totalGroups}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn btn-ghost" style="padding:5px 12px" onclick="goFbsCompletePage(-1)" ${page<=1?'disabled':''}>← Назад</button>
+          <span style="font-size:13px;color:var(--ink-soft);white-space:nowrap">Стр. ${page} из ${totalPages}</span>
+          <button class="btn btn-ghost" style="padding:5px 12px" onclick="goFbsCompletePage(1)" ${page>=totalPages?'disabled':''}>Вперёд →</button>
+        </div>
+      </div>
+    `;
+  }
+  return `<div>${pageOrder.map(key=>{
     const g = groups[key];
     const isExpanded = !!expandedFbsSupplyIds[key];
     const missingKizInGroup = g.orders.filter(o=>o.requiresKiz && o.kizStatus!=='attached').length;
@@ -161,7 +189,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered){
         ` : ''}
       </div>
     `;
-  }).join('')}</div>`;
+  }).join('')}</div>${paginationHtml}`;
 }
 function toggleFbsSupplyGroup(key){
   expandedFbsSupplyIds[key] = !expandedFbsSupplyIds[key];
@@ -253,7 +281,7 @@ function renderFbsBody(){
       else renderFbsTrbxPanel(clientId);
     }
   } else {
-    body.innerHTML = renderFbsGroupedBySupply(rows, clientId, true);
+    body.innerHTML = renderFbsGroupedBySupply(rows, clientId, true, fbsCompletePage, fbsCompletePageSize);
   }
 }
 function startAssemblyMode(){
@@ -1524,5 +1552,6 @@ async function loadFbsOrders(){
     kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
 }
-document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fetchNewFbsOrders(true); });
+document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; fetchNewFbsOrders(true); });
+document.getElementById('fbsCompletePageSize').addEventListener('change', function(){ changeFbsCompletePageSize(this.value); });
 
