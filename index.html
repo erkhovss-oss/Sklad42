@@ -571,6 +571,8 @@
           </div>
         </div>
 
+        <div id="portalStorageStats" class="stat-row" style="display:none;margin-bottom:16px"></div>
+
         <div id="inventoryStockView">
           <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
             <select class="search" id="invClientFilter" style="width:200px;max-width:100%">
@@ -632,6 +634,11 @@
           <div id="portalSupplyDraftRows"></div>
           <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
             <button class="btn btn-ghost" onclick="addPortalSupplyDraftRow()">+ Добавить позицию</button>
+            <button class="btn btn-ghost" onclick="downloadPortalSupplyTemplate()">📥 Скачать шаблон Excel</button>
+            <label class="btn btn-ghost" style="cursor:pointer;margin:0">
+              📤 Загрузить Excel
+              <input type="file" accept=".xlsx,.xls" style="display:none" onchange="handlePortalSupplyExcelUpload(this)">
+            </label>
           </div>
           <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
             <button class="btn btn-accent" onclick="submitPortalSupply()">Отправить заявку</button>
