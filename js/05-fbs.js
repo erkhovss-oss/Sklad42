@@ -1555,3 +1555,196 @@ async function loadFbsOrders(){
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; fetchNewFbsOrders(true); });
 document.getElementById('fbsCompletePageSize').addEventListener('change', function(){ changeFbsCompletePageSize(this.value); });
 
+// ---------- OZON ORDERS ----------
+let ozonOrders = [];
+let ozonView = 'new';
+let ozonSelectedClientId = '';
+let ozonDonePage = 1;
+let ozonDonePageSize = parseInt(localStorage.getItem('sklad42_ozon_done_page_size')) || 50;
+
+async function loadOzonOrders(){
+  let allRows = [];
+  const pageSize = 1000;
+  for(let from = 0; from < 15000; from += pageSize){
+    const { data, error } = await sb.from('ozon_orders').select('*').order('created_at',{ascending:false}).range(from, from+pageSize-1);
+    if(error){ console.error(error); break; }
+    allRows = allRows.concat(data);
+    if(!data || data.length < pageSize) break;
+  }
+  ozonOrders = allRows.map(o=>({
+    postingNumber:o.posting_number, clientId:o.client_id, clientName:o.client_name, sku:o.sku, productId:o.product_id,
+    article:o.article||'', barcode:o.barcode||'', name:o.name||'', size:o.size||'', price:o.price, qty:o.qty||1,
+    status:o.status||'', requiresKiz:o.requires_kiz||false, kizCode:o.kiz_code||'', kizStatus:o.kiz_status||null,
+    warehouseId:o.warehouse_id||'MAIN', ozonWarehouseId:o.ozon_warehouse_id, shipmentDate:o.shipment_date||null,
+    outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
+  }));
+}
+function populateOzonClientSelect(){
+  const sel = document.getElementById('ozonClientSelect');
+  if(!sel) return;
+  const prev = sel.value;
+  const ozonClients = clients.filter(c=>c.ozonConnected);
+  sel.innerHTML = `<option value="">Все клиенты Ozon</option>` + ozonClients.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  if([...sel.options].some(o=>o.value===prev)) sel.value = prev;
+  ozonSelectedClientId = sel.value;
+}
+function setOzonView(view){
+  ozonView = view;
+  ozonDonePage = 1;
+  document.getElementById('ozonTabNew').className = 'btn ' + (view==='new'?'btn-accent':'btn-ghost');
+  document.getElementById('ozonTabActive').className = 'btn ' + (view==='active'?'btn-accent':'btn-ghost');
+  document.getElementById('ozonTabDone').className = 'btn ' + (view==='done'?'btn-accent':'btn-ghost');
+  const pageSizeSelect = document.getElementById('ozonDonePageSize');
+  if(pageSizeSelect){
+    pageSizeSelect.style.display = view==='done' ? '' : 'none';
+    pageSizeSelect.value = String(ozonDonePageSize);
+  }
+  renderOzonBody();
+}
+function goOzonDonePage(delta){ ozonDonePage += delta; renderOzonBody(); }
+function changeOzonDonePageSize(val){
+  ozonDonePageSize = parseInt(val) || 50;
+  try{ localStorage.setItem('sklad42_ozon_done_page_size', ozonDonePageSize); }catch(e){}
+  ozonDonePage = 1;
+  renderOzonBody();
+}
+async function fetchNewOzonOrders(){
+  const targets = ozonSelectedClientId ? [ozonSelectedClientId] : clients.filter(c=>c.ozonConnected).map(c=>c.id);
+  if(!targets.length){ toast('Нет ни одного клиента с подключённым Ozon'); return; }
+  toast('Проверяю новые заказы Ozon…');
+  let totalFetched = 0;
+  for(const cid of targets){
+    const { data, error } = await sb.functions.invoke('ozon-orders-ts', { body: { clientId: cid, action:'fetch_new' } });
+    if(error || (data && data.error)){ console.error(error || data.error); toast('Ozon: ' + (data?.error || error.message)); continue; }
+    totalFetched += data?.fetched || 0;
+  }
+  await loadOzonOrders();
+  renderOzonBody();
+  toast(`Готово — новых отправлений: ${totalFetched}`);
+}
+async function syncOzonStatuses(){
+  const targets = ozonSelectedClientId ? [ozonSelectedClientId] : clients.filter(c=>c.ozonConnected).map(c=>c.id);
+  if(!targets.length){ toast('Нет ни одного клиента с подключённым Ozon'); return; }
+  toast('Обновляю статусы…');
+  let totalUpdated = 0;
+  for(const cid of targets){
+    const { data, error } = await sb.functions.invoke('ozon-orders-ts', { body: { clientId: cid, action:'sync_order_statuses' } });
+    if(error || (data && data.error)){ console.error(error || data.error); continue; }
+    totalUpdated += data?.updated || 0;
+  }
+  await loadOzonOrders();
+  renderOzonBody();
+  toast(`Статусы обновлены: ${totalUpdated}`);
+}
+function shipOzonOrder(postingNumber){
+  const order = ozonOrders.find(o=>o.postingNumber===postingNumber);
+  if(!order) return;
+  toast('Подтверждаю сборку…');
+  sb.functions.invoke('ozon-orders-ts', { body: { clientId: order.clientId, action:'ship', postingNumber } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('Ozon: ' + (data?.error || error.message)); return; }
+    order.status = 'awaiting_deliver';
+    if(data.warning) toast('Собрано, но есть предупреждение: ' + data.warning);
+    else toast('Отправление собрано и подтверждено');
+    renderOzonBody();
+  });
+}
+function getOzonSticker(postingNumber){
+  const order = ozonOrders.find(o=>o.postingNumber===postingNumber);
+  if(!order) return;
+  toast('Готовлю этикетку…');
+  sb.functions.invoke('ozon-orders-ts', { body: { clientId: order.clientId, action:'get_sticker', postingNumber } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('Ozon: ' + (data?.error || error.message)); return; }
+    const link = document.createElement('a');
+    link.href = 'data:application/pdf;base64,' + data.file;
+    link.download = 'ozon-' + postingNumber + '.pdf';
+    link.click();
+  });
+}
+function cancelOzonOrder(postingNumber){
+  const order = ozonOrders.find(o=>o.postingNumber===postingNumber);
+  if(!order) return;
+  sb.functions.invoke('ozon-orders-ts', { body: { clientId: order.clientId, action:'cancel_reasons', postingNumber } }).then(({data, error})=>{
+    if(error || (data && data.error)){ toast('Ozon: ' + (data?.error || error.message)); return; }
+    const reasons = data.reasons || [];
+    if(!reasons.length){ toast('Ozon не вернул список причин отмены'); return; }
+    const list = reasons.map(r=>`${r.id} — ${r.name || r.title}`).join('\n');
+    const chosen = prompt('Укажите ID причины отмены:\n' + list);
+    if(!chosen) return;
+    sb.functions.invoke('ozon-orders-ts', { body: { clientId: order.clientId, action:'cancel', postingNumber, cancelReasonId: chosen } }).then(({data, error})=>{
+      if(error || (data && data.error)){ toast('Ozon: ' + (data?.error || error.message)); return; }
+      order.status = 'cancelled';
+      toast('Отправление отменено');
+      renderOzonBody();
+    });
+  });
+}
+const OZON_STATUS_LABELS = {
+  awaiting_packaging:'Ожидает сборки', awaiting_deliver:'Ожидает отгрузки', delivering:'В доставке',
+  last_mile:'Курьер в пути', delivered:'Доставлено', cancelled:'Отменено', arbitration:'Арбитраж',
+  client_arbitration:'Арбитраж (клиент)', not_accepted:'Не принято'
+};
+function renderOzon(){
+  populateOzonClientSelect();
+  renderOzonBody();
+}
+function renderOzonBody(){
+  const wrap = document.getElementById('ozonBody');
+  if(!wrap) return;
+  let rows = ozonOrders.filter(o=>!ozonSelectedClientId || o.clientId===ozonSelectedClientId);
+  if(ozonView==='new'){
+    rows = rows.filter(o=>o.status==='awaiting_packaging');
+  } else if(ozonView==='active'){
+    rows = rows.filter(o=>!['awaiting_packaging','delivered','cancelled'].includes(o.status));
+  } else {
+    rows = rows.filter(o=>['delivered','cancelled'].includes(o.status));
+  }
+  rows = rows.slice().sort((a,b)=> new Date(b.orderCreatedAt||0) - new Date(a.orderCreatedAt||0));
+
+  if(!clients.some(c=>c.ozonConnected)){
+    wrap.innerHTML = `<div class="panel empty">Ни у одного клиента не подключён Ozon — добавьте Client-Id и API-ключ во вкладке «Клиенты»</div>`;
+    return;
+  }
+  if(!rows.length){
+    wrap.innerHTML = `<div class="panel empty">Здесь пока пусто</div>`;
+    return;
+  }
+
+  let paginationHtml = '';
+  if(ozonView==='done'){
+    const totalItems = rows.length;
+    const totalPages = Math.max(1, Math.ceil(totalItems / ozonDonePageSize));
+    if(ozonDonePage > totalPages) ozonDonePage = totalPages;
+    if(ozonDonePage < 1) ozonDonePage = 1;
+    const from = (ozonDonePage-1)*ozonDonePageSize;
+    const to = Math.min(from+ozonDonePageSize, totalItems);
+    rows = rows.slice(from, to);
+    paginationHtml = `
+      <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;margin-top:10px;flex-wrap:wrap">
+        <span style="font-size:13px;color:var(--ink-soft)">Показано ${totalItems?from+1:0}–${to} из ${totalItems}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn btn-ghost" style="padding:5px 12px" onclick="goOzonDonePage(-1)" ${ozonDonePage<=1?'disabled':''}>← Назад</button>
+          <span style="font-size:13px;color:var(--ink-soft);white-space:nowrap">Стр. ${ozonDonePage} из ${totalPages}</span>
+          <button class="btn btn-ghost" style="padding:5px 12px" onclick="goOzonDonePage(1)" ${ozonDonePage>=totalPages?'disabled':''}>Вперёд →</button>
+        </div>
+      </div>
+    `;
+  }
+
+  wrap.innerHTML = `<div>${rows.map(o=>`
+    <div class="panel" style="padding:14px 18px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <div>
+        <div class="sku-name">${escapeHtml(o.name)}${o.size?` · ${escapeHtml(o.size)}`:''}</div>
+        <div class="sku-code mono">${escapeHtml(o.article)} · № ${escapeHtml(o.postingNumber)} · ${o.qty} шт${!ozonSelectedClientId?` · ${escapeHtml(o.clientName)}`:''}${o.requiresKiz?' · требует маркировки':''}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="chip oz">${OZON_STATUS_LABELS[o.status] || o.status}</span>
+        ${o.status==='awaiting_packaging' ? `<button class="btn btn-accent" onclick="shipOzonOrder('${o.postingNumber}')">Собрать и отгрузить</button>` : ''}
+        <button class="btn btn-ghost" onclick="getOzonSticker('${o.postingNumber}')">🏷 Этикетка</button>
+        ${!['delivered','cancelled'].includes(o.status) ? `<button class="btn btn-ghost" style="color:var(--warn)" onclick="cancelOzonOrder('${o.postingNumber}')">Отменить</button>` : ''}
+      </div>
+    </div>
+  `).join('')}</div>${paginationHtml}`;
+}
+document.getElementById('ozonClientSelect').addEventListener('change', function(){ ozonSelectedClientId = this.value; ozonDonePage = 1; renderOzonBody(); });
+document.getElementById('ozonDonePageSize').addEventListener('change', function(){ changeOzonDonePageSize(this.value); });
+

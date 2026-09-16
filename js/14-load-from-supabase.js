@@ -84,7 +84,8 @@ async function loadClients(){
     id:c.id, name:c.name, contact:c.contact||'—', telegram:c.telegram||'', wbKey:c.wb_key||'', wbConnected:c.wb_connected||false,
     wbWarehouseId:c.wb_warehouse_id||'', wbAutoSync: c.wb_auto_sync!==false, wbProducts:[], storageLiters:c.storage_liters||0, pricePerLiter:c.price_per_liter||0, receivingPricePerUnit:c.receiving_price_per_unit||0,
     inn:c.inn||'', kpp:c.kpp||'', legalAddress:c.legal_address||'', bankDetails:c.bank_details||'', directorName:c.director_name||'',
-    portalToken:c.portal_token||''
+    portalToken:c.portal_token||'',
+    ozonClientId:c.ozon_client_id||'', ozonKey:c.ozon_key||'', ozonConnected:c.ozon_connected||false, ozonWarehouseId:c.ozon_warehouse_id||'', ozonAutoSync: c.ozon_auto_sync!==false
   }));
 }
 async function loadStorageHistory(){

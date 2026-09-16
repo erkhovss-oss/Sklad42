@@ -7,7 +7,7 @@ function createClient(){
   if(!name){ toast('Укажите название клиента'); return; }
   const id = 'CL-' + Date.now();
   const finalContact = contact || '—';
-  const newClient = {id, name, contact: finalContact, telegram:'', wbKey:'', wbConnected:false, wbProducts:[], storageLiters:0, pricePerLiter:3, receivingPricePerUnit:0};
+  const newClient = {id, name, contact: finalContact, telegram:'', wbKey:'', wbConnected:false, wbProducts:[], storageLiters:0, pricePerLiter:3, receivingPricePerUnit:0, ozonClientId:'', ozonKey:'', ozonConnected:false, ozonWarehouseId:''};
   clients.push(newClient);
   showingNewClientForm = false;
   toast('Клиент добавлен');
@@ -220,6 +220,41 @@ function saveWbWarehouseId(clientId){
   toast('ID склада сохранён. Автосинхронизация выключена — включите её отдельно, когда будете готовы');
   renderClients();
   sb.from('clients').update({wb_warehouse_id: val, wb_auto_sync: false}).eq('id', clientId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить ID склада в базе'); }
+  });
+}
+function connectOzon(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  const ozonClientId = document.getElementById('ozonClientIdInput-'+clientId).value.trim();
+  const key = document.getElementById('ozonKeyInput-'+clientId).value.trim();
+  if(!ozonClientId || !key){ toast('Укажите Client-Id и API-ключ'); return; }
+  client.ozonClientId = ozonClientId;
+  client.ozonKey = key;
+  client.ozonConnected = true;
+  toast('Ключ Ozon сохранён');
+  renderClients();
+  sb.from('clients').update({ozon_client_id: ozonClientId, ozon_key: key, ozon_connected: true}).eq('id', clientId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить ключ в базе'); }
+  });
+}
+function disconnectOzon(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  client.ozonConnected = false;
+  client.ozonClientId = '';
+  client.ozonKey = '';
+  toast('Ключ Ozon удалён');
+  renderClients();
+  sb.from('clients').update({ozon_client_id:'', ozon_key:'', ozon_connected:false}).eq('id', clientId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
+  });
+}
+function saveOzonWarehouseId(clientId){
+  const c = clients.find(x=>x.id===clientId);
+  const val = document.getElementById('ozonWarehouseId-'+clientId).value.trim();
+  c.ozonWarehouseId = val;
+  toast('ID склада Ozon сохранён');
+  renderClients();
+  sb.from('clients').update({ozon_warehouse_id: val}).eq('id', clientId).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить ID склада в базе'); }
   });
 }
@@ -583,6 +618,32 @@ function renderClientDetail(body){
               <button class="btn ${already?'btn-ghost':'btn-primary'}" style="margin-left:12px" ${already?'disabled':''} onclick="addWbProductToInventory('${c.id}',${p.nmId},'${p.size||''}')">${already?'Уже в остатках':'+ В остатки'}</button>
             </div>
           `;}).join('') : `<p style="font-size:13px;color:var(--ink-faint)">Карточки ещё не загружены</p>`}
+        </div>
+      ` : ''}
+    </div>
+
+    <div class="panel" style="padding:20px;margin-bottom:18px">
+      <div class="eyebrow" style="margin-bottom:4px">Интеграция · Ozon</div>
+      <h3 style="font-size:18px;margin-bottom:12px">Client-Id и API-ключ продавца</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input class="search mono" id="ozonClientIdInput-${c.id}" placeholder="Client-Id" style="width:150px" value="${c.ozonClientId||''}">
+        <input class="search mono" id="ozonKeyInput-${c.id}" type="password" placeholder="Вставьте API-ключ из личного кабинета Ozon" style="flex:1;min-width:260px" value="${c.ozonKey||''}">
+        <button class="btn btn-primary" onclick="connectOzon('${c.id}')">Сохранить ключ</button>
+        ${c.ozonConnected ? `<button class="btn btn-ghost" onclick="disconnectOzon('${c.id}')">Отключить</button>` : ''}
+      </div>
+      <div style="margin-top:10px">
+        ${c.ozonConnected
+          ? `<span class="chip oz"><span class="dot"></span>Ключ сохранён</span>`
+          : `<span style="font-size:12px;color:var(--ink-faint)">Ключ ещё не добавлен</span>`}
+      </div>
+      <p style="font-size:12px;color:var(--ink-faint);margin-top:12px;line-height:1.6">
+        Client-Id и ключ выдаются в личном кабинете продавца Ozon → «Настройки» → «API-ключи». Запрос идёт через серверную функцию — ключ не покидает базу и не виден в коде страницы.
+      </p>
+      ${c.ozonConnected ? `
+        <div class="barcode-rule"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
+          <input class="search mono" id="ozonWarehouseId-${c.id}" placeholder="ID склада Ozon (необязательно — для фильтра заказов)" value="${c.ozonWarehouseId||''}" style="width:280px">
+          <button class="btn btn-ghost" onclick="saveOzonWarehouseId('${c.id}')">Сохранить склад</button>
         </div>
       ` : ''}
     </div>
