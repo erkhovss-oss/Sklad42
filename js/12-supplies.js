@@ -229,6 +229,8 @@ function downloadMx1Excel(id){
 }
 function downloadSupplyActExcel(id){
   const s = supplies.find(x=>x.id===id);
+  const client = clients.find(c=>c.id===s.clientId);
+  const wh = getWarehouseInfo();
   const actNumber = saveActNumber(id);
   const rows = buildActRows(s);
   const summary = actSummary(rows);
@@ -236,13 +238,19 @@ function downloadSupplyActExcel(id){
 
   const data = [
     [`Акт приёмки № ${actNumber} от ${today}`],
-    [`Поставка: ${s.id}`],
-    [`Клиент: ${s.clientName}`],
+    [],
+    [`Исполнитель (склад): ${wh.name||'—'}`, '', '', 'ИНН', wh.inn||'—'],
+    [`Клиент: ${s.clientName}`, '', '', 'ИНН', (client&&client.inn)||'—'],
+    [`Поставка: ${s.id}`, '', '', 'Склад', warehouseName(s.warehouseId)],
     [],
     ['№','Артикул','Размер','ШК товара','Наименование','План, шт','Факт, шт','Расхождение'],
     ...rows.map(r=>[r.n, r.sku, r.size, r.barcode, r.name, r.plan, r.fact, r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—']),
     [],
-    ['','','','','Итого:', summary.totalPlan, summary.totalFact, summary.mismatches ? `Расхождений: ${summary.mismatches} поз.` : 'Без расхождений']
+    ['','','','','Итого:', summary.totalPlan, summary.totalFact, summary.mismatches ? `Расхождений: ${summary.mismatches} поз.` : 'Без расхождений'],
+    [],
+    ['Принял (склад)', '', '(подпись)', '', '(расшифровка подписи)'],
+    [],
+    ['Сдал (поставщик)', '', '(подпись)', '', client&&client.directorName ? client.directorName : '(расшифровка подписи)'],
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
   ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:18},{wch:32},{wch:10},{wch:10},{wch:18}];
@@ -360,6 +368,7 @@ function generateSupplyActPdf(id){
   const actNumber = saveActNumber(id);
   const rows = buildActRows(s);
   const summary = actSummary(rows);
+  const client = clients.find(c=>c.id===s.clientId);
 
   let wh = getWarehouseInfo();
   if(!wh.name){
@@ -370,55 +379,129 @@ function generateSupplyActPdf(id){
 
   const today = new Date();
   const dateStr = today.toLocaleDateString('ru-RU', {day:'2-digit', month:'long', year:'numeric'});
+  const noMismatches = summary.mismatches === 0;
 
   const win = window.open('', '_blank');
   if(!win){ toast('Браузер заблокировал открытие окна — разрешите всплывающие окна для этого сайта и попробуйте снова'); return; }
   win.document.write(`
     <!DOCTYPE html><html><head><meta charset="utf-8"><title>Акт приёмки ${actNumber}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-      body{font-family:Arial,sans-serif;padding:40px;color:#111;max-width:850px;margin:0 auto;line-height:1.5}
-      h1{text-align:center;font-size:18px;margin-bottom:4px}
-      .sub{text-align:center;color:#555;margin-bottom:24px}
-      table{width:100%;border-collapse:collapse;margin-top:16px}
-      th,td{border:1px solid #333;padding:7px;font-size:12px;text-align:left}
-      th{background:#f2f2f2}
+      :root{
+        --bg:#F0EEE6; --panel:#FFFFFF; --ink:#1C1B19; --ink-soft:#6B665C; --ink-faint:#A39C8C;
+        --accent:#FF5B1F; --accent-ink:#FFFFFF; --ok:#2F7D4F; --ok-bg:#E7F2EA;
+        --warn:#B5471B; --warn-bg:#FBE9E1; --line:#DCD6C6;
+      }
+      *{box-sizing:border-box}
+      body{margin:0;background:var(--panel);color:var(--ink);font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;padding:36px;max-width:860px;margin:0 auto}
+      .mono{font-family:'IBM Plex Mono',monospace}
+      .eyebrow{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;letter-spacing:0.08em;font-size:12px;color:var(--ink-faint);font-weight:600}
+      .head{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:20px;border-bottom:3px solid var(--accent);margin-bottom:22px}
+      .brand{display:flex;align-items:center;gap:10px}
+      .brand-badge{width:38px;height:38px;border-radius:9px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:18px}
+      .brand-name{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:20px;letter-spacing:0.01em}
+      h1{font-family:'Barlow Condensed',sans-serif;font-size:30px;font-weight:700;margin:0 0 4px 0;text-align:right}
+      .sub-date{text-align:right;color:var(--ink-soft);font-size:13px}
+      .cards{display:flex;gap:14px;margin-bottom:20px}
+      .card{flex:1;background:var(--bg);border-radius:12px;padding:14px 16px}
+      .card .eyebrow{margin-bottom:6px}
+      .card .name{font-weight:600;font-size:14px;margin-bottom:2px}
+      .card .detail{font-size:12px;color:var(--ink-soft);line-height:1.5}
+      table{width:100%;border-collapse:collapse;margin-top:4px;border-radius:10px;overflow:hidden}
+      th{background:var(--bg);color:var(--ink-soft);font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;letter-spacing:0.04em;font-size:11px;font-weight:600;text-align:left;padding:10px 10px;border-bottom:2px solid var(--line)}
+      td{padding:9px 10px;font-size:13px;border-bottom:1px solid var(--line)}
       td.num,th.num{text-align:right}
-      tr.mismatch td{background:#fdecea;font-weight:bold;color:#a12a1f}
-      .summary{margin-top:16px;font-size:13px}
-      .summary b.ok{color:#2f7d4f}
-      .summary b.bad{color:#a12a1f}
-      .sign{margin-top:60px;display:flex;justify-content:space-between;gap:40px}
+      tr.mismatch td{background:var(--warn-bg)}
+      tr.mismatch td:first-child{border-left:3px solid var(--warn)}
+      .diff-bad{color:var(--warn);font-weight:700}
+      .diff-ok{color:var(--ink-faint)}
+      .summary-row{display:flex;justify-content:space-between;align-items:center;margin-top:20px;padding:16px 18px;background:var(--bg);border-radius:12px}
+      .summary-nums{display:flex;gap:26px}
+      .summary-nums .stat .val{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:24px;line-height:1}
+      .summary-nums .stat .lbl{font-size:11px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:0.04em;margin-top:2px}
+      .status-pill{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:999px;font-size:12px;font-weight:600}
+      .status-pill.ok{background:var(--ok-bg);color:var(--ok)}
+      .status-pill.bad{background:var(--warn-bg);color:var(--warn)}
+      .sign{margin-top:56px;display:flex;justify-content:space-between;gap:40px}
       .sign > div{width:100%}
-      .line{border-bottom:1px solid #333;margin-top:44px;margin-bottom:4px}
-      .small{font-size:11px;color:#666}
-      @media print{ body{padding:20px} }
+      .sign .role{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;letter-spacing:0.04em;font-size:12px;color:var(--ink-faint);margin-bottom:40px}
+      .line{border-bottom:1px solid var(--ink);margin-bottom:4px}
+      .small{font-size:11px;color:var(--ink-faint)}
+      .footer{margin-top:40px;text-align:center;font-size:11px;color:var(--ink-faint)}
+      @media print{
+        body{padding:16px}
+        .card{background:#F5F4EF !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        th{background:#F5F4EF !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .summary-row{background:#F5F4EF !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        tr.mismatch td{background:#FBE9E1 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .status-pill.ok{background:#E7F2EA !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .status-pill.bad{background:#FBE9E1 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .brand-badge{background:#FF5B1F !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .head{border-color:#FF5B1F !important}
+      }
     </style></head><body>
-      <h1>АКТ ПРИЁМКИ №${actNumber}</h1>
-      <div class="sub">${dateStr}</div>
-      <p><b>Исполнитель (склад):</b> ${wh.name}${wh.inn?` (ИНН ${wh.inn})`:''}</p>
-      <p><b>Клиент:</b> ${s.clientName}</p>
-      <p><b>Поставка:</b> № ${s.id}</p>
+      <div class="head">
+        <div class="brand">
+          <div class="brand-badge">Т</div>
+          <div>
+            <div class="brand-name">${wh.name}</div>
+            <div class="eyebrow" style="margin-top:2px">Акт приёмки товара</div>
+          </div>
+        </div>
+        <div>
+          <h1>№ ${escapeHtml(actNumber)}</h1>
+          <div class="sub-date">${dateStr}</div>
+        </div>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <div class="eyebrow">Исполнитель (склад)</div>
+          <div class="name">${escapeHtml(wh.name)}</div>
+          <div class="detail">${wh.inn?`ИНН ${escapeHtml(wh.inn)}`:''}</div>
+        </div>
+        <div class="card">
+          <div class="eyebrow">Клиент</div>
+          <div class="name">${escapeHtml(s.clientName)}</div>
+          <div class="detail">${client&&client.inn?`ИНН ${escapeHtml(client.inn)}`:''}</div>
+        </div>
+        <div class="card">
+          <div class="eyebrow">Поставка</div>
+          <div class="name mono">№ ${escapeHtml(s.id)}</div>
+          <div class="detail">${warehouseName(s.warehouseId)}</div>
+        </div>
+      </div>
+
       <table>
         <thead><tr><th>№</th><th>Артикул</th><th>Размер</th><th>ШК товара</th><th>Наименование</th><th class="num">План, шт</th><th class="num">Факт, шт</th><th class="num">Расхождение</th></tr></thead>
         <tbody>
           ${rows.map(r=>`
             <tr class="${r.diff!==0?'mismatch':''}">
-              <td>${r.n}</td><td>${r.sku}</td><td>${r.size}</td><td>${r.barcode}</td><td>${r.name}</td>
+              <td class="mono">${r.n}</td><td class="mono">${escapeHtml(r.sku)}</td><td>${escapeHtml(r.size)}</td><td class="mono">${escapeHtml(r.barcode)}</td><td>${escapeHtml(r.name)}</td>
               <td class="num">${r.plan}</td><td class="num">${r.fact}</td>
-              <td class="num">${r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—'}</td>
+              <td class="num ${r.diff!==0?'diff-bad':'diff-ok'}">${r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—'}</td>
             </tr>
           `).join('')}
         </tbody>
       </table>
-      <div class="summary">
-        Итого по плану: <b>${summary.totalPlan} шт</b> · Итого принято: <b>${summary.totalFact} шт</b><br>
-        ${summary.mismatches ? `<b class="bad">Выявлены расхождения по ${summary.mismatches} позиции(ям) — см. выделенные строки</b>` : `<b class="ok">Расхождений не выявлено, товар принят полностью в соответствии с планом</b>`}
+
+      <div class="summary-row">
+        <div class="summary-nums">
+          <div class="stat"><div class="val">${summary.totalPlan}</div><div class="lbl">По плану, шт</div></div>
+          <div class="stat"><div class="val">${summary.totalFact}</div><div class="lbl">Принято, шт</div></div>
+        </div>
+        ${noMismatches
+          ? `<span class="status-pill ok">✅ Без расхождений</span>`
+          : `<span class="status-pill bad">⚠ Расхождений: ${summary.mismatches} поз.</span>`}
       </div>
+
       <div class="sign">
-        <div>Принял (склад)<div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
-        <div>Сдал (поставщик)<div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
+        <div><div class="role">Принял (склад)</div><div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
+        <div><div class="role">Сдал (поставщик)</div><div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
       </div>
-      <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 300); };<\/script>
+      <div class="footer">Сформировано в ${escapeHtml(wh.name)} · ${dateStr}</div>
+      <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 350); };<\/script>
     </body></html>
   `);
   win.document.close();
