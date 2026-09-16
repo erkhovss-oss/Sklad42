@@ -247,6 +247,7 @@ function renderPortalSuppliesList(){
           ${s.status!=='planned' ? `
             <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
               <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="event.stopPropagation();downloadPortalSupplyActPdf('${s.id}')">📄 Скачать акт приёмки</button>
+              <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="event.stopPropagation();downloadPortalSupplyActExcel('${s.id}')">📊 Скачать в Excel</button>
             </div>
           ` : ''}
         </div>
@@ -254,6 +255,38 @@ function renderPortalSuppliesList(){
     </div>
   `;
   }).join('');
+}
+function downloadPortalSupplyActExcel(supplyId){
+  const s = portalSuppliesList.find(x=>x.id===supplyId);
+  if(!s) return;
+  const actNumber = s.actNumber || s.act_number || s.id;
+  const today = new Date().toLocaleDateString('ru-RU');
+  const rows = s.items.map((it,idx)=>{
+    const fact = it.receivedQty||0;
+    const diff = fact - it.qty;
+    return [idx+1, it.sku, it.size||'', it.barcode||'', it.name, it.qty, fact, diff!==0 ? (diff>0?'+':'')+diff : '—'];
+  });
+  const totalPlan = s.items.reduce((a,it)=>a+it.qty,0);
+  const totalFact = s.items.reduce((a,it)=>a+(it.receivedQty||0),0);
+  const mismatches = rows.filter(r=>r[7]!=='—').length;
+
+  const data = [
+    [`Акт приёмки № ${actNumber} от ${today}`],
+    [],
+    [`Исполнитель (склад): ${portalCompany.name||'—'}`, '', '', 'ИНН', portalCompany.inn||'—'],
+    [`Клиент: ${clientViewMode.name}`],
+    [`Поставка: ${s.id}`],
+    [],
+    ['№','Артикул','Размер','ШК товара','Наименование','План, шт','Факт, шт','Расхождение'],
+    ...rows,
+    [],
+    ['','','','','Итого:', totalPlan, totalFact, mismatches ? `Расхождений: ${mismatches} поз.` : 'Без расхождений']
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:18},{wch:32},{wch:10},{wch:10},{wch:18}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Акт приёмки');
+  XLSX.writeFile(wb, `Akt_priemki_${actNumber}.xlsx`);
 }
 function downloadPortalSupplyActPdf(supplyId){
   const s = portalSuppliesList.find(x=>x.id===supplyId);
