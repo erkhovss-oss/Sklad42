@@ -361,6 +361,7 @@ function switchTab(tab){
   if(tab==='warehouses') renderWarehouses();
   if(tab==='consumables') renderConsumables();
   if(tab==='returns') renderReturns();
+  if(tab==='ozon') renderOzon();
   if(tab==='portal-supplies'){ renderPortalSupplyDraftRows(); renderPortalSuppliesList(); }
   if(tab==='journal') renderJournal();
   if(tab==='employees') renderEmployeesTab();
