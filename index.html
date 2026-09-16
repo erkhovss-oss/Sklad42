@@ -544,6 +544,7 @@
     <div class="nav-item" data-tab="supplies"><span class="num">04</span>Плановые поставки</div>
     <div class="nav-item" data-tab="outbound"><span class="num">05</span>Поставка на склад</div>
     <div class="nav-item" data-tab="fbs"><span class="num">06</span>Заказы FBS</div>
+    <div class="nav-item" data-tab="ozon"><span class="num">07</span>Заказы Ozon</div>
     <div class="nav-item" data-tab="dds"><span class="num">07</span>ДДС</div>
     <div class="nav-item" data-tab="stocktake"><span class="num">08</span>Инвентаризация</div>
     <div class="nav-item" data-tab="warehouses"><span class="num">09</span>Склады</div>
@@ -738,6 +739,33 @@
           </select>
         </div>
         <div id="fbsBody"></div>
+      </section>
+
+      <!-- OZON ORDERS -->
+      <section class="section" id="tab-ozon">
+        <div class="page-head">
+          <div>
+            <h1>Заказы Ozon</h1>
+            <p>Отправления FBS Ozon — сборка, этикетки, статусы.</p>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+          <select class="search" id="ozonClientSelect" style="width:220px"></select>
+          <button class="btn btn-primary" onclick="fetchNewOzonOrders()">↓ Проверить новые</button>
+          <button class="btn btn-ghost" onclick="syncOzonStatuses()">🔄 Обновить статусы</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+          <button class="btn btn-accent" id="ozonTabNew" onclick="setOzonView('new')">Новые</button>
+          <button class="btn btn-ghost" id="ozonTabActive" onclick="setOzonView('active')">В доставке</button>
+          <button class="btn btn-ghost" id="ozonTabDone" onclick="setOzonView('done')">Завершено</button>
+          <select class="search" id="ozonDonePageSize" style="width:150px;display:none">
+            <option value="10">По 10</option>
+            <option value="50">По 50</option>
+            <option value="100">По 100</option>
+            <option value="200">По 200</option>
+          </select>
+        </div>
+        <div id="ozonBody"></div>
       </section>
 
       <!-- DDS -->
