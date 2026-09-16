@@ -55,6 +55,17 @@ function downloadPortalSupplyTemplate(){
   XLSX.utils.book_append_sheet(wb, ws, 'Заявка');
   XLSX.writeFile(wb, 'shablon_zayavka_postavka.xlsx');
 }
+function downloadPortalSupplyEmptyTemplate(){
+  const data = [
+    ['Артикул','Наименование','Размер','ШК','Кол-во'],
+    ['TK-1001','Пример товара','','', 10]
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:14},{wch:26},{wch:10},{wch:16},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Заявка');
+  XLSX.writeFile(wb, 'shablon_zayavka_postavka_pustoy.xlsx');
+}
 function handlePortalSupplyExcelUpload(inputEl){
   const file = inputEl.files[0];
   if(!file) return;
@@ -177,33 +188,211 @@ async function submitPortalSupply(){
   renderPortalSupplyDraftRows();
   await loadPortalSupplies();
 }
+let portalCompany = {name:'', inn:''};
 async function loadPortalSupplies(){
   if(!portalToken) return;
   const { data, error } = await sb.rpc('client_portal_supplies', { p_token: portalToken });
   if(error){ console.error(error); return; }
-  portalSuppliesList = data || [];
+  if(!data) return;
+  portalCompany = data.company || {name:'', inn:''};
+  portalSuppliesList = data.supplies || [];
+  renderPortalSuppliesList();
+}
+let portalExpandedSupplyIds = new Set();
+function togglePortalSupply(id){
+  if(portalExpandedSupplyIds.has(id)) portalExpandedSupplyIds.delete(id);
+  else portalExpandedSupplyIds.add(id);
   renderPortalSuppliesList();
 }
 function renderPortalSuppliesList(){
   const wrap = document.getElementById('portalSuppliesListWrap');
   if(!wrap) return;
   if(!portalSuppliesList.length){ wrap.innerHTML = `<div class="panel empty">Заявок пока нет</div>`; return; }
-  const statusLabel = s => ({planned:'Едет / ожидается на складе', received:'Принята', shipped:'Отправлена'}[s] || s);
+  const statusLabel = s => ({planned:'В работе', received:'Принята', shipped:'Отправлена'}[s] || s);
   const statusClass = s => ({planned:'planned', received:'shipped', shipped:'shipped'}[s] || 'planned');
-  wrap.innerHTML = portalSuppliesList.map(s=>`
-    <div class="panel" style="padding:16px 20px;margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-        <div>
-          <div style="font-weight:600;font-size:14px">${escapeHtml(s.id)}</div>
-          <div style="font-size:12px;color:var(--ink-faint)">${new Date(s.created_at).toLocaleDateString('ru-RU')} · ${s.items.length} позиц.</div>
+  wrap.innerHTML = portalSuppliesList.map(s=>{
+    const totalPlan = s.items.reduce((a,it)=>a+it.qty,0);
+    const totalFact = s.items.reduce((a,it)=>a+(it.receivedQty||0),0);
+    const inProgress = s.status === 'planned';
+    const hasMismatch = !inProgress && totalFact !== totalPlan;
+    const expanded = portalExpandedSupplyIds.has(s.id);
+    return `
+    <div class="panel" style="padding:0;margin-bottom:10px;overflow:hidden">
+      <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;cursor:pointer" onclick="togglePortalSupply('${s.id}')">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--ink-faint)">${expanded?'▼':'▶'}</span>
+          <div>
+            <div style="font-weight:600;font-size:14px">${escapeHtml(s.id)}</div>
+            <div style="font-size:12px;color:var(--ink-faint)">${new Date(s.created_at).toLocaleDateString('ru-RU')} · ${s.items.length} SKU</div>
+          </div>
         </div>
-        <span class="status ${statusClass(s.status)}">${statusLabel(s.status)}</span>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          ${hasMismatch ? `<span style="font-size:12px;font-weight:600;color:var(--warn)">Есть расхождения</span>` : ''}
+          <span style="font-weight:600;font-size:14px">${inProgress ? totalPlan : (hasMismatch ? `${totalFact} / ${totalPlan}` : totalFact)} шт</span>
+          <span class="status ${statusClass(s.status)}">${statusLabel(s.status)}</span>
+        </div>
       </div>
-      <div style="font-size:13px;color:var(--ink-soft);line-height:1.6">
-        ${s.items.map(it=>`${escapeHtml(it.name||it.sku)}${it.size?' ('+escapeHtml(it.size)+')':''} — ${it.receivedQty||0}/${it.qty} шт`).join('<br>')}
-      </div>
+      ${expanded ? `
+        <div style="padding:0 20px 16px 20px;border-top:1px solid var(--line)">
+          <div style="font-size:13px;color:var(--ink-soft);line-height:1.8;margin-top:12px">
+            ${s.items.map(it=>{
+              const fact = it.receivedQty||0;
+              const mismatch = !inProgress && fact !== it.qty;
+              return `<div style="display:flex;justify-content:space-between;gap:10px">
+                <span>${escapeHtml(it.name||it.sku)}${it.size?' ('+escapeHtml(it.size)+')':''}</span>
+                <span class="mono" style="${mismatch?'color:var(--warn);font-weight:600':'color:var(--ink-faint)'}">${inProgress ? it.qty : `${fact}/${it.qty}`} шт</span>
+              </div>`;
+            }).join('')}
+          </div>
+          ${s.status!=='planned' ? `
+            <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+              <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="event.stopPropagation();downloadPortalSupplyActPdf('${s.id}')">📄 Скачать акт приёмки</button>
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
     </div>
-  `).join('');
+  `;
+  }).join('');
+}
+function downloadPortalSupplyActPdf(supplyId){
+  const s = portalSuppliesList.find(x=>x.id===supplyId);
+  if(!s) return;
+  const actNumber = s.actNumber || s.act_number || s.id;
+  const rows = s.items.map((it,idx)=>({
+    n: idx+1, sku: it.sku, size: it.size||'', barcode: '', name: it.name,
+    plan: it.qty, fact: it.receivedQty||0, diff: (it.receivedQty||0) - it.qty
+  }));
+  const totalPlan = rows.reduce((a,r)=>a+r.plan,0);
+  const totalFact = rows.reduce((a,r)=>a+r.fact,0);
+  const mismatches = rows.filter(r=>r.diff!==0).length;
+  const noMismatches = mismatches === 0;
+  const companyName = portalCompany.name || 'ТелеПак';
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('ru-RU', {day:'2-digit', month:'long', year:'numeric'});
+
+  const win = window.open('', '_blank');
+  if(!win){ toast('Браузер заблокировал открытие окна — разрешите всплывающие окна для этого сайта и попробуйте снова'); return; }
+  win.document.write(`
+    <!DOCTYPE html><html><head><meta charset="utf-8"><title>Акт приёмки ${actNumber}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+      :root{
+        --bg:#F0EEE6; --panel:#FFFFFF; --ink:#1C1B19; --ink-soft:#6B665C; --ink-faint:#A39C8C;
+        --accent:#FF5B1F; --accent-ink:#FFFFFF; --ok:#2F7D4F; --ok-bg:#E7F2EA;
+        --warn:#B5471B; --warn-bg:#FBE9E1; --line:#DCD6C6;
+      }
+      *{box-sizing:border-box}
+      body{margin:0;background:var(--panel);color:var(--ink);font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;padding:36px;max-width:860px;margin:0 auto}
+      .mono{font-family:'IBM Plex Mono',monospace}
+      .eyebrow{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;letter-spacing:0.08em;font-size:12px;color:var(--ink-faint);font-weight:600}
+      .head{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:20px;border-bottom:3px solid var(--accent);margin-bottom:22px}
+      .brand{display:flex;align-items:center;gap:10px}
+      .brand-badge{width:38px;height:38px;border-radius:9px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:18px}
+      .brand-name{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:20px;letter-spacing:0.01em}
+      h1{font-family:'Barlow Condensed',sans-serif;font-size:30px;font-weight:700;margin:0 0 4px 0;text-align:right}
+      .sub-date{text-align:right;color:var(--ink-soft);font-size:13px}
+      .cards{display:flex;gap:14px;margin-bottom:20px}
+      .card{flex:1;background:var(--bg);border-radius:12px;padding:14px 16px}
+      .card .eyebrow{margin-bottom:6px}
+      .card .name{font-weight:600;font-size:14px;margin-bottom:2px}
+      .card .detail{font-size:12px;color:var(--ink-soft);line-height:1.5}
+      table{width:100%;border-collapse:collapse;margin-top:4px;border-radius:10px;overflow:hidden}
+      th{background:var(--bg);color:var(--ink-soft);font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;letter-spacing:0.04em;font-size:11px;font-weight:600;text-align:left;padding:10px 10px;border-bottom:2px solid var(--line)}
+      td{padding:9px 10px;font-size:13px;border-bottom:1px solid var(--line)}
+      td.num,th.num{text-align:right}
+      tr.mismatch td{background:var(--warn-bg)}
+      tr.mismatch td:first-child{border-left:3px solid var(--warn)}
+      .diff-bad{color:var(--warn);font-weight:700}
+      .diff-ok{color:var(--ink-faint)}
+      .summary-row{display:flex;justify-content:space-between;align-items:center;margin-top:20px;padding:16px 18px;background:var(--bg);border-radius:12px}
+      .summary-nums{display:flex;gap:26px}
+      .summary-nums .stat .val{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:24px;line-height:1}
+      .summary-nums .stat .lbl{font-size:11px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:0.04em;margin-top:2px}
+      .status-pill{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:999px;font-size:12px;font-weight:600}
+      .status-pill.ok{background:var(--ok-bg);color:var(--ok)}
+      .status-pill.bad{background:var(--warn-bg);color:var(--warn)}
+      .sign{margin-top:56px;display:flex;justify-content:space-between;gap:40px}
+      .sign > div{width:100%}
+      .sign .role{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;letter-spacing:0.04em;font-size:12px;color:var(--ink-faint);margin-bottom:40px}
+      .line{border-bottom:1px solid var(--ink);margin-bottom:4px}
+      .small{font-size:11px;color:var(--ink-faint)}
+      .footer{margin-top:40px;text-align:center;font-size:11px;color:var(--ink-faint)}
+      @media print{
+        body{padding:16px}
+        .card{background:#F5F4EF !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        th{background:#F5F4EF !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .summary-row{background:#F5F4EF !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        tr.mismatch td{background:#FBE9E1 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .status-pill.ok{background:#E7F2EA !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .status-pill.bad{background:#FBE9E1 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .brand-badge{background:#FF5B1F !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .head{border-color:#FF5B1F !important}
+      }
+    </style></head><body>
+      <div class="head">
+        <div class="brand">
+          <div class="brand-badge">Т</div>
+          <div>
+            <div class="brand-name">${escapeHtml(companyName)}</div>
+            <div class="eyebrow" style="margin-top:2px">Акт приёмки товара</div>
+          </div>
+        </div>
+        <div>
+          <h1>№ ${escapeHtml(String(actNumber))}</h1>
+          <div class="sub-date">${dateStr}</div>
+        </div>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <div class="eyebrow">Исполнитель (склад)</div>
+          <div class="name">${escapeHtml(companyName)}</div>
+          <div class="detail">${portalCompany.inn?`ИНН ${escapeHtml(portalCompany.inn)}`:''}</div>
+        </div>
+        <div class="card">
+          <div class="eyebrow">Клиент</div>
+          <div class="name">${escapeHtml(clientViewMode.name)}</div>
+        </div>
+        <div class="card">
+          <div class="eyebrow">Поставка</div>
+          <div class="name mono">№ ${escapeHtml(s.id)}</div>
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>№</th><th>Артикул</th><th>Размер</th><th>Наименование</th><th class="num">План, шт</th><th class="num">Факт, шт</th><th class="num">Расхождение</th></tr></thead>
+        <tbody>
+          ${rows.map(r=>`
+            <tr class="${r.diff!==0?'mismatch':''}">
+              <td class="mono">${r.n}</td><td class="mono">${escapeHtml(r.sku)}</td><td>${escapeHtml(r.size)}</td><td>${escapeHtml(r.name)}</td>
+              <td class="num">${r.plan}</td><td class="num">${r.fact}</td>
+              <td class="num ${r.diff!==0?'diff-bad':'diff-ok'}">${r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+
+      <div class="summary-row">
+        <div class="summary-nums">
+          <div class="stat"><div class="val">${totalPlan}</div><div class="lbl">По плану, шт</div></div>
+          <div class="stat"><div class="val">${totalFact}</div><div class="lbl">Принято, шт</div></div>
+        </div>
+        ${noMismatches
+          ? `<span class="status-pill ok">✅ Без расхождений</span>`
+          : `<span class="status-pill bad">⚠ Расхождений: ${mismatches} поз.</span>`}
+      </div>
+
+      <div class="sign">
+        <div><div class="role">Принял (склад)</div><div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
+        <div><div class="role">Сдал (поставщик)</div><div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
+      </div>
+      <div class="footer">Сформировано в ${escapeHtml(companyName)} · ${dateStr}</div>
+      <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 350); };<\/script>
+    </body></html>
+  `);
+  win.document.close();
 }
 async function loadStaffData(){
   try{
