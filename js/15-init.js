@@ -9,7 +9,7 @@ async function enterClientPortal(token){
   }
   portalToken = token;
   inventory = (data.inventory||[]).map(i=>({...i, client: data.client.name}));
-  clientViewMode = { id: data.client.id, name: data.client.name };
+  clientViewMode = { id: data.client.id, name: data.client.name, pricePerLiter: data.client.pricePerLiter||0 };
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('appRoot').style.display = 'flex';
   document.querySelectorAll('.nav-item[data-tab]').forEach(el=>{
@@ -30,11 +30,87 @@ async function enterClientPortal(token){
   if(heading) heading.textContent = 'Остатки — ' + clientViewMode.name;
   const sub = document.querySelector('#tab-inventory .page-head p');
   if(sub) sub.textContent = 'Только просмотр';
+  renderPortalStorageStats();
   switchTab('inventory');
   renderInventory();
   renderPortalSupplyDraftRows();
   await loadPortalSupplies();
   return true;
+}
+function downloadPortalSupplyTemplate(){
+  const seen = new Set();
+  const data = [['Артикул','Наименование','Размер','ШК','Кол-во']];
+  inventory.forEach(i=>{
+    const key = i.sku+'~~'+(i.size||'');
+    if(seen.has(key)) return;
+    seen.add(key);
+    data.push([i.sku, i.name, i.size||'', i.barcode||'', '']);
+  });
+  if(data.length===1){
+    data.push(['TK-1001','Пример товара','','', 10]);
+  }
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:14},{wch:26},{wch:10},{wch:16},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Заявка');
+  XLSX.writeFile(wb, 'shablon_zayavka_postavka.xlsx');
+}
+function handlePortalSupplyExcelUpload(inputEl){
+  const file = inputEl.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      const workbook = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+      const items = [];
+      for(let i=1;i<rows.length;i++){ // строка 0 — заголовок
+        const row = rows[i];
+        if(!row || !row.length) continue;
+        const sku = String(row[0]||'').trim().toUpperCase();
+        const nameFromFile = String(row[1]||'').trim();
+        const size = String(row[2]||'').trim();
+        const qty = parseInt(row[4]) || 0;
+        if(!sku || qty<=0) continue;
+        const invItem = inventory.find(x=>x.sku===sku && (x.size||'')===size);
+        if(invItem){
+          items.push({sku, customSku:'', customName:'', size, qty});
+        } else {
+          items.push({sku:'', customSku:sku, customName:nameFromFile||sku, size:'', qty});
+        }
+      }
+      if(!items.length){
+        toast('В файле не найдено строк с артикулом и количеством');
+        inputEl.value = '';
+        return;
+      }
+      portalSupplyDraft = items;
+      toast(`Файл прочитан: ${items.length} позиц. — проверьте список ниже перед отправкой`);
+      renderPortalSupplyDraftRows();
+    }catch(err){
+      toast('Не удалось прочитать файл — проверьте формат Excel');
+    }
+    inputEl.value = '';
+  };
+  reader.readAsArrayBuffer(file);
+}
+function renderPortalStorageStats(){
+  const wrap = document.getElementById('portalStorageStats');
+  if(!wrap || !clientViewMode) return;
+  const liters = inventory
+    .filter(i => i.dims && i.dims.l && i.dims.w && i.dims.h)
+    .reduce((sum, i) => sum + (i.dims.l * i.dims.w * i.dims.h / 1000) * i.qty, 0);
+  const pricePerLiter = clientViewMode.pricePerLiter || 0;
+  const dailyCost = liters * pricePerLiter;
+  wrap.style.display = 'flex';
+  wrap.innerHTML = `
+    <div class="stat"><div class="val">${liters.toFixed(1)} л</div><div class="lbl">Занято на складе</div></div>
+    ${pricePerLiter > 0 ? `
+      <div class="stat"><div class="val">${dailyCost.toFixed(2)} ₽</div><div class="lbl">Списывается в сутки за хранение</div></div>
+      <div class="stat"><div class="val">${pricePerLiter.toFixed(2)} ₽</div><div class="lbl">Тариф за литр в сутки</div></div>
+    ` : ''}
+  `;
 }
 let portalSuppliesList = [];
 let portalSupplyDraft = [{sku:'', customSku:'', customName:'', size:'', qty:1}];
