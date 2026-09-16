@@ -258,6 +258,28 @@ function saveOzonWarehouseId(clientId){
     if(error){ console.error(error); toast('Не удалось сохранить ID склада в базе'); }
   });
 }
+async function listOzonWarehouses(clientId){
+  toast('Запрашиваем список складов у Ozon…');
+  try{
+    const { data, error } = await sb.functions.invoke('ozon-orders-ts', { body: { clientId, action: 'list_warehouses' } });
+    if(error){ toast('Ozon: ' + await extractFnErrorMessage(error)); return; }
+    if(data && data.error){ toast('Ozon: ' + data.error); return; }
+    const c = clients.find(x=>x.id===clientId);
+    c.ozonWarehousesList = data.warehouses || [];
+    if(!c.ozonWarehousesList.length){ toast('У продавца пока нет складов FBS на Ozon'); return; }
+    toast(`Найдено складов: ${c.ozonWarehousesList.length} — выберите нужный ниже`);
+    renderClients();
+  }catch(e){
+    toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
+  }
+}
+function useOzonWarehouseFromList(clientId){
+  const c = clients.find(x=>x.id===clientId);
+  const select = document.getElementById('ozonWarehousePicker-'+clientId);
+  if(!select || !select.value) return;
+  document.getElementById('ozonWarehouseId-'+clientId).value = select.value;
+  saveOzonWarehouseId(clientId);
+}
 function toggleWbAutoSync(clientId){
   const c = clients.find(x=>x.id===clientId);
   c.wbAutoSync = !c.wbAutoSync;
@@ -641,10 +663,20 @@ function renderClientDetail(body){
       </p>
       ${c.ozonConnected ? `
         <div class="barcode-rule"></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;margin-bottom:12px">
           <input class="search mono" id="ozonWarehouseId-${c.id}" placeholder="ID склада Ozon (необязательно — для фильтра заказов)" value="${c.ozonWarehouseId||''}" style="width:280px">
-          <button class="btn btn-ghost" onclick="saveOzonWarehouseId('${c.id}')">Сохранить склад</button>
+          <button class="btn btn-ghost" onclick="saveOzonWarehouseId('${c.id}')">Сохранить</button>
+          <button class="btn btn-ghost" onclick="listOzonWarehouses('${c.id}')">📋 Получить список складов</button>
         </div>
+        ${(c.ozonWarehousesList && c.ozonWarehousesList.length) ? `
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px;padding:10px 12px;background:var(--bg);border-radius:8px">
+            <select class="search" id="ozonWarehousePicker-${c.id}" style="flex:1;min-width:220px">
+              ${c.ozonWarehousesList.map(w=>`<option value="${w.warehouse_id}" ${String(c.ozonWarehouseId)===String(w.warehouse_id)?'selected':''}>${w.warehouse_id} — ${escapeHtml(w.name)}</option>`).join('')}
+            </select>
+            <button class="btn btn-primary" onclick="useOzonWarehouseFromList('${c.id}')">Использовать этот склад</button>
+          </div>
+          <p style="font-size:11px;color:var(--ink-faint);margin-top:4px">Без выбранного склада будут подгружаться заказы со всех складов продавца — это и есть причина лишних заказов, если склад не указан.</p>
+        ` : ''}
       ` : ''}
     </div>
 
