@@ -534,13 +534,6 @@ document.getElementById('invClientFilter').addEventListener('change', resetInven
 document.getElementById('invCellFilter').addEventListener('change', resetInventoryPageAndRender);
 document.getElementById('invWarehouseFilter').addEventListener('change', resetInventoryPageAndRender);
 document.getElementById('invPageSize').addEventListener('change', function(){ changeInvPageSize(this.value); });
-document.getElementById('journalSearch').addEventListener('input', debouncedJournalQuery);
-document.getElementById('journalClientFilter').addEventListener('change', resetJournalPageAndQuery);
-document.getElementById('journalEmployeeFilter').addEventListener('change', resetJournalPageAndQuery);
-document.getElementById('journalTypeFilter').addEventListener('input', debouncedJournalQuery);
-document.getElementById('journalDateFrom').addEventListener('change', resetJournalPageAndQuery);
-document.getElementById('journalDateTo').addEventListener('change', resetJournalPageAndQuery);
-document.getElementById('journalPageSize').addEventListener('change', function(){ changeJournalPageSize(this.value); });
 
 // ---------- RECEIVING ----------
 function renderReceiving(mode){
