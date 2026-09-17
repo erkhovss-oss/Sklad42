@@ -238,3 +238,10 @@ function renderJournal(){
   populateJournalFilters();
   queryJournal();
 }
+document.getElementById('journalSearch').addEventListener('input', debouncedJournalQuery);
+document.getElementById('journalClientFilter').addEventListener('change', resetJournalPageAndQuery);
+document.getElementById('journalEmployeeFilter').addEventListener('change', resetJournalPageAndQuery);
+document.getElementById('journalTypeFilter').addEventListener('input', debouncedJournalQuery);
+document.getElementById('journalDateFrom').addEventListener('change', resetJournalPageAndQuery);
+document.getElementById('journalDateTo').addEventListener('change', resetJournalPageAndQuery);
+document.getElementById('journalPageSize').addEventListener('change', function(){ changeJournalPageSize(this.value); });
