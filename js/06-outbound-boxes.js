@@ -1,11 +1,56 @@
 // ---------- OUTBOUND BOXES (распределение по коробам) ----------
+let boxSizes = [];
+async function loadBoxSizes(){
+  const { data, error } = await sb.from('box_sizes').select('*').order('length_cm', {ascending:true});
+  if(error){ console.error(error); return; }
+  boxSizes = data.map(s=>({id:s.id, name:s.name, l:s.length_cm, w:s.width_cm, h:s.height_cm}));
+}
+function addBoxSize(){
+  const name = document.getElementById('newBoxSizeName').value.trim();
+  const l = parseFloat(document.getElementById('newBoxSizeL').value) || 0;
+  const w = parseFloat(document.getElementById('newBoxSizeW').value) || 0;
+  const h = parseFloat(document.getElementById('newBoxSizeH').value) || 0;
+  if(!name){ toast('Укажите название размера (например, M)'); return; }
+  if(boxSizes.some(s=>s.name.toLowerCase()===name.toLowerCase())){ toast('Такой размер уже есть'); return; }
+  const id = 'BXS-' + Date.now();
+  boxSizes.push({id, name, l, w, h});
+  document.getElementById('newBoxSizeName').value = '';
+  document.getElementById('newBoxSizeL').value = '';
+  document.getElementById('newBoxSizeW').value = '';
+  document.getElementById('newBoxSizeH').value = '';
+  toast(`Размер «${name}» добавлен`);
+  renderOutboundTableWrap();
+  sb.from('box_sizes').insert({id, name, length_cm:l||null, width_cm:w||null, height_cm:h||null}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить размер в базе'); }
+  });
+}
+function deleteBoxSize(id){
+  const s = boxSizes.find(x=>x.id===id);
+  if(!confirm(`Удалить размер «${s?s.name:id}»? У коробов, где он уже указан, размер просто очистится.`)) return;
+  boxSizes = boxSizes.filter(x=>x.id!==id);
+  outboundBoxes.forEach(b=>{ if(b.sizeId===id) b.sizeId = null; });
+  toast('Размер удалён');
+  renderOutboundTableWrap();
+  sb.from('box_sizes').delete().eq('id', id).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось удалить размер в базе'); }
+  });
+}
+function setBoxSize(boxId, sizeId){
+  const box = outboundBoxes.find(b=>b.id===boxId);
+  if(!box) return;
+  box.sizeId = sizeId || null;
+  renderOutboundTableWrap();
+  sb.from('outbound_boxes').update({size_id: sizeId || null}).eq('id', boxId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить размер короба в базе'); }
+  });
+}
 async function loadOutboundBoxes(){
   const { data: boxRows, error: err1 } = await sb.from('outbound_boxes').select('*').order('box_number');
   if(err1){ console.error(err1); return; }
   const { data: itemRows, error: err2 } = await sb.from('outbound_box_items').select('*').limit(50000);
   if(err2){ console.error(err2); return; }
   outboundBoxes = boxRows.map(b=>({
-    id: b.id, supplyId: b.supply_id, boxNumber: b.box_number,
+    id: b.id, supplyId: b.supply_id, boxNumber: b.box_number, sizeId: b.size_id || null,
     items: itemRows.filter(it=>it.box_id===b.id).map(it=>({sku:it.sku, name:it.name, size:it.size||'', barcode:it.barcode||'', qty:it.qty}))
   }));
 }
@@ -52,28 +97,32 @@ function createOutboundBoxesBulk(supplyId){
   const input = document.getElementById('boxCountInput-'+supplyId);
   const count = Math.max(1, parseInt(input.value) || 0);
   if(!count){ toast('Укажите сколько коробов создать'); return; }
+  const sizeSelect = document.getElementById('boxSizeSelect-'+supplyId);
+  const sizeId = sizeSelect ? (sizeSelect.value || null) : null;
   const existing = outboundBoxes.filter(b=>b.supplyId===supplyId);
   let nextNumber = existing.length ? Math.max(...existing.map(b=>b.boxNumber)) + 1 : 1;
   const newBoxes = [];
   for(let i=0;i<count;i++){
-    const box = { id: 'BOX-'+Date.now()+'-'+i, supplyId, boxNumber: nextNumber++, items: [] };
+    const box = { id: 'BOX-'+Date.now()+'-'+i, supplyId, boxNumber: nextNumber++, sizeId, items: [] };
     newBoxes.push(box);
     outboundBoxes.push(box);
   }
   toast(`Создано коробов: ${count}`);
   renderOutboundTableWrap();
-  sb.from('outbound_boxes').insert(newBoxes.map(b=>({id:b.id, supply_id:b.supplyId, box_number:b.boxNumber}))).then(({error})=>{
+  sb.from('outbound_boxes').insert(newBoxes.map(b=>({id:b.id, supply_id:b.supplyId, box_number:b.boxNumber, size_id:b.sizeId}))).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить короба в базе'); }
   });
 }
 function addSingleOutboundBox(supplyId){
+  const sizeSelect = document.getElementById('boxSizeSelect-'+supplyId);
+  const sizeId = sizeSelect ? (sizeSelect.value || null) : null;
   const existing = outboundBoxes.filter(b=>b.supplyId===supplyId);
   const nextNumber = existing.length ? Math.max(...existing.map(b=>b.boxNumber)) + 1 : 1;
-  const box = { id: 'BOX-'+Date.now(), supplyId, boxNumber: nextNumber, items: [] };
+  const box = { id: 'BOX-'+Date.now(), supplyId, boxNumber: nextNumber, sizeId, items: [] };
   outboundBoxes.push(box);
   toast(`Добавлен короб №${nextNumber}`);
   renderOutboundTableWrap();
-  sb.from('outbound_boxes').insert({id:box.id, supply_id:supplyId, box_number:box.boxNumber}).then(({error})=>{
+  sb.from('outbound_boxes').insert({id:box.id, supply_id:supplyId, box_number:box.boxNumber, size_id:box.sizeId}).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить короб в базе'); }
   });
 }
@@ -84,12 +133,12 @@ function closeBoxAndAddNext(supplyId, currentBoxId){
   lastBoxScanInfo = null;
   const existing = outboundBoxes.filter(b=>b.supplyId===supplyId);
   const nextNumber = existing.length ? Math.max(...existing.map(b=>b.boxNumber)) + 1 : 1;
-  const newBox = { id: 'BOX-'+Date.now(), supplyId, boxNumber: nextNumber, items: [] };
+  const newBox = { id: 'BOX-'+Date.now(), supplyId, boxNumber: nextNumber, sizeId: currentBox ? currentBox.sizeId : null, items: [] };
   outboundBoxes.push(newBox);
   expandedBoxId = newBox.id;
   toast(`Короб №${closedNumber} закрыт, открыт короб №${nextNumber}`);
   renderOutboundTableWrap();
-  saveWithRetry(()=>sb.from('outbound_boxes').insert({id:newBox.id, supply_id:supplyId, box_number:newBox.boxNumber})).then(({success, error})=>{
+  saveWithRetry(()=>sb.from('outbound_boxes').insert({id:newBox.id, supply_id:supplyId, box_number:newBox.boxNumber, size_id:newBox.sizeId})).then(({success, error})=>{
     if(!success){ console.error(error); toast('Не удалось сохранить новый короб в базе'); }
   });
 }
@@ -221,13 +270,24 @@ function renderBoxScanHandler(supplyId, boxId){
 function renderBoxCard(supply, box){
   const isOpen = expandedBoxId === box.id;
   const totalQty = box.items.reduce((a,it)=>a+it.qty,0);
+  const size = boxSizes.find(s=>s.id===box.sizeId);
+  const sizeTitle = size && size.l && size.w && size.h ? `${size.l}×${size.w}×${size.h} см` : '';
   return `
     <div class="panel" style="margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;background:var(--bg)" onclick="toggleBoxExpand('${box.id}')">
-        <h3 style="font-size:14px;color:var(--ink-soft)">📦 Короб №${box.boxNumber} · ${box.items.length} поз. · ${totalQty} шт</h3>
+        <h3 style="font-size:14px;color:var(--ink-soft);display:flex;align-items:center;gap:8px">
+          📦 Короб №${box.boxNumber} · ${box.items.length} поз. · ${totalQty} шт
+          <span title="${sizeTitle}" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:${size?'var(--accent)':'var(--line)'};color:${size?'var(--accent-ink)':'var(--ink-soft)'}">${size?escapeHtml(size.name):'без размера'}</span>
+        </h3>
         <span style="font-size:12px;color:var(--ink-faint)">${isOpen ? '▲' : '▼'}</span>
       </div>
       ${isOpen ? `
+        <div style="padding:10px 14px 0 14px" onclick="event.stopPropagation()">
+          <select class="search" style="width:180px;font-size:12px" onchange="setBoxSize('${box.id}', this.value)">
+            <option value="">Без размера</option>
+            ${boxSizes.map(s=>`<option value="${s.id}" ${box.sizeId===s.id?'selected':''}>${escapeHtml(s.name)}${s.l&&s.w&&s.h?` — ${s.l}×${s.w}×${s.h} см`:''}</option>`).join('')}
+          </select>
+        </div>
         <div style="padding:12px 14px">
           ${box.items.length ? box.items.map(it=>{
             const planTotal = supply.items.filter(i=>i.sku===it.sku && (i.size||'')===(it.size||'')).reduce((a,i)=>a+i.qty,0);
@@ -275,22 +335,68 @@ function renderBoxPanel(supply){
   setTimeout(()=>{
     boxes.forEach(box=>{ if(expandedBoxId===box.id) renderBoxScanHandler(supply.id, box.id); });
   }, 0);
+
+  const sizeCounts = {};
+  boxes.forEach(b=>{
+    const key = b.sizeId || '__none__';
+    sizeCounts[key] = (sizeCounts[key]||0) + 1;
+  });
+  const sizeBreakdown = Object.entries(sizeCounts).map(([key,count])=>{
+    const size = boxSizes.find(s=>s.id===key);
+    return `<span style="font-size:12px;color:var(--ink-soft)">${size?escapeHtml(size.name):'без размера'}: <b>${count}</b></span>`;
+  }).join(' · ');
+
   return `
     <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
       <div class="eyebrow" style="margin-bottom:10px">Распределение по коробам</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
         <input class="search" id="boxCountInput-${supply.id}" type="number" min="1" placeholder="Кол-во коробов" style="width:150px">
+        <select class="search" id="boxSizeSelect-${supply.id}" style="width:170px">
+          <option value="">Без размера</option>
+          ${boxSizes.map(s=>`<option value="${s.id}" title="${s.l&&s.w&&s.h?`${s.l}×${s.w}×${s.h} см`:''}">${escapeHtml(s.name)}${s.l&&s.w&&s.h?` — ${s.l}×${s.w}×${s.h} см`:''}</option>`).join('')}
+        </select>
         <button class="btn btn-ghost" onclick="createOutboundBoxesBulk('${supply.id}')">Создать короба</button>
         <button class="btn btn-ghost" onclick="addSingleOutboundBox('${supply.id}')">+ Новый короб</button>
+        <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="toggleBoxSizeManager('${supply.id}')">⚙ Размеры коробов</button>
       </div>
-      <div class="stat-row" style="margin-bottom:14px">
+      ${boxSizeManagerOpenFor===supply.id ? renderBoxSizeManager() : ''}
+      <div class="stat-row" style="margin-bottom:8px">
         <div class="stat"><div class="val" style="color:${packedLines===totalLines?'var(--ok)':'var(--accent)'}">${packedLines}/${totalLines}</div><div class="lbl">Упаковано артикулов</div></div>
         <div class="stat"><div class="val" style="color:${packedQty===totalQty?'var(--ok)':'var(--accent)'}">${packedQty}/${totalQty}</div><div class="lbl">Упаковано товаров</div></div>
+        <div class="stat"><div class="val">${boxes.length}</div><div class="lbl">Коробов использовано</div></div>
       </div>
+      ${boxes.length ? `<div style="margin-bottom:14px">${sizeBreakdown}</div>` : ''}
       ${boxes.map(box=>renderBoxCard(supply, box)).join('')}
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn btn-accent" style="flex:1;justify-content:center" ${fullyDistributed?'':'disabled'} onclick="printBoxLabels('${supply.id}')">🖨 Распечатать QR-коды коробов</button>
         <button class="btn btn-ghost" style="flex:1;justify-content:center" ${boxes.length?'':'disabled'} onclick="downloadAllBoxesExcel('${supply.id}')">📊 Скачать все короба (Excel)</button>
+      </div>
+    </div>
+  `;
+}
+let boxSizeManagerOpenFor = null;
+function toggleBoxSizeManager(supplyId){
+  boxSizeManagerOpenFor = boxSizeManagerOpenFor===supplyId ? null : supplyId;
+  renderOutboundTableWrap();
+}
+function renderBoxSizeManager(){
+  return `
+    <div class="panel" style="padding:14px 16px;margin-bottom:14px;background:var(--bg)">
+      <div class="eyebrow" style="margin-bottom:8px">Размеры коробов</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        ${boxSizes.length ? boxSizes.map(s=>`
+          <span class="chip" style="cursor:default" title="${s.l&&s.w&&s.h?`${s.l}×${s.w}×${s.h} см`:'габариты не указаны'}">
+            ${escapeHtml(s.name)}${s.l&&s.w&&s.h?` · ${s.l}×${s.w}×${s.h} см`:''}
+            <span style="cursor:pointer;margin-left:6px;color:var(--warn)" onclick="deleteBoxSize('${s.id}')">✕</span>
+          </span>
+        `).join('') : `<span style="font-size:12px;color:var(--ink-faint)">Размеров пока нет</span>`}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input class="search" id="newBoxSizeName" placeholder="Название (M, XL…)" style="width:130px">
+        <input class="search mono" id="newBoxSizeL" type="number" min="0" placeholder="Длина, см" style="width:100px">
+        <input class="search mono" id="newBoxSizeW" type="number" min="0" placeholder="Ширина, см" style="width:100px">
+        <input class="search mono" id="newBoxSizeH" type="number" min="0" placeholder="Высота, см" style="width:100px">
+        <button class="btn btn-primary" onclick="addBoxSize()">+ Добавить размер</button>
       </div>
     </div>
   `;
