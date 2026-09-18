@@ -127,6 +127,17 @@ async function discoverMissingFbsOrders(){
   if(errors.length) toast(`Ошибки у ${errors.length} клиент(ов): ${errors.join(' | ')}`);
   else toast(`У WB за 30 дней: ${totalFound}. Не было в системе: ${totalMissing}. Добавлено: ${totalInserted}.`);
 }
+let fbsCloseSelectedOrders = [];
+function toggleFbsCloseSelected(orderId, checked){
+  orderId = Number(orderId);
+  if(checked){ if(!fbsCloseSelectedOrders.includes(orderId)) fbsCloseSelectedOrders.push(orderId); }
+  else { fbsCloseSelectedOrders = fbsCloseSelectedOrders.filter(id=>id!==orderId); }
+  renderFbsBody();
+}
+function toggleAllFbsCloseSelected(checked, visibleIds){
+  fbsCloseSelectedOrders = checked ? [...new Set(visibleIds)] : [];
+  renderFbsBody();
+}
 function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
   if(!rows.length) return '';
   const groups = {};
@@ -177,6 +188,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
           <div style="border-top:1px solid var(--line)">
             ${g.orders.map(o=>`
               <div class="pick-row">
+                ${!isDelivered && clientId ? `<input type="checkbox" ${fbsCloseSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsCloseSelected(${o.orderId}, this.checked)">` : ''}
                 <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.orderCreatedAt?` · ${timeAgoRu(o.orderCreatedAt)}`:''}${isDelivered?'':renderKizStatusLabel(o)}</div></div>
                 <div style="display:flex;gap:6px;align-items:center">
                   ${!isDelivered && clientId ? renderTrbxAssignControl(o) : ''}
@@ -241,10 +253,22 @@ function renderFbsBody(){
   } else if(fbsView==='confirm'){
     const missingKizCount = rows.filter(o=>o.requiresKiz && o.kizStatus!=='attached').length;
     const outOfStockOrders = rows.filter(o=>o.outOfStock);
+    const visibleIds = rows.map(o=>o.orderId);
+    fbsCloseSelectedOrders = fbsCloseSelectedOrders.filter(id=>visibleIds.includes(id));
+    const allSelected = fbsCloseSelectedOrders.length>0 && visibleIds.every(id=>fbsCloseSelectedOrders.includes(id));
+    const partialSelection = fbsCloseSelectedOrders.length>0 && !allSelected;
     body.innerHTML = `
       <div class="panel" style="padding:14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-        <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length}. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length}. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
+          ${clientId ? `
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;white-space:nowrap">
+              <input type="checkbox" ${allSelected?'checked':''} onchange="toggleAllFbsCloseSelected(this.checked, ${JSON.stringify(visibleIds)})"> Выбрать все
+            </label>
+            ${fbsCloseSelectedOrders.length ? `<span style="font-size:12px;font-weight:600">Выбрано: ${fbsCloseSelectedOrders.length} из ${rows.length}</span>` : ''}
+          ` : ''}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${rows.length ? `<button class="btn btn-primary" onclick="startAssemblyMode()">🚀 Режим сборки</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="enterScanMode()">🔍 Найти заказ по скану</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printFbsPickList()">📋 Лист сборки</button>` : ''}
@@ -253,7 +277,7 @@ function renderFbsBody(){
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="openLabelSettingsModal()">⚙️ Настройки этикетки</button>
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="forgetQzPrinter()" title="Выбрать другой принтер при следующей печати">⚙️ Сменить принтер</button>
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="previewThermalInfoCard()" title="Посмотреть, что именно генерируется для принтера">👁 Предпросмотр растра</button>
-          <button class="btn btn-accent" onclick="closeFbsSupply()">📦 Закрыть поставку и отправить</button>
+          <button class="btn btn-accent" onclick="closeFbsSupply()">📦 ${partialSelection ? `Закрыть выбранные (${fbsCloseSelectedOrders.length})` : 'Закрыть поставку и отправить'}</button>
         </div>
       </div>
       ${missingKizCount ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;background:var(--warn-bg);color:var(--warn);font-size:13px;font-weight:600">⚠ У ${missingKizCount} заказ(ов) требуется КИЗ, но он ещё не привязан — используйте «Режим сборки», прежде чем закрывать поставку</div>` : ''}
@@ -883,27 +907,50 @@ function downloadFbsTrbxLabels(clientId){
     win.document.close();
   });
 }
-function closeFbsSupply(){
+async function closeFbsSupply(){
   const clientId = document.getElementById('fbsClientSelect').value;
   const client = clients.find(c=>c.id===clientId);
   if(!clientId){ toast('Выберите конкретного клиента, чтобы закрыть его поставку'); return; }
 
-  const missingKiz = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm' && o.requiresKiz && o.kizStatus!=='attached');
+  const allConfirmed = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm');
+  const selected = fbsCloseSelectedOrders.filter(id=>allConfirmed.some(o=>o.orderId===id));
+  const isPartial = selected.length>0 && selected.length<allConfirmed.length;
+  const toClose = isPartial ? allConfirmed.filter(o=>selected.includes(o.orderId)) : allConfirmed;
+  const toHold = isPartial ? allConfirmed.filter(o=>!selected.includes(o.orderId)) : [];
+
+  const missingKiz = toClose.filter(o=>o.requiresKiz && o.kizStatus!=='attached');
   if(missingKiz.length){
     const names = missingKiz.slice(0,5).map(o=>`«${o.name||o.article}» (заказ №${o.orderId})`).join(', ');
     const more = missingKiz.length>5 ? ` и ещё ${missingKiz.length-5}` : '';
     if(!confirm(`⚠ У ${missingKiz.length} заказ(ов) не привязан КИЗ, хотя он требуется: ${names}${more}.\n\nЗакрыть поставку без КИЗ рискованно — WB может отклонить поставку или заблокировать продажу. Всё равно закрыть?`)) return;
   } else {
-    if(!confirm(`Закрыть текущую поставку клиента «${client?client.name:''}» и передать на склад WB?`)) return;
+    const confirmMsg = isPartial
+      ? `Закрыть ${toClose.length} из ${allConfirmed.length} заказов клиента «${client?client.name:''}»? Остальные ${toHold.length} останутся в отдельной поставке до следующего раза.`
+      : `Закрыть текущую поставку клиента «${client?client.name:''}» и передать на склад WB?`;
+    if(!confirm(confirmMsg)) return;
+  }
+
+  if(isPartial){
+    toast(`Переносим ${toHold.length} заказ(ов) в отдельную поставку…`);
+    for(const o of toHold){
+      const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'move_to_holding_supply', orderId: o.orderId } });
+      if(error || (data && data.error)){
+        toast('WB: не удалось перенести заказ №' + o.orderId + ' — ' + (data && data.error ? data.error : (error?error.message:'ошибка')));
+        return;
+      }
+      o.wbSupplyId = data.holdingSupplyId;
+      sb.from('wb_orders').update({wb_supply_id:data.holdingSupplyId}).eq('order_id', o.orderId).then(()=>{});
+    }
   }
 
   sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'close_supply' } }).then(({data, error})=>{
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
-    fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm').forEach(o=>{ o.supplierStatus='complete'; });
-    sb.from('wb_orders').update({supplier_status:'complete'}).eq('client_id', clientId).eq('supplier_status','confirm').then(()=>{});
+    toClose.forEach(o=>{ o.supplierStatus='complete'; });
+    sb.from('wb_orders').update({supplier_status:'complete'}).in('order_id', toClose.map(o=>o.orderId)).then(()=>{});
+    fbsCloseSelectedOrders = [];
     fbsTrbxes = [];
     fbsTrbxLoadedFor = '';
-    toast('Поставка закрыта и передана на склад WB');
+    toast(isPartial ? `Закрыто ${toClose.length} заказ(ов) — остальные ждут следующей отгрузки` : 'Поставка закрыта и передана на склад WB');
     setFbsView('complete');
   });
 }
