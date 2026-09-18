@@ -1004,6 +1004,22 @@ document.addEventListener('click', function(e){
   else if(act==='addExtraBarcode') addExtraBarcode(key);
   else if(act==='removeExtraBarcode') removeExtraBarcode(key, btn.dataset.barcode);
 });
+function downloadFbsKizExcel(wbSupplyId, clientName){
+  const rows = kizScans.filter(k=>k.supplyId===wbSupplyId);
+  if(!rows.length){ toast('По этой поставке ещё нет отсканированных КИЗ'); return; }
+  const data = [
+    [`КИЗ по поставке WB № ${wbSupplyId}`],
+    [`Клиент: ${clientName}`],
+    [],
+    ['№','Артикул','Размер','Наименование','КИЗ','Время'],
+    ...rows.map((r,idx)=>[idx+1, r.sku, r.size||'—', r.name, r.kizCode, new Date(r.time).toLocaleString('ru-RU')])
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:30},{wch:36},{wch:20}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'КИЗ');
+  XLSX.writeFile(wb, `KIZ_${wbSupplyId}.xlsx`);
+}
 function downloadKizExcel(supplyId){
   const s = supplies.find(x=>x.id===supplyId);
   const rows = kizScans.filter(k=>k.supplyId===supplyId);
