@@ -246,6 +246,7 @@ function renderFbsBody(){
         <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length}. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
         <div style="display:flex;gap:8px">
           ${rows.length ? `<button class="btn btn-primary" onclick="startAssemblyMode()">🚀 Режим сборки</button>` : ''}
+          ${rows.length ? `<button class="btn btn-ghost" onclick="enterScanMode()">🔍 Найти заказ по скану</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printFbsPickList()">📋 Лист сборки</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickers()">🖨 Все этикетки (${rows.length})</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickersToThermalPrinter()">🖨️ На принтер (QZ Tray)</button>` : ''}
@@ -284,7 +285,61 @@ function renderFbsBody(){
     body.innerHTML = renderFbsGroupedBySupply(rows, clientId, true, fbsCompletePage, fbsCompletePageSize);
   }
 }
+let scanModeActive = false;
+function enterScanMode(){
+  scanModeActive = true;
+  renderScanModeScreen();
+}
+function exitScanMode(){
+  scanModeActive = false;
+  assemblyModeQueue = [];
+  assemblyModeIndex = 0;
+  renderFbsBody();
+}
+function renderScanModeScreen(msg, msgIsError){
+  const body = document.getElementById('fbsBody');
+  body.innerHTML = `
+    <div class="panel" style="padding:30px;text-align:center;max-width:520px;margin:0 auto">
+      <div class="eyebrow" style="margin-bottom:10px">Найти заказ по скану</div>
+      <p style="font-size:13px;color:var(--ink-soft);margin-bottom:20px">Отсканируйте стикер, уже наклеенный на товар, — заказ откроется автоматически.</p>
+      <input class="search mono" id="orderScanInput" placeholder="Ждём скан…" style="width:100%;text-align:center;font-size:16px;padding:14px" autofocus
+        onkeydown="if(event.key==='Enter') handleOrderScan(this)">
+      ${msg ? `<p style="font-size:12px;margin-top:14px;color:${msgIsError?'var(--warn)':'var(--ok)'}">${escapeHtml(msg)}</p>` : ''}
+      <button class="btn btn-ghost" style="margin-top:20px" onclick="exitScanMode()">Выйти из режима сканирования</button>
+    </div>
+  `;
+  setTimeout(()=>{ const el = document.getElementById('orderScanInput'); if(el) el.focus(); }, 50);
+}
+function handleOrderScan(inputEl){
+  const raw = inputEl.value.trim();
+  inputEl.value = '';
+  if(!raw) return;
+  const clientId = document.getElementById('fbsClientSelect').value;
+  const pool = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
+
+  let order = pool.find(o=>String(o.orderId)===raw)
+    || pool.find(o=>o.barcode && o.barcode===raw)
+    || pool.find(o=>o.article && o.article===raw);
+
+  if(!order){
+    const digits = (raw.match(/\d{4,}/g) || []).sort((a,b)=>b.length-a.length);
+    for(const d of digits){
+      order = pool.find(o=>String(o.orderId)===d);
+      if(order) break;
+    }
+  }
+
+  if(!order){
+    renderScanModeScreen(`Не нашёл заказ по «${raw}» — сообщите мне этот текст, донастрою сопоставление`, true);
+    return;
+  }
+
+  assemblyModeQueue = [order];
+  assemblyModeIndex = 0;
+  renderAssemblyModeStep();
+}
 function startAssemblyMode(){
+  scanModeActive = false;
   const clientId = document.getElementById('fbsClientSelect').value;
   assemblyModeQueue = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
   if(!assemblyModeQueue.length){ toast('Нет заказов на сборке'); return; }
@@ -294,6 +349,10 @@ function startAssemblyMode(){
 function renderAssemblyModeStep(){
   const body = document.getElementById('fbsBody');
   if(assemblyModeIndex >= assemblyModeQueue.length){
+    if(scanModeActive){
+      renderScanModeScreen('Заказ обработан — готов к следующему скану', false);
+      return;
+    }
     body.innerHTML = `
       <div class="panel" style="padding:30px;text-align:center">
         <h2 style="margin-bottom:14px">Все заказы обработаны</h2>
@@ -518,6 +577,7 @@ function markOrderOutOfStock(orderId){
   renderAssemblyModeStep();
 }
 function exitAssemblyMode(){
+  scanModeActive = false;
   assemblyModeQueue = [];
   assemblyModeIndex = 0;
   renderFbsBody();
