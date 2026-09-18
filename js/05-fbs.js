@@ -182,6 +182,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
             <div style="font-size:12px;color:var(--ink-faint)">${g.orders.length} заказ(ов)${missingKizInGroup?` · ⚠ КИЗ не привязан: ${missingKizInGroup}`:''}${outOfStockInGroup?` · ❌ нет на складе: ${outOfStockInGroup}`:''}</div>
           </div>
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadSupplyBarcode('${escapeHtml(g.supplyId)}','${escapeHtml(g.orders[0].clientId)}')">📥 QR поставки</button>` : ''}
+          ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadFbsKizExcel('${escapeHtml(g.supplyId)}','${escapeHtml(g.clientName)}')">📊 КИЗ (Excel)</button>` : ''}
           <span style="font-size:18px;color:var(--ink-faint);cursor:pointer" onclick="toggleFbsSupplyGroup('${escapeHtml(key)}')">${isExpanded?'▾':'▸'}</span>
         </div>
         ${isExpanded ? `
@@ -545,8 +546,8 @@ function wizardAttachKiz(order, kizCode){
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus;
-    kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||'', clientName:order.clientName, time:new Date().toISOString()});
-    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
+    kizScans.push({kizCode, supplyId: order.wbSupplyId || ('FBS-'+order.orderId), sku:order.article, name:order.name, size:order.size||'', clientName:order.clientName, time:new Date().toISOString()});
+    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id: order.wbSupplyId || ('FBS-'+order.orderId), sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
     sb.from('wb_orders').update({kiz_code:kizCode, kiz_status:data.kizStatus, requires_kiz:true}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
     if(data.kizStatus==='attached'){
       playBeep('ok');
@@ -759,12 +760,6 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
       }
     }
   }
-  if(kizCode){
-    kizScans.push({kizCode, supplyId:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, size:inv.size||'', clientName:order.clientName, time:new Date().toISOString()});
-    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:'FBS-'+order.orderId, sku:inv.sku, name:inv.name, size:inv.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
-      if(error) console.error(error);
-    });
-  }
   assemblingOrder = null;
   toast(`Заказ №${order.orderId} отправлен на сборку`);
   renderFbsBody();
@@ -780,6 +775,12 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus || null;
     sb.from('wb_orders').update({supplier_status:'confirm', wb_supply_id:data.wbSupplyId, kiz_code:kizCode, kiz_status:data.kizStatus||null}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
+    if(kizCode){
+      kizScans.push({kizCode, supplyId: data.wbSupplyId, sku:inv.sku, name:inv.name, size:inv.size||'', clientName:order.clientName, time:new Date().toISOString()});
+      sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id: data.wbSupplyId, sku:inv.sku, name:inv.name, size:inv.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
+        if(error) console.error(error);
+      });
+    }
     if(data.kizStatus === 'attached') toast(`Заказ №${order.orderId}: КИЗ прикреплён и подтверждён у WB ✅`);
     else if(data.kizStatus === 'verify_failed') toast(`Заказ №${order.orderId}: собран, но КИЗ WB не подтвердил — ${data.warning||'проверьте вручную'} ⚠`);
     if(skipViewSwitch) renderFbsBody();
