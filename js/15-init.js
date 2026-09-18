@@ -13,7 +13,7 @@ async function enterClientPortal(token){
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('appRoot').style.display = 'flex';
   document.querySelectorAll('.nav-item[data-tab]').forEach(el=>{
-    el.style.display = (el.dataset.tab==='inventory' || el.dataset.tab==='portal-supplies') ? '' : 'none';
+    el.style.display = (el.dataset.tab==='inventory' || el.dataset.tab==='portal-supplies' || el.dataset.tab==='portal-kiz') ? '' : 'none';
   });
   const groupLabel = document.querySelector('.nav-group-label');
   if(groupLabel) groupLabel.textContent = 'Личный кабинет';
@@ -35,6 +35,7 @@ async function enterClientPortal(token){
   renderInventory();
   renderPortalSupplyDraftRows();
   await loadPortalSupplies();
+  await loadPortalKiz();
   return true;
 }
 function downloadPortalSupplyTemplate(){
@@ -189,6 +190,66 @@ async function submitPortalSupply(){
   await loadPortalSupplies();
 }
 let portalCompany = {name:'', inn:''};
+let portalKizGroups = [];
+let portalKizExpanded = new Set();
+async function loadPortalKiz(){
+  if(!portalToken) return;
+  const { data, error } = await sb.rpc('client_portal_kiz', { p_token: portalToken });
+  if(error){ console.error(error); return; }
+  portalKizGroups = data || [];
+  renderPortalKizList();
+}
+function togglePortalKizGroup(supplyId){
+  if(portalKizExpanded.has(supplyId)) portalKizExpanded.delete(supplyId);
+  else portalKizExpanded.add(supplyId);
+  renderPortalKizList();
+}
+function renderPortalKizList(){
+  const wrap = document.getElementById('portalKizListWrap');
+  if(!wrap) return;
+  if(!portalKizGroups.length){ wrap.innerHTML = `<div class="panel empty">По вашим отгрузкам пока нет отсканированных КИЗ</div>`; return; }
+  wrap.innerHTML = portalKizGroups.map(g=>{
+    const expanded = portalKizExpanded.has(g.supply_id);
+    return `
+    <div class="panel" style="padding:0;margin-bottom:10px;overflow:hidden">
+      <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;cursor:pointer" onclick="togglePortalKizGroup('${escapeHtml(g.supply_id)}')">
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-size:12px;color:var(--ink-faint)">${expanded?'▼':'▶'}</span>
+          <div>
+            <div style="font-weight:600;font-size:14px">Поставка ${escapeHtml(g.supply_id)}</div>
+            <div style="font-size:12px;color:var(--ink-faint)">${new Date(g.max_created).toLocaleDateString('ru-RU')} · ${g.kiz_count} КИЗ</div>
+          </div>
+        </div>
+        <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="event.stopPropagation();downloadPortalKizExcel('${escapeHtml(g.supply_id)}')">📊 Скачать Excel</button>
+      </div>
+      ${expanded ? `
+        <div style="padding:0 20px 16px 20px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-soft);line-height:1.8">
+          ${g.items.map(it=>`<div style="display:flex;justify-content:space-between;gap:10px">
+            <span>${escapeHtml(it.name||it.sku)}${it.size?' ('+escapeHtml(it.size)+')':''}</span>
+            <span class="mono">${escapeHtml(it.kizCode)}</span>
+          </div>`).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+  }).join('');
+}
+function downloadPortalKizExcel(supplyId){
+  const g = portalKizGroups.find(x=>x.supply_id===supplyId);
+  if(!g) return;
+  const data = [
+    [`КИЗ по поставке WB № ${supplyId}`],
+    [`Клиент: ${clientViewMode.name}`],
+    [],
+    ['№','Артикул','Размер','Наименование','КИЗ','Время'],
+    ...g.items.map((it,idx)=>[idx+1, it.sku, it.size||'—', it.name, it.kizCode, new Date(it.createdAt).toLocaleString('ru-RU')])
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:30},{wch:36},{wch:20}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'КИЗ');
+  XLSX.writeFile(wb, `KIZ_${supplyId}.xlsx`);
+}
 async function loadPortalSupplies(){
   if(!portalToken) return;
   const { data, error } = await sb.rpc('client_portal_supplies', { p_token: portalToken });
