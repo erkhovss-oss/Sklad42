@@ -363,6 +363,7 @@ function switchTab(tab){
   if(tab==='returns') renderReturns();
   if(tab==='ozon') renderOzon();
   if(tab==='portal-supplies'){ renderPortalSupplyDraftRows(); renderPortalSuppliesList(); }
+  if(tab==='portal-kiz') renderPortalKizList();
   if(tab==='journal') renderJournal();
   if(tab==='employees') renderEmployeesTab();
   try{ localStorage.setItem('sklad42_active_tab', tab); }catch(e){}
