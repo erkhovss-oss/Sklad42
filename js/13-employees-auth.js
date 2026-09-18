@@ -157,7 +157,7 @@ function createRole(){
   const name = nameInput.value.trim();
   if(!name){ toast('Укажите название роли'); return; }
   const id = 'ROLE-' + Date.now();
-  const permissions = {inventory:true, clients:true, storage:true, supplies:true, outbound:true, fbs:true, ozon:true, dds:true, stocktake:true, warehouses:true, consumables:true, returns:true, employees:true, 'portal-supplies':false};
+  const permissions = {inventory:true, clients:true, storage:true, supplies:true, outbound:true, fbs:true, ozon:true, dds:true, stocktake:true, warehouses:true, consumables:true, returns:true, employees:true, 'portal-supplies':false, 'portal-kiz':false};
   roles.push({id, name, permissions});
   toast(`Роль «${name}» создана со всеми правами`);
   renderEmployeesTab();
