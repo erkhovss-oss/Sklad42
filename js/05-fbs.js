@@ -452,7 +452,7 @@ function renderFixedNextOrderQr(){
   const holder = document.getElementById('fixedNextOrderQr');
   if(!holder || holder.dataset.rendered) return;
   holder.dataset.rendered = '1';
-  new QRCode(holder, {text: NEXT_ORDER_QR_CODE, width:90, height:90});
+  new QRCode(holder, {text: NEXT_ORDER_QR_CODE, width:160, height:160});
 }
 function printNextOrderQrCard(){
   const win = window.open('', '_blank');
