@@ -228,7 +228,7 @@ function renderPortalSuppliesList(){
         </div>
         <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
           ${hasMismatch ? `<span style="font-size:12px;font-weight:600;color:var(--warn)">Есть расхождения</span>` : ''}
-          <span style="font-weight:600;font-size:14px">${inProgress ? totalPlan : (hasMismatch ? `${totalFact} / ${totalPlan}` : totalFact)} шт</span>
+          <span style="font-weight:600;font-size:14px;${!inProgress && !hasMismatch ? 'color:var(--ok)' : ''}">${inProgress ? totalPlan : (hasMismatch ? `${totalFact} / ${totalPlan}` : totalFact)} шт</span>
           <span class="status ${statusClass(s.status)}">${statusLabel(s.status)}</span>
         </div>
       </div>
@@ -240,7 +240,7 @@ function renderPortalSuppliesList(){
               const mismatch = !inProgress && fact !== it.qty;
               return `<div style="display:flex;justify-content:space-between;gap:10px">
                 <span>${escapeHtml(it.name||it.sku)}${it.size?' ('+escapeHtml(it.size)+')':''}</span>
-                <span class="mono" style="${mismatch?'color:var(--warn);font-weight:600':'color:var(--ink-faint)'}">${inProgress ? it.qty : `${fact}/${it.qty}`} шт</span>
+                <span class="mono" style="${mismatch?'color:var(--warn);font-weight:600':(inProgress?'color:var(--ink-faint)':'color:var(--ok);font-weight:600')}">${inProgress ? it.qty : `${fact}/${it.qty}`} шт</span>
               </div>`;
             }).join('')}
           </div>
