@@ -344,6 +344,7 @@ function handleOrderScan(inputEl){
   const pool = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
 
   let order = pool.find(o=>String(o.orderId)===raw)
+    || pool.find(o=>o.rid && o.rid===raw)
     || pool.find(o=>o.barcode && o.barcode===raw)
     || pool.find(o=>o.article && o.article===raw);
 
@@ -1655,7 +1656,7 @@ async function loadFbsOrders(){
     if(!data || data.length < pageSize) break;
   }
   fbsOrders = allRows.map(o=>({
-    orderId:o.order_id, clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
+    orderId:o.order_id, rid:o.rid||'', clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
     kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
