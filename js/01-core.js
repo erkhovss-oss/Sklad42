@@ -342,11 +342,111 @@ function applyNavPermissions(){
     }
   }
 }
+let dashboardStats = null;
+function setDashboardPeriod(days){
+  const to = new Date();
+  const from = new Date(); from.setDate(from.getDate() - (days-1));
+  document.getElementById('dashDateTo').value = to.toISOString().slice(0,10);
+  document.getElementById('dashDateFrom').value = from.toISOString().slice(0,10);
+  loadDashboard();
+}
+async function loadDashboard(){
+  const body = document.getElementById('dashboardBody');
+  let from = document.getElementById('dashDateFrom').value;
+  let to = document.getElementById('dashDateTo').value;
+  if(!from || !to){
+    const now = new Date(); const past = new Date(); past.setDate(past.getDate()-29);
+    to = now.toISOString().slice(0,10); from = past.toISOString().slice(0,10);
+    document.getElementById('dashDateFrom').value = from;
+    document.getElementById('dashDateTo').value = to;
+  }
+  body.innerHTML = `<div class="panel empty">Загрузка…</div>`;
+  const { data, error } = await sb.rpc('get_dashboard_stats', { p_date_from: from, p_date_to: to });
+  if(error){ console.error(error); body.innerHTML = `<div class="panel empty">Не удалось загрузить аналитику</div>`; return; }
+  dashboardStats = data;
+  renderDashboard(data);
+}
+function renderMiniBarChart(rows, w, h){
+  if(!rows.length) return `<div style="color:var(--ink-faint);font-size:13px;padding:20px 0">Нет данных за период</div>`;
+  const max = Math.max(1, ...rows.map(r=>Math.max(r.income, r.expense)));
+  const barW = Math.max(4, Math.floor(w / rows.length) - 3);
+  let x = 0;
+  const bars = rows.map(r=>{
+    const incH = Math.round((r.income/max) * (h-20));
+    const expH = Math.round((r.expense/max) * (h-20));
+    const bx = x; x += barW + 3;
+    const incRect = `<rect x="${bx}" y="${h-incH}" width="${barW}" height="${incH}" fill="var(--ok)" rx="1"></rect>`;
+    const expRect = r.expense>0 ? `<rect x="${bx}" y="${h-incH-expH}" width="${barW}" height="${expH}" fill="var(--warn)" rx="1"></rect>` : '';
+    return `<g><title>${r.d}: доход ${r.income.toLocaleString('ru-RU')} ₽, расход ${r.expense.toLocaleString('ru-RU')} ₽</title>${incRect}${expRect}</g>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${x} ${h}" style="width:100%;height:${h}px;display:block">${bars}</svg>`;
+}
+function renderDashboard(s){
+  const body = document.getElementById('dashboardBody');
+  const profit = s.income - s.expense;
+  body.innerHTML = `
+    <div class="stat-row" style="margin-bottom:16px">
+      <div class="stat"><div class="val" style="color:var(--ok)">${Math.round(s.income).toLocaleString('ru-RU')} ₽</div><div class="lbl">Доход за период</div></div>
+      <div class="stat"><div class="val" style="color:var(--warn)">${Math.round(s.expense).toLocaleString('ru-RU')} ₽</div><div class="lbl">Расход за период</div></div>
+      <div class="stat"><div class="val" style="color:${profit>=0?'var(--ok)':'var(--warn)'}">${Math.round(profit).toLocaleString('ru-RU')} ₽</div><div class="lbl">Итого</div></div>
+      <div class="stat"><div class="val">${s.activeWbOrders + s.activeOzonOrders}</div><div class="lbl">Активных заказов сейчас</div></div>
+      <div class="stat"><div class="val">${s.totalLiters.toFixed(1)} л</div><div class="lbl">Занято на складе</div></div>
+      <div class="stat"><div class="val">${s.activeClients}/${s.totalClients}</div><div class="lbl">Клиентов с остатками</div></div>
+    </div>
+
+    <div class="panel" style="padding:18px;margin-bottom:16px">
+      <div class="eyebrow" style="margin-bottom:10px">Доход / расход по дням <span style="color:var(--ok)">■</span> доход <span style="color:var(--warn)">■</span> расход</div>
+      ${renderMiniBarChart(s.byDay, 900, 140)}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      <div class="panel" style="padding:18px">
+        <div class="eyebrow" style="margin-bottom:10px">Топ клиентов по выручке</div>
+        ${s.topClients.length ? s.topClients.map(c=>`
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px">
+            <span>${escapeHtml(c.client_name)}</span><span class="mono" style="font-weight:600">${Math.round(c.income).toLocaleString('ru-RU')} ₽</span>
+          </div>`).join('') : `<div style="color:var(--ink-faint);font-size:13px">Нет данных</div>`}
+      </div>
+      <div class="panel" style="padding:18px">
+        <div class="eyebrow" style="margin-bottom:10px">Активность сотрудников (движений за период)</div>
+        ${s.employeeActivity.length ? s.employeeActivity.map(e=>`
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px">
+            <span>${escapeHtml(e.employee_name)}</span><span class="mono" style="font-weight:600">${e.ops}</span>
+          </div>`).join('') : `<div style="color:var(--ink-faint);font-size:13px">Нет данных</div>`}
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="panel" style="padding:18px">
+        <div class="eyebrow" style="margin-bottom:10px">Заказы за период по статусам</div>
+        <div style="font-size:12px;color:var(--ink-faint);margin-bottom:4px">WB</div>
+        ${s.wbOrdersByStatus.length ? s.wbOrdersByStatus.map(o=>`
+          <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px">
+            <span>${escapeHtml(o.status)}</span><span class="mono">${o.cnt}</span>
+          </div>`).join('') : `<div style="color:var(--ink-faint);font-size:12px">Нет заказов WB за период</div>`}
+        <div style="font-size:12px;color:var(--ink-faint);margin:10px 0 4px">Ozon</div>
+        ${s.ozonOrdersByStatus.length ? s.ozonOrdersByStatus.map(o=>`
+          <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px">
+            <span>${escapeHtml(o.status)}</span><span class="mono">${o.cnt}</span>
+          </div>`).join('') : `<div style="color:var(--ink-faint);font-size:12px">Нет заказов Ozon за период</div>`}
+      </div>
+      <div class="panel" style="padding:18px">
+        <div class="eyebrow" style="margin-bottom:10px">Наименьшие остатки (не ноль)</div>
+        ${s.lowStock.length ? s.lowStock.map(i=>`
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px">
+            <span>${escapeHtml(i.name)}${i.size?` (${escapeHtml(i.size)})`:''}${i.client_name?` · ${escapeHtml(i.client_name)}`:''}</span>
+            <span class="mono" style="font-weight:600;color:var(--warn)">${i.qty} шт</span>
+          </div>`).join('') : `<div style="color:var(--ink-faint);font-size:13px">Нет данных</div>`}
+      </div>
+    </div>
+  `;
+}
 function switchTab(tab){
   if(!clientViewMode && !hasPermission(tab)){
     toast('Нет доступа к этому разделу');
     return;
   }
+  if(tab==='dashboard' && !dashboardStats) loadDashboard();
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.tab===tab));
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
   document.getElementById('tab-'+tab).classList.add('active');
