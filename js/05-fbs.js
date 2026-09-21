@@ -361,6 +361,8 @@ function handleOrderScan(inputEl){
     return;
   }
 
+  assemblySupplyQueue = [{ supplyId: order.wbSupplyId||null, clientId: order.clientId, clientName: order.clientName, orders: [order] }];
+  assemblySupplyIndex = 0;
   assemblyModeQueue = [order];
   assemblyModeIndex = 0;
   renderAssemblyModeStep();
@@ -368,17 +370,87 @@ function handleOrderScan(inputEl){
 function startAssemblyMode(){
   scanModeActive = false;
   const clientId = document.getElementById('fbsClientSelect').value;
-  assemblyModeQueue = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
+  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
     .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
-  if(!assemblyModeQueue.length){ toast('Нет заказов на сборке'); return; }
+  if(!rows.length){ toast('Нет заказов на сборке'); return; }
+
+  const groups = {};
+  const order = [];
+  rows.forEach(o=>{
+    const key = o.wbSupplyId || ('__none__'+o.clientId);
+    if(!groups[key]){ groups[key] = { supplyId:o.wbSupplyId||null, clientId:o.clientId, clientName:o.clientName, orders:[] }; order.push(key); }
+    groups[key].orders.push(o);
+  });
+  assemblySupplyQueue = order.map(k=>groups[k]);
+  assemblySupplyIndex = 0;
+  assemblyModeQueue = assemblySupplyQueue[0].orders;
   assemblyModeIndex = 0;
   renderAssemblyModeStep();
+}
+function skipCurrentSupply(){
+  const skipped = assemblySupplyQueue[assemblySupplyIndex];
+  assemblySupplyIndex++;
+  if(assemblySupplyIndex < assemblySupplyQueue.length){
+    assemblyModeQueue = assemblySupplyQueue[assemblySupplyIndex].orders;
+    assemblyModeIndex = 0;
+    toast(`Поставка «${skipped.clientName}» пропущена — перешли к следующей`);
+    renderAssemblyModeStep();
+  } else {
+    toast(`Поставка «${skipped.clientName}» пропущена — больше поставок нет`);
+    assemblyModeIndex = assemblyModeQueue.length; // покажет «Все заказы обработаны»
+    renderAssemblyModeStep();
+  }
+}
+// Ищет заказ (по номеру, rid, штрихкоду или артикулу) среди ВСЕХ поставок текущей
+// очереди сборки — не только в текущей. Если нашёлся в другой поставке, переключает
+// на неё. Нужно для случая, когда товары физически перемешались между поставками.
+function jumpToOrderInWizard(targetOrder){
+  const idxInCurrent = assemblyModeQueue.findIndex(o=>o.orderId===targetOrder.orderId);
+  if(idxInCurrent>=0){ assemblyModeIndex = idxInCurrent; renderAssemblyModeStep(); return true; }
+  for(let i=0;i<assemblySupplyQueue.length;i++){
+    const j = assemblySupplyQueue[i].orders.findIndex(o=>o.orderId===targetOrder.orderId);
+    if(j>=0){
+      assemblySupplyIndex = i;
+      assemblyModeQueue = assemblySupplyQueue[i].orders;
+      assemblyModeIndex = j;
+      renderAssemblyModeStep();
+      return true;
+    }
+  }
+  return false;
+}
+function wizardFindByCode(inputEl){
+  const raw = inputEl.value.trim();
+  inputEl.value = '';
+  if(!raw) return;
+  if(raw===NEXT_ORDER_QR_CODE){ wizardNextOrder(); return; }
+  const pool = assemblySupplyQueue.flatMap(s=>s.orders);
+  let found = pool.find(o=>String(o.orderId)===raw)
+    || pool.find(o=>o.rid && o.rid===raw)
+    || pool.find(o=>o.barcode && o.barcode===raw)
+    || pool.find(o=>o.article && o.article===raw);
+  if(!found){
+    playBeep('error');
+    toast(`Не нашёл заказ по «${raw}» среди заказов на сборке — сообщите мне этот текст, донастрою сопоставление`);
+    return;
+  }
+  playBeep('ok');
+  jumpToOrderInWizard(found);
 }
 function renderAssemblyModeStep(){
   const body = document.getElementById('fbsBody');
   if(assemblyModeIndex >= assemblyModeQueue.length){
     if(scanModeActive){
       renderScanModeScreen('Заказ обработан — готов к следующему скану', false);
+      return;
+    }
+    // текущая поставка закончилась — переходим к следующей в очереди, если есть
+    if(assemblySupplyIndex + 1 < assemblySupplyQueue.length){
+      assemblySupplyIndex++;
+      assemblyModeQueue = assemblySupplyQueue[assemblySupplyIndex].orders;
+      assemblyModeIndex = 0;
+      toast(`Поставка «${assemblySupplyQueue[assemblySupplyIndex].clientName}» — следующая`);
+      renderAssemblyModeStep();
       return;
     }
     body.innerHTML = `
@@ -405,16 +477,24 @@ function renderAssemblyModeStep(){
 function renderAssemblyModeStepContent(order, requiresKiz){
   const body = document.getElementById('fbsBody');
   const pi = findLocalProductInfo(order);
+  const currentSupply = assemblySupplyQueue[assemblySupplyIndex];
   body.innerHTML = `
     <div class="panel" style="padding:24px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
-          <div class="eyebrow">Режим сборки · заказ ${assemblyModeIndex+1} из ${assemblyModeQueue.length}</div>
+          <div class="eyebrow">Поставка ${assemblySupplyIndex+1} из ${assemblySupplyQueue.length} · ${escapeHtml(currentSupply.clientName)}${currentSupply.supplyId?` (${escapeHtml(currentSupply.supplyId)})`:''} · заказ ${assemblyModeIndex+1} из ${assemblyModeQueue.length}</div>
           <h2 style="margin:6px 0 0 0">${escapeHtml(pi.name)}${pi.color?` · ${escapeHtml(pi.color)}`:''}${order.size?` · ${order.size}`:''}</h2>
         </div>
         ${pi.cell ? `<div style="background:var(--accent);color:#fff;border-radius:10px;padding:10px 20px;text-align:center;line-height:1.1"><div style="font-size:11px;opacity:0.85">ЯЧЕЙКА</div><div style="font-size:26px;font-weight:800">${pi.cell}</div></div>` : ''}
-        <button class="btn btn-ghost" onclick="printNextOrderQrCard()">🖨 QR «Следующий»</button>
-        <button class="btn btn-ghost" onclick="exitAssemblyMode()">✕ Завершить режим</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost" onclick="printNextOrderQrCard()">🖨 QR «Следующий»</button>
+          ${assemblySupplyQueue.length>1 ? `<button class="btn btn-ghost" style="color:var(--warn)" onclick="skipCurrentSupply()">⏭ Пропустить поставку</button>` : ''}
+          <button class="btn btn-ghost" onclick="exitAssemblyMode()">✕ Завершить режим</button>
+        </div>
+      </div>
+      <div style="margin-bottom:16px;padding:10px 12px;background:var(--bg);border-radius:10px">
+        <div class="eyebrow" style="margin-bottom:6px">🔍 Найти заказ по коду (если товары перемешаны)</div>
+        <input class="search mono" id="wizardFindByCodeInput" placeholder="Номер заказа, штрихкод или код со стикера…" style="width:100%;max-width:420px" autocomplete="off">
       </div>
       <table style="margin-bottom:20px">
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Артикул</td><td class="mono">${escapeHtml(order.article)}</td></tr>
@@ -448,6 +528,11 @@ function renderAssemblyModeStepContent(order, requiresKiz){
       <div style="font-size:10px;color:var(--ink-faint);margin-top:4px;max-width:100px">скан = следующий заказ</div>
     </div>
   `;
+  const findInput = document.getElementById('wizardFindByCodeInput');
+  findInput.addEventListener('keydown', (e)=>{
+    if(e.key!=='Enter') return;
+    wizardFindByCode(findInput);
+  });
   const bcInput = document.getElementById('wizardBarcodeInput');
   bcInput.focus();
   bcInput.addEventListener('keydown', (e)=>{
@@ -608,6 +693,8 @@ function exitAssemblyMode(){
   scanModeActive = false;
   assemblyModeQueue = [];
   assemblyModeIndex = 0;
+  assemblySupplyQueue = [];
+  assemblySupplyIndex = 0;
   renderFbsBody();
 }
 function findLocalRequiresKiz(order){
