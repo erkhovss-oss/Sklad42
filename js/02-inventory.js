@@ -483,14 +483,39 @@ function logMovement(sku, name, delta, type, client, size){
   sb.from('movement_log').insert({sku, name, delta, type, client_name: client||null, size: size||null, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null})
     .then(({error})=>{ if(error) console.error(error); })
     .catch(e=>{ console.error(e); toast('Нет связи с базой — запись истории не сохранилась'); });
-  syncInventoryRow(sku, client, size);
+  applyInventoryDelta(sku, client, size, undefined, delta);
 }
+// Атомарно меняет остаток НА delta (может быть отрицательным) через серверную функцию —
+// не «прочитал-изменил-записал» из браузера (это теряет параллельные изменения от
+// других сотрудников), а «прибавь N к тому, что реально сейчас в базе». Итоговое
+// значение из базы становится новым локальным qty — локальная копия не может
+// разойтись с базой навсегда, даже если гонка случилась.
+async function applyInventoryDelta(sku, client, size, warehouseId, delta){
+  const item = findInventoryItem(sku, client, size, warehouseId);
+  if(!item) return;
+  try{
+    const { data, error } = await sb.rpc('apply_inventory_delta', {
+      p_sku: item.sku, p_client_name: item.client||'', p_size: item.size||'',
+      p_warehouse_id: item.warehouseId||'MAIN', p_delta: delta,
+      p_name: item.name, p_barcode: item.barcode||null
+    });
+    if(error){ console.error(error); toast(`Не удалось сохранить остаток «${item.name}» в базе — обновите страницу и проверьте количество`); return; }
+    if(item.qty !== data){ item.qty = data; renderInventory(); }
+    syncInventoryRow(item.sku, item.client, item.size, item.warehouseId);
+  }catch(e){
+    console.error(e);
+    toast(`Нет связи с базой — остаток «${item.name}» не сохранился, проверьте интернет и повторите`);
+  }
+}
+// Синхронизирует ВСЁ, КРОМЕ количества (имя, штрихкод, ячейка, габариты и т.д.) —
+// эти поля не подвержены той же гонке (их не увеличивают/уменьшают на N, а просто
+// задают), поэтому обычный upsert тут безопасен как и раньше.
 async function syncInventoryRow(sku, client, size, warehouseId){
   const item = findInventoryItem(sku, client, size, warehouseId);
   if(!item) return;
   try{
     const { error } = await sb.from('inventory').upsert({
-      sku: item.sku, name: item.name, qty: item.qty,
+      sku: item.sku, name: item.name,
       client_name: item.client || '',
       size: item.size || '',
       warehouse_id: item.warehouseId || 'MAIN',
@@ -502,7 +527,7 @@ async function syncInventoryRow(sku, client, size, warehouseId){
       barcode: item.barcode || null,
       dims: item.dims || null,
       cell: item.cell || null
-    });
+    }, { onConflict: 'sku,client_name,size,warehouse_id', ignoreDuplicates: false });
     if(error){ console.error(error); toast(`Не сохранилось в базе: ${item.name} — повторите действие`); }
     else{ scheduleWbAutoSync(item.client); }
   }catch(e){
@@ -606,7 +631,6 @@ function renderReceiving(mode){
         logReceipt(item.sku, item.name, 1);
         playBeep('ok');
         const cell = await ensureCellAssigned(item);
-        syncInventoryRow(item.sku);
         announceCell(cell);
         pushRecentAction({name:item.name, sku:item.sku, qty:1, cell});
         toast(`+1 шт: ${item.name} → Ячейка ${cell}`);
@@ -619,7 +643,6 @@ function renderReceiving(mode){
           const newItem = {sku, name, qty:1, barcode:code};
           inventory.push(newItem);
           const cell = await ensureCellAssigned(newItem);
-          syncInventoryRow(sku);
           logReceipt(sku, name, 1);
           announceCell(cell);
           pushRecentAction({name, sku, qty:1, cell, note:'новый товар'});
