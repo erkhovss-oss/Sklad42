@@ -157,7 +157,7 @@ function createRole(){
   const name = nameInput.value.trim();
   if(!name){ toast('Укажите название роли'); return; }
   const id = 'ROLE-' + Date.now();
-  const permissions = {inventory:true, clients:true, storage:true, supplies:true, outbound:true, fbs:true, ozon:true, dds:true, stocktake:true, warehouses:true, consumables:true, returns:true, employees:true, 'portal-supplies':false, 'portal-kiz':false};
+  const permissions = {dashboard:true, inventory:true, clients:true, storage:true, supplies:true, outbound:true, fbs:true, ozon:true, dds:true, stocktake:true, warehouses:true, consumables:true, returns:true, employees:true, 'portal-supplies':false, 'portal-kiz':false};
   roles.push({id, name, permissions});
   toast(`Роль «${name}» создана со всеми правами`);
   renderEmployeesTab();
@@ -187,7 +187,7 @@ function renderEmployeesTab(){
   const body = document.getElementById('employeesBody');
 
   if(currentEmployeesView==='roles'){
-    const permLabels = [['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['outbound','Поставка на склад'],['fbs','Заказы FBS'],['ozon','Заказы Ozon'],['dds','ДДС'],['stocktake','Инвентаризация'],['warehouses','Склады'],['consumables','Расходники'],['returns','Возвраты'],['employees','Сотрудники']];
+    const permLabels = [['dashboard','Дашборд'],['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['outbound','Поставка на склад'],['fbs','Заказы FBS'],['ozon','Заказы Ozon'],['dds','ДДС'],['stocktake','Инвентаризация'],['warehouses','Склады'],['consumables','Расходники'],['returns','Возвраты'],['employees','Сотрудники']];
     body.innerHTML = `
       <div class="panel" style="padding:18px;margin-bottom:18px">
         <div class="eyebrow" style="margin-bottom:10px">Новая роль</div>
