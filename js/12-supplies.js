@@ -906,7 +906,6 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   inv.qty++;
   logReceipt(inv.sku, inv.name, 1, inv.client, inv.size);
   const cell = await ensureCellAssigned(inv);
-  syncInventoryRow(inv.sku, inv.client, inv.size, inv.warehouseId);
   const isOver = item.receivedQty>item.qty && !wasOver;
   if(isOver){ playBeep('warn'); toast(`«${item.name}»${size?` (${size})`:''}: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
   else { playBeep('ok'); toast(`«${item.name}»${size?` (${size})`:''} → Ячейка ${cell}`); }
