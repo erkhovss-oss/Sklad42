@@ -39,12 +39,10 @@ function deductStockForShipment(item, qty, reasonText){
       const deduct = c.qtyNeeded * qty;
       compItem.qty = Math.max(0, compItem.qty - deduct);
       logMovement(compItem.sku, compItem.name, -deduct, `${reasonText} (составляющая набора «${item.name}»)`, compItem.client, compItem.size);
-      syncInventoryRow(compItem.sku, compItem.client, compItem.size, compItem.warehouseId);
     });
   } else {
     item.qty = Math.max(0, item.qty - qty);
     logMovement(item.sku, item.name, -qty, reasonText, item.client, item.size);
-    syncInventoryRow(item.sku, item.client, item.size, item.warehouseId);
   }
 }
 function draftKitComponentRows(){
