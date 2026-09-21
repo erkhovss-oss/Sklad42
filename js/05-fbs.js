@@ -183,6 +183,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
           </div>
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadSupplyBarcode('${escapeHtml(g.supplyId)}','${escapeHtml(g.orders[0].clientId)}')">📥 QR поставки</button>` : ''}
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadFbsKizExcel('${escapeHtml(g.supplyId)}','${escapeHtml(g.clientName)}')">📊 КИЗ (Excel)</button>` : ''}
+          ${!isDelivered ? `<button class="btn btn-accent" style="padding:6px 12px" onclick="event.stopPropagation();closeFbsSupply('${escapeHtml(g.orders[0].clientId)}')">📦 Закрыть эту поставку</button>` : ''}
           <span style="font-size:18px;color:var(--ink-faint);cursor:pointer" onclick="toggleFbsSupplyGroup('${escapeHtml(key)}')">${isExpanded?'▾':'▸'}</span>
         </div>
         ${isExpanded ? `
@@ -876,8 +877,8 @@ function downloadFbsTrbxLabels(clientId){
     const stickers = data.stickers || [];
     const win = window.open('', '_blank');
     if(!win){ toast('Браузер заблокировал открытие окна'); return; }
-    const pages = fbsTrbxes.map((t,idx)=>{
-      const sticker = stickers.find(s=>(s.trbxId||s.id)===t.id) || stickers[idx];
+    const pages = fbsTrbxes.map((t)=>{
+      const sticker = stickers.find(s=>(s.trbxId||s.id)===t.id);
       const ordersInBox = (t.orders||[]).map(oid=>fbsOrders.find(o=>o.orderId===oid)).filter(Boolean);
       const contentRows = ordersInBox.map(o=>`<tr><td>${escapeHtml(o.article)}</td><td>${escapeHtml(o.name||'')}</td><td>${escapeHtml(o.size||'—')}</td><td>${escapeHtml(o.barcode||'—')}</td></tr>`).join('');
       return `
@@ -910,8 +911,8 @@ function downloadFbsTrbxLabels(clientId){
     win.document.close();
   });
 }
-async function closeFbsSupply(){
-  const clientId = document.getElementById('fbsClientSelect').value;
+async function closeFbsSupply(explicitClientId){
+  const clientId = explicitClientId || document.getElementById('fbsClientSelect').value;
   const client = clients.find(c=>c.id===clientId);
   if(!clientId){ toast('Выберите конкретного клиента, чтобы закрыть его поставку'); return; }
 
@@ -1087,19 +1088,22 @@ async function printAllFbsStickersToThermalPrinter(){
 
   const clientId = document.getElementById('fbsClientSelect').value;
   const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
-    .sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
+    .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
   if(!rows.length){ toast('Нет заказов на сборке'); return; }
 
   const groups = {};
   rows.forEach(o=>{
-    const key = (o.barcode || o.article || String(o.orderId));
+    const key = o.clientId + '::' + (o.barcode || o.article || String(o.orderId));
     if(!groups[key]){
       const pi = findLocalProductInfo(o);
-      groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:o.barcode, color:pi.color, orders:[] };
+      groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:o.barcode, color:pi.color, clientId:o.clientId, clientName:o.clientName, orders:[] };
     }
     groups[key].orders.push(o);
   });
-  const groupList = Object.values(groups).sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
+  const groupList = Object.values(groups).sort((a,b)=>
+    (a.clientName||'').localeCompare(b.clientName||'') ||
+    (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||'')
+  );
 
   const byClient = {};
   rows.forEach(o=>{ (byClient[o.clientId] = byClient[o.clientId] || []).push(o); });
@@ -1114,7 +1118,7 @@ async function printAllFbsStickersToThermalPrinter(){
   results.forEach(({orders, data, error})=>{
     if(error || (data && data.error)){ hadError = true; console.error(error||(data&&data.error)); return; }
     const stickers = data.stickers || [];
-    orders.forEach((o, idx)=>{ if(stickers[idx] && stickers[idx].file) stickerByOrderId[o.orderId] = stickers[idx].file; });
+    stickers.forEach(s=>{ if(s && s.orderId != null && s.file) stickerByOrderId[s.orderId] = s.file; });
   });
 
   toast(`Печатаем на принтере: ${groupList.length} карточек товара…`);
@@ -1153,19 +1157,22 @@ async function printAllFbsStickersToThermalPrinter(){
 function printAllFbsStickers(){
   const clientId = document.getElementById('fbsClientSelect').value;
   const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
-    .sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
+    .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
   if(!rows.length){ toast('Нет заказов на сборке'); return; }
 
   const groups = {};
   rows.forEach(o=>{
-    const key = (o.barcode || o.article || String(o.orderId));
+    const key = o.clientId + '::' + (o.barcode || o.article || String(o.orderId));
     if(!groups[key]){
       const pi = findLocalProductInfo(o);
-      groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:o.barcode, color:pi.color, orders:[] };
+      groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:o.barcode, color:pi.color, clientId:o.clientId, clientName:o.clientName, orders:[] };
     }
     groups[key].orders.push(o);
   });
-  const groupList = Object.values(groups).sort((a,b)=> (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
+  const groupList = Object.values(groups).sort((a,b)=>
+    (a.clientName||'').localeCompare(b.clientName||'') ||
+    (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||'')
+  );
 
   const byClient = {};
   rows.forEach(o=>{ (byClient[o.clientId] = byClient[o.clientId] || []).push(o); });
@@ -1180,7 +1187,7 @@ function printAllFbsStickers(){
     results.forEach(({orders, data, error})=>{
       if(error || (data && data.error)){ hadError = true; console.error(error||(data&&data.error)); return; }
       const stickers = data.stickers || [];
-      orders.forEach((o, idx)=>{ if(stickers[idx] && stickers[idx].file) stickerByOrderId[o.orderId] = stickers[idx].file; });
+      stickers.forEach(s=>{ if(s && s.orderId != null && s.file) stickerByOrderId[s.orderId] = s.file; });
     });
     const orderedStickers = [];
     groupList.forEach(g=> g.orders.forEach(o=>{ if(stickerByOrderId[o.orderId]) orderedStickers.push(stickerByOrderId[o.orderId]); }));
