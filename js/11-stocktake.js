@@ -215,7 +215,6 @@ function applyStocktakeCorrections(countId){
     if(!inv) return;
     inv.qty = r.countedQty;
     logMovement(inv.sku, inv.name, r.diff, 'Инвентаризация — корректировка', inv.client, inv.size);
-    syncInventoryRow(inv.sku, inv.client, inv.size, inv.warehouseId);
   });
   c.status = 'completed';
   c.completedAt = new Date().toISOString();
