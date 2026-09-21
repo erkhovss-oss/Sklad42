@@ -212,7 +212,8 @@ function toggleFbsSupplyGroup(key){
 function renderFbsBody(){
   const clientId = document.getElementById('fbsClientSelect') ? document.getElementById('fbsClientSelect').value : '';
   const body = document.getElementById('fbsBody');
-  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus===fbsView);
+  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus===fbsView)
+    .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
   if(!clients.some(c=>c.wbConnected)){
     body.innerHTML = `<div class="panel empty"><span class="eyebrow">Нет клиента</span>Подключите WB хотя бы одному клиенту в разделе «Клиенты»</div>`;
     return;
@@ -367,7 +368,8 @@ function handleOrderScan(inputEl){
 function startAssemblyMode(){
   scanModeActive = false;
   const clientId = document.getElementById('fbsClientSelect').value;
-  assemblyModeQueue = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
+  assemblyModeQueue = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
+    .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
   if(!assemblyModeQueue.length){ toast('Нет заказов на сборке'); return; }
   assemblyModeIndex = 0;
   renderAssemblyModeStep();
