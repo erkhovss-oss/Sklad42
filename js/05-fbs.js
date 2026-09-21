@@ -190,7 +190,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
           <div style="border-top:1px solid var(--line)">
             ${g.orders.map(o=>`
               <div class="pick-row">
-                ${!isDelivered && clientId ? `<input type="checkbox" ${fbsCloseSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsCloseSelected(${o.orderId}, this.checked)">` : ''}
+                ${!isDelivered ? `<input type="checkbox" ${fbsCloseSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsCloseSelected(${o.orderId}, this.checked)">` : ''}
                 <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.orderCreatedAt?` · ${timeAgoRu(o.orderCreatedAt)}`:''}${isDelivered?'':renderKizStatusLabel(o)}</div></div>
                 <div style="display:flex;gap:6px;align-items:center">
                   ${!isDelivered && clientId ? renderTrbxAssignControl(o) : ''}
@@ -264,19 +264,17 @@ function renderFbsBody(){
       <div class="panel" style="padding:14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length}. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
-          ${clientId ? `
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;white-space:nowrap">
-              <input type="checkbox" ${allSelected?'checked':''} onchange="toggleAllFbsCloseSelected(this.checked, ${JSON.stringify(visibleIds)})"> Выбрать все
-            </label>
-            ${fbsCloseSelectedOrders.length ? `<span style="font-size:12px;font-weight:600">Выбрано: ${fbsCloseSelectedOrders.length} из ${rows.length}</span>` : ''}
-          ` : ''}
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;white-space:nowrap">
+            <input type="checkbox" ${allSelected?'checked':''} onchange="toggleAllFbsCloseSelected(this.checked, ${JSON.stringify(visibleIds)})"> Выбрать все
+          </label>
+          ${fbsCloseSelectedOrders.length ? `<span style="font-size:12px;font-weight:600">Выбрано: ${fbsCloseSelectedOrders.length} из ${rows.length}</span>` : ''}
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${rows.length ? `<button class="btn btn-primary" onclick="startAssemblyMode()">🚀 Режим сборки</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="enterScanMode()">🔍 Найти заказ по скану</button>` : ''}
           ${rows.length ? `<button class="btn btn-ghost" onclick="printFbsPickList()">📋 Лист сборки</button>` : ''}
-          ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickers()">🖨 Все этикетки (${rows.length})</button>` : ''}
-          ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickersToThermalPrinter()">🖨️ На принтер (QZ Tray)</button>` : ''}
+          ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickers()">🖨 ${fbsCloseSelectedOrders.length ? `Выбранные этикетки (${fbsCloseSelectedOrders.length})` : `Все этикетки (${rows.length})`}</button>` : ''}
+          ${rows.length ? `<button class="btn btn-ghost" onclick="printAllFbsStickersToThermalPrinter()">🖨️ ${fbsCloseSelectedOrders.length ? `На принтер — выбранные (${fbsCloseSelectedOrders.length})` : 'На принтер (QZ Tray)'}</button>` : ''}
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="openLabelSettingsModal()">⚙️ Настройки этикетки</button>
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="forgetQzPrinter()" title="Выбрать другой принтер при следующей печати">⚙️ Сменить принтер</button>
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="previewThermalInfoCard()" title="Посмотреть, что именно генерируется для принтера">👁 Предпросмотр растра</button>
@@ -1087,9 +1085,9 @@ async function printAllFbsStickersToThermalPrinter(){
   if(!connected) return;
 
   const clientId = document.getElementById('fbsClientSelect').value;
-  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
+  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm' && (!fbsCloseSelectedOrders.length || fbsCloseSelectedOrders.includes(o.orderId)))
     .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
-  if(!rows.length){ toast('Нет заказов на сборке'); return; }
+  if(!rows.length){ toast(fbsCloseSelectedOrders.length ? 'Среди выбранных нет заказов на сборке' : 'Нет заказов на сборке'); return; }
 
   const groups = {};
   rows.forEach(o=>{
@@ -1156,9 +1154,9 @@ async function printAllFbsStickersToThermalPrinter(){
 }
 function printAllFbsStickers(){
   const clientId = document.getElementById('fbsClientSelect').value;
-  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
+  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm' && (!fbsCloseSelectedOrders.length || fbsCloseSelectedOrders.includes(o.orderId)))
     .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
-  if(!rows.length){ toast('Нет заказов на сборке'); return; }
+  if(!rows.length){ toast(fbsCloseSelectedOrders.length ? 'Среди выбранных нет заказов на сборке' : 'Нет заказов на сборке'); return; }
 
   const groups = {};
   rows.forEach(o=>{
