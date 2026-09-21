@@ -89,6 +89,8 @@ function hasFullWarehouseAccess(){ return !myWarehouseId(); }
 let currentEmployeesView = 'list';
 let showingNewEmployeeForm = false;
 let assemblyModeQueue = [];
+let assemblySupplyQueue = [];
+let assemblySupplyIndex = 0;
 let consumables = [];
 let kitComponents = [];
 let expandedFbsSupplyIds = {};
