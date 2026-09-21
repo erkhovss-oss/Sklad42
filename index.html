@@ -537,8 +537,10 @@
   <div class="sidebar" id="sidebarEl">
     <div class="logo"><b>ТелеПак</b><span>WMS</span></div>
     <div class="nav-group-label">Склад</div>
+    <div class="nav-item" data-tab="dashboard" style="padding-left:26px"><span class="num">00</span>Дашборд</div>
     <div class="nav-item active" data-tab="inventory" style="padding-left:26px"><span class="num">01</span>Остатки</div>
     <div class="nav-item" data-tab="portal-supplies" style="display:none"><span class="num">02</span>Плановые поставки</div>
+    <div class="nav-item" data-tab="portal-kiz" style="display:none"><span class="num">03</span>КИЗ</div>
     <div class="nav-item" data-tab="clients"><span class="num">02</span>Клиенты</div>
     <div class="nav-item" data-tab="storage"><span class="num">03</span>Хранение</div>
     <div class="nav-item" data-tab="supplies"><span class="num">04</span>Плановые поставки</div>
@@ -557,6 +559,26 @@
 
   <div class="main">
     <div class="content">
+
+      <!-- DASHBOARD -->
+      <section class="section" id="tab-dashboard">
+        <div class="page-head">
+          <div>
+            <h1>Дашборд</h1>
+            <p>Финансы, заказы и склад за выбранный период — общая картина без похода по вкладкам.</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input class="search" id="dashDateFrom" type="date" style="width:150px">
+            <span style="color:var(--ink-faint)">—</span>
+            <input class="search" id="dashDateTo" type="date" style="width:150px">
+            <button class="btn btn-ghost" onclick="setDashboardPeriod(7)">7 дн</button>
+            <button class="btn btn-ghost" onclick="setDashboardPeriod(30)">30 дн</button>
+            <button class="btn btn-ghost" onclick="setDashboardPeriod(90)">90 дн</button>
+            <button class="btn btn-accent" onclick="loadDashboard()">Обновить</button>
+          </div>
+        </div>
+        <div id="dashboardBody"><div class="panel empty">Загрузка…</div></div>
+      </section>
 
       <!-- INVENTORY -->
       <section class="section active" id="tab-inventory">
@@ -647,6 +669,17 @@
         </div>
         <div class="eyebrow" style="margin-bottom:10px">Поданные заявки</div>
         <div id="portalSuppliesListWrap"></div>
+      </section>
+
+      <!-- CLIENT PORTAL: KIZ EXPORT -->
+      <section class="section" id="tab-portal-kiz">
+        <div class="page-head">
+          <div>
+            <h1>КИЗ по отгрузкам</h1>
+            <p>Коды маркировки (Честный знак), использованные при отправке ваших заказов на Wildberries — для вывода из оборота.</p>
+          </div>
+        </div>
+        <div id="portalKizListWrap"></div>
       </section>
 
       <!-- CLIENTS -->
