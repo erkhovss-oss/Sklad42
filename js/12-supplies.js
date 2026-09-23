@@ -101,7 +101,7 @@ function createSupply(){
 function toggleSupplyReceiving(id){
   const supply = supplies.find(s=>s.id===id);
   if(!supply) return;
-  if(activeSupplyId !== id){ lastScanInfo = null; pendingKizItem = null; }
+  if(activeSupplyId !== id){ lastScanInfo = null; scanHistory = []; pendingKizItem = null; }
   activeSupplyId = activeSupplyId===id ? null : id;
   renderSuppliesTableWrap();
 }
@@ -694,7 +694,7 @@ function renderSupplyReceivingPanel(s){
       ` : ''}
 
       <div style="display:flex;gap:10px">
-        <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="undoLastScan()" ${(!lastScanInfo||!lastScanInfo.canUndo)?'disabled':''}>↩ Отменить скан</button>
+        <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="undoLastScan()" ${!scanHistory.length?'disabled':''}>↩ Отменить скан${scanHistory.length>1?` (${scanHistory.length})`:''}</button>
         <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="finishSupplyReceiving('${s.id}')">Завершить приёмку</button>
       </div>
     </div>
@@ -916,6 +916,7 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
     status: isOver ? 'over' : 'ok',
     message: isOver ? `Принято больше плана: ${item.receivedQty} из ${item.qty}` : `Принято ${item.receivedQty} из ${item.qty}`
   };
+  scanHistory.push({supplyId: supply.id, sku, size, name:item.name + (size?` · ${size}`:''), barcode: barcode||'', delta:1});
   if(kizCode){
     const scan = {kizCode, supplyId:supply.id, sku, name:item.name, size:size||'', clientName:supply.clientName, time:new Date().toISOString()};
     kizScans.push(scan);
