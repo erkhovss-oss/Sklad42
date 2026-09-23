@@ -275,7 +275,7 @@ function renderBoxCard(supply, box){
   return `
     <div class="panel" style="margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;background:var(--bg)" onclick="toggleBoxExpand('${box.id}')">
-        <h3 style="font-size:14px;color:var(--ink-soft);display:flex;align-items:center;gap:8px">
+        <h3 style="font-size:14px;color:var(--ink-soft);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           📦 Короб №${box.boxNumber} · ${box.items.length} поз. · ${totalQty} шт
           <span title="${sizeTitle}" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:${size?'var(--accent)':'var(--line)'};color:${size?'var(--accent-ink)':'var(--ink-soft)'}">${size?escapeHtml(size.name):'без размера'}</span>
         </h3>
