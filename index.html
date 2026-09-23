@@ -156,6 +156,7 @@
     cursor:pointer;
     border:1px solid transparent;
     position:relative;
+    transition:color .15s ease, background .15s ease, border-color .15s ease;
   }
   .nav-item .num{
     font-family:'IBM Plex Mono',monospace;
@@ -238,11 +239,13 @@
     display:inline-flex;
     align-items:center;
     gap:6px;
+    transition:background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease, box-shadow .15s ease;
   }
+  .btn:active:not(:disabled){transform:scale(0.96);}
   .btn-primary{background:var(--ink);color:#fff;}
   .btn-primary:hover{background:#333029;}
   .btn-accent{background:var(--accent);color:#fff;}
-  .btn-accent:hover{background:#E24E14;}
+  .btn-accent:hover{background:#E24E14;box-shadow:0 2px 10px rgba(255,91,31,0.35);}
   .btn-ghost{background:transparent;color:var(--ink-soft);border:1px solid var(--line);}
   .btn-ghost:hover{border-color:var(--ink-soft);color:var(--ink);}
   .btn:disabled{opacity:0.4;cursor:not-allowed;}
@@ -587,7 +590,7 @@
             <h1>Остатки склада</h1>
             <p>Что и сколько лежит на полках прямо сейчас</p>
           </div>
-          <div style="display:flex;gap:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-accent" id="viewStockBtn" onclick="setInventoryView('stock')">Остатки</button>
             <button class="btn btn-ghost" id="viewWriteoffsBtn" onclick="setInventoryView('writeoffs')">Списания</button>
           </div>
@@ -701,7 +704,7 @@
             <h1>Хранение</h1>
             <p>Стоимость хранения по дням, в рублях</p>
           </div>
-          <div style="display:flex;gap:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
             <select class="search" id="storageClientFilter" style="width:220px">
               <option value="">Все клиенты</option>
             </select>
@@ -719,7 +722,7 @@
             <h1>Плановые поставки</h1>
             <p>Плановые поступления от клиентов и приёмка товара на склад</p>
           </div>
-          <div style="display:flex;gap:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-ghost" id="viewPlannedBtn" onclick="setSuppliesView('planned')">Плановые</button>
             <button class="btn btn-ghost" id="viewReceivingBtn" onclick="setSuppliesView('receiving')">Приёмка</button>
           </div>
@@ -1001,7 +1004,7 @@
             <h1>Сотрудники</h1>
             <p>Доступ в личный кабинет и права по разделам</p>
           </div>
-          <div style="display:flex;gap:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-ghost" id="viewEmployeesBtn" onclick="setEmployeesView('list')">Сотрудники</button>
             <button class="btn btn-ghost" id="viewRolesBtn" onclick="setEmployeesView('roles')">Роли и доступы</button>
             <button class="btn btn-accent" id="newEmployeeBtn" onclick="openNewEmployeeForm()">+ Новый сотрудник</button>
