@@ -34,6 +34,16 @@ function findReturnItem(){
   renderReturnForm();
 }
 function cancelReturnItem(){ foundReturnItem = null; renderReturnForm(); }
+// Заводит виртуальный склад «БРАК» при первой необходимости — сюда попадает
+// брак из возвратов: физически на складе, но не для продажи, не участвует в
+// расчёте остатка, который уходит на WB/Ozon (см. get_available_stock в базе).
+function ensureBrakWarehouse(){
+  if(warehouses.some(w=>w.id==='BRAK')) return;
+  warehouses.push({id:'BRAK', name:'БРАК (не для продажи)'});
+  sb.from('warehouses').upsert({id:'BRAK', name:'БРАК (не для продажи)'}).then(({error})=>{
+    if(error) console.error(error);
+  });
+}
 function submitReturn(resolution){
   if(!foundReturnItem){ toast('Сначала найдите товар'); return; }
   const item = foundReturnItem;
@@ -52,8 +62,20 @@ function submitReturn(resolution){
     logMovement(item.sku, item.name, qty, 'Возврат на склад' + (reason?(': '+reason):''), item.client, item.size);
     toast(`Возврат оформлен: +${qty} шт на склад`);
   } else {
-    logMovement(item.sku, item.name, 0, 'Возврат: брак' + (reason?(': '+reason):''), item.client, item.size);
-    toast(`Возврат оформлен как брак: ${qty} шт`);
+    // Товар физически возвращается на склад, но не для продажи — отдельным
+    // виртуальным складом «БРАК», чтобы он был виден в «Остатках», но не попадал
+    // в число, которое уходит на WB/Ozon (это учитывается автоматически: расчёт
+    // доступного для продажи остатка исключает склад с id 'BRAK').
+    ensureBrakWarehouse();
+    const brakKey = itemKey({sku:item.sku, client:item.client, size:item.size, warehouseId:'BRAK'});
+    let brakItem = inventory.find(i=>itemKey(i)===brakKey);
+    if(!brakItem){
+      brakItem = {sku:item.sku, name:item.name, qty:0, client:item.client, size:item.size||'', warehouseId:'BRAK', barcode:item.barcode||''};
+      inventory.push(brakItem);
+    }
+    brakItem.qty += qty;
+    logMovement(item.sku, item.name, qty, 'Возврат: брак' + (reason?(': '+reason):''), item.client, item.size, 'BRAK');
+    toast(`Возврат оформлен как брак: +${qty} шт на склад «БРАК» (не идёт в продажу)`);
   }
   foundReturnItem = null;
   document.getElementById('returnBarcode').value = '';
@@ -225,7 +247,7 @@ async function queryJournal(){
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-top:1px solid var(--line);flex-wrap:wrap">
         <span style="font-size:13px;color:var(--ink-soft)">${journalTotal ? `Показано ${fromShown}–${toShown} из ${journalTotal}` : 'Пусто'}</span>
-        <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost" style="padding:5px 12px" onclick="goJournalPage(-1)" ${journalPage<=1?'disabled':''}>← Назад</button>
           <span style="font-size:13px;color:var(--ink-soft);white-space:nowrap">Стр. ${journalPage} из ${totalPages}</span>
           <button class="btn btn-ghost" style="padding:5px 12px" onclick="goJournalPage(1)" ${journalPage>=totalPages?'disabled':''}>Вперёд →</button>
