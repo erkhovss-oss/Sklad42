@@ -685,7 +685,7 @@ function renderSupplyReceivingPanel(s){
         </div>
         ${kizListCollapsed ? '' : `
           <div style="padding:2px 16px">${renderKizScansList(s.id)}</div>
-          <div style="padding:0 16px 14px 16px;display:flex;gap:8px">
+          <div style="padding:0 16px 14px 16px;display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="downloadKizExcel('${s.id}')">📊 Скачать КИЗ (Excel)</button>
             <button class="btn btn-ghost" style="flex:1;justify-content:center;color:var(--warn)" onclick="removeAllKizScans('${s.id}')">🗑 Удалить все</button>
           </div>
