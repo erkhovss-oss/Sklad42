@@ -88,7 +88,7 @@ function renderOutboundCreatePanel(){
         ` : `<p style="font-size:13px;color:var(--ink-faint);margin:0 0 14px 0">Пока не добавлено ни одной позиции</p>`}
       ` : ''}
 
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-accent" onclick="createOutboundSupply()" ${(client && draftOutboundItems.length)?'':'disabled'}>Создать поставку${totalQty?` (${totalQty} шт)`:''}</button>
         ${(client || draftOutboundItems.length) ? `<button class="btn btn-ghost" onclick="cancelOutboundDraft()">Отменить</button>` : ''}
       </div>
@@ -406,7 +406,7 @@ function renderOutboundDetail(s){
     <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div class="eyebrow">Поставка ${s.id} · ${totalQty} шт · ${s.items.length} SKU</div>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-accent" onclick="printPickList('${s.id}')">🖨 Лист подбора</button>
           <button class="btn btn-ghost" onclick="toggleBoxPanel('${s.id}')">📦 Короба</button>
           ${s.status!=='shipped' ? `<button class="btn btn-ghost" onclick="markOutboundShipped('${s.id}')">Отметить отправленной</button>` : ''}
