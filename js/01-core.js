@@ -51,6 +51,7 @@ let outboundBoxes = [];
 let activeBoxSupplyId = null;
 let expandedBoxId = null;
 let lastBoxScanInfo = null;
+let boxScanHistory = [];
 let outboundItemsCollapsed = true;
 let activeOutboundId = null;
 let editingOutboundId = null;
@@ -103,6 +104,7 @@ let stocktakes = [];
 let activeStocktakeId = null;
 let stocktakeFinishing = false;
 let lastStocktakeScanInfo = null;
+let stocktakeScanHistory = [];
 let warehouses = [];
 let companySettings = { name:'', inn:'', kpp:'', legalAddress:'', bankDetails:'', directorName:'' };
 let tochkaSettings = { token:'', customerCode:'', accountId:'' };
@@ -137,6 +139,7 @@ function toggleSound(){
 }
 let recentReceivingActions = [];
 let lastScanInfo = null;
+let scanHistory = [];
 let kizScans = [];
 let pendingKizItem = null;
 let itemsListCollapsed = true;
@@ -201,8 +204,8 @@ function renderScanScoreboard(){
   `;
 }
 function undoLastScan(){
-  if(!lastScanInfo || !lastScanInfo.canUndo){ toast('Нечего отменять'); return; }
-  const info = lastScanInfo;
+  if(!scanHistory.length){ toast('Нечего отменять'); return; }
+  const info = scanHistory.pop();
   const supply = supplies.find(s=>s.id===info.supplyId);
   if(!supply){ toast('Поставка не найдена'); return; }
   const item = supply.items.find(i=>i.sku===info.sku && (i.size||'')===(info.size||''));
@@ -215,8 +218,8 @@ function undoLastScan(){
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — отмена не сохранилась'); });
   pushRecentAction({name:info.name, sku:info.sku, qty:-info.delta, note:'отмена скана'});
-  toast(`Отменено: ${info.name} −${info.delta} шт`);
-  lastScanInfo = {...info, canUndo:false, status:'undone', message:'Последний скан отменён'};
+  toast(`Отменено: ${info.name} −${info.delta} шт${scanHistory.length?` (ещё можно отменить: ${scanHistory.length})`:''}`);
+  lastScanInfo = {...info, canUndo: scanHistory.length>0, status:'undone', message: scanHistory.length ? `Отменено — в этой сессии есть ещё ${scanHistory.length} скан(ов) для отмены` : 'Последний скан отменён'};
   renderSuppliesTableWrap();
 }
 
