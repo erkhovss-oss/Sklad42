@@ -61,6 +61,7 @@ function toggleStocktakeDetail(id){
   activeStocktakeId = activeStocktakeId===id ? null : id;
   stocktakeFinishing = false;
   lastStocktakeScanInfo = null;
+  stocktakeScanHistory = [];
   renderStocktakeList();
   if(activeStocktakeId){
     setTimeout(()=>{
@@ -81,6 +82,7 @@ function addStocktakeCount(countId, sku, size, clientName, qty, barcode, cell, n
   if(existing) existing.countedQty = newQty;
   else c.items.push({sku, name, size, barcode:barcode||'', clientName:clientName||'', cell:cell||null, countedQty:newQty});
   lastStocktakeScanInfo = {countId, sku, size, clientName, delta:qty, name};
+  stocktakeScanHistory.push({countId, sku, size, clientName, delta:qty, name});
   saveWithRetry(()=>sb.from('inventory_count_items').upsert(
     {count_id:countId, sku, name, size, barcode:barcode||null, client_name:clientName||null, cell:cell||null, counted_qty:newQty},
     { onConflict:'count_id,sku,client_name,size' }
@@ -133,8 +135,8 @@ function manualAddStocktakeItem(countId){
   renderStocktakeList();
 }
 function undoLastStocktakeScan(){
-  if(!lastStocktakeScanInfo){ toast('Нечего отменять'); return; }
-  const info = lastStocktakeScanInfo;
+  if(!stocktakeScanHistory.length){ toast('Нечего отменять'); return; }
+  const info = stocktakeScanHistory.pop();
   const c = stocktakes.find(x=>x.id===info.countId);
   if(!c) return;
   const item = c.items.find(it=>it.sku===info.sku && (it.size||'')===(info.size||'') && (it.clientName||'')===(info.clientName||''));
@@ -152,8 +154,8 @@ function undoLastStocktakeScan(){
       { onConflict:'count_id,sku,client_name,size' }
     )).then(({success,error})=>{ if(!success) console.error(error); });
   }
-  toast(`Отменено: ${info.name} −${info.delta} шт`);
-  lastStocktakeScanInfo = null;
+  toast(`Отменено: ${info.name} −${info.delta} шт${stocktakeScanHistory.length?` (ещё можно отменить: ${stocktakeScanHistory.length})`:''}`);
+  lastStocktakeScanInfo = stocktakeScanHistory.length ? stocktakeScanHistory[stocktakeScanHistory.length-1] : null;
   renderStocktakeList();
 }
 function removeStocktakeItem(countId, sku, size, clientName){
@@ -305,7 +307,7 @@ function renderStocktakeDetail(c){
         `).join('') : `<p style="font-size:13px;color:var(--ink-faint);margin:8px 0">Пока ничего не отсканировано</p>`}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-ghost" ${lastStocktakeScanInfo&&lastStocktakeScanInfo.countId===c.id?'':'disabled'} onclick="undoLastStocktakeScan()">↩ Отменить скан</button>
+        <button class="btn btn-ghost" ${stocktakeScanHistory.length&&lastStocktakeScanInfo&&lastStocktakeScanInfo.countId===c.id?'':'disabled'} onclick="undoLastStocktakeScan()">↩ Отменить скан${stocktakeScanHistory.length>1?` (${stocktakeScanHistory.length})`:''}</button>
         <button class="btn btn-accent" onclick="toggleStocktakeFinish()">Завершить инвентаризацию →</button>
         <button class="btn btn-ghost" onclick="downloadStocktakeExcel('${c.id}')">📊 Скачать Excel</button>
       </div>
