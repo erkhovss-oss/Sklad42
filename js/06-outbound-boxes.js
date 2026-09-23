@@ -58,6 +58,7 @@ function toggleBoxPanel(supplyId){
   activeBoxSupplyId = activeBoxSupplyId===supplyId ? null : supplyId;
   expandedBoxId = null;
   lastBoxScanInfo = null;
+  boxScanHistory = [];
   renderOutboundTableWrap();
 }
 function toggleOutboundItemsCollapse(){
@@ -131,6 +132,7 @@ function closeBoxAndAddNext(supplyId, currentBoxId){
   const closedNumber = currentBox ? currentBox.boxNumber : '?';
   expandedBoxId = null;
   lastBoxScanInfo = null;
+  boxScanHistory = [];
   const existing = outboundBoxes.filter(b=>b.supplyId===supplyId);
   const nextNumber = existing.length ? Math.max(...existing.map(b=>b.boxNumber)) + 1 : 1;
   const newBox = { id: 'BOX-'+Date.now(), supplyId, boxNumber: nextNumber, sizeId: currentBox ? currentBox.sizeId : null, items: [] };
@@ -171,6 +173,7 @@ function addItemToBox(supply, boxId, sku, size, qty){
   if(existing) existing.qty = newQty;
   else box.items.push({sku, name:planItem.name, size:size||'', barcode:planItem.barcode||'', qty:newQty});
   lastBoxScanInfo = {boxId, sku, size:size||'', name:planItem.name, delta:qty};
+  boxScanHistory.push({boxId, sku, size:size||'', name:planItem.name, delta:qty});
   saveWithRetry(()=>sb.from('outbound_box_items').upsert(
     {box_id:boxId, sku, name:planItem.name, size:size||'', barcode:planItem.barcode||null, qty:newQty},
     { onConflict: 'box_id,sku,size' }
@@ -184,8 +187,8 @@ function addItemToBox(supply, boxId, sku, size, qty){
   return true;
 }
 function undoLastBoxScan(){
-  if(!lastBoxScanInfo){ toast('Нечего отменять'); return; }
-  const info = lastBoxScanInfo;
+  if(!boxScanHistory.length){ toast('Нечего отменять'); return; }
+  const info = boxScanHistory.pop();
   const box = outboundBoxes.find(b=>b.id===info.boxId);
   if(!box){ toast('Короб не найден'); lastBoxScanInfo = null; return; }
   const item = box.items.find(it=>it.sku===info.sku && (it.size||'')===(info.size||''));
@@ -205,8 +208,8 @@ function undoLastBoxScan(){
       if(!success){ console.error(error); toast('Не удалось сохранить отмену в базе'); }
     });
   }
-  toast(`Отменено: ${info.name} −${info.delta} шт`);
-  lastBoxScanInfo = null;
+  toast(`Отменено: ${info.name} −${info.delta} шт${boxScanHistory.length?` (ещё можно отменить: ${boxScanHistory.length})`:''}`);
+  lastBoxScanInfo = boxScanHistory.length ? boxScanHistory[boxScanHistory.length-1] : null;
   renderOutboundTableWrap();
 }
 function removeItemFromBox(boxId, sku, size){
@@ -312,7 +315,7 @@ function renderBoxCard(supply, box){
               <button class="btn btn-ghost" onclick="manualAddToBox('${supply.id}','${box.id}')">+ Добавить</button>
             </div>
             <button class="btn btn-accent" style="margin-top:10px;width:100%;justify-content:center" onclick="addAllRemainingToBox('${supply.id}','${box.id}')">📥 Добавить весь товар</button>
-            <button class="btn btn-ghost" style="margin-top:8px;width:100%;justify-content:center" ${(lastBoxScanInfo && lastBoxScanInfo.boxId===box.id)?'':'disabled'} onclick="undoLastBoxScan()">↩ Отменить скан${(lastBoxScanInfo && lastBoxScanInfo.boxId===box.id)?` (${lastBoxScanInfo.name})`:''}</button>
+            <button class="btn btn-ghost" style="margin-top:8px;width:100%;justify-content:center" ${(boxScanHistory.length && lastBoxScanInfo && lastBoxScanInfo.boxId===box.id)?'':'disabled'} onclick="undoLastBoxScan()">↩ Отменить скан${(lastBoxScanInfo && lastBoxScanInfo.boxId===box.id)?` (${lastBoxScanInfo.name})`:''}${boxScanHistory.length>1?` [${boxScanHistory.length}]`:''}</button>
           </div>
           <button class="btn btn-primary" style="margin-top:10px;width:100%;justify-content:center" onclick="closeBoxAndAddNext('${supply.id}','${box.id}')">✅ Закрыть короб и добавить следующий</button>
           <div style="display:flex;gap:8px;margin-top:8px">
