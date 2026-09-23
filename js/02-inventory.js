@@ -28,17 +28,17 @@ function renderWriteoffsView(){
 
   wrap.innerHTML = `
     <div class="panel">
-      <table>
+      <table class="card-table">
         <thead><tr><th>Дата и время</th><th>Артикул</th><th>Товар</th><th>Кол-во</th><th>Причина</th><th>Сотрудник</th></tr></thead>
         <tbody>
           ${filtered.length ? filtered.slice().reverse().map(w=>`
             <tr>
-              <td class="mono" style="font-size:12px;color:var(--ink-soft)">${w.time}</td>
-              <td class="mono">${w.sku}</td>
-              <td>${w.name}</td>
-              <td style="color:var(--warn);font-weight:600">−${w.qty} шт</td>
-              <td>${w.reason}</td>
-              <td style="font-size:12px;color:var(--ink-soft)">${escapeHtml(w.employeeName||'—')}</td>
+              <td data-label="Дата и время" class="mono" style="font-size:12px;color:var(--ink-soft)">${w.time}</td>
+              <td data-label="Артикул" class="mono">${w.sku}</td>
+              <td data-label="Товар">${w.name}</td>
+              <td data-label="Кол-во" style="color:var(--warn);font-weight:600">−${w.qty} шт</td>
+              <td data-label="Причина">${w.reason}</td>
+              <td data-label="Сотрудник" style="font-size:12px;color:var(--ink-soft)">${escapeHtml(w.employeeName||'—')}</td>
             </tr>
           `).join('') : `<tr><td colspan="6" class="empty">Списаний не найдено</td></tr>`}
         </tbody>
@@ -178,7 +178,7 @@ function renderInventory(){
                   </div>`;
                 }).join('')}
               </div>
-              <div style="display:flex;gap:8px">
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
                 <select class="search" id="kitAddComponentSelect-${escapeHtml(key)}" style="flex:1;font-size:12px">
                   <option value="">— добавить составляющую —</option>
                   ${inventory.filter(x=>x.client===i.client && (x.warehouseId||'MAIN')===(i.warehouseId||'MAIN') && !(x.sku===i.sku && (x.size||'')===(i.size||'')) && !x.isKit).map(x=>`<option value="${escapeHtml(x.sku+'~~'+(x.size||''))}">${escapeHtml(x.name)}${x.size?` (${x.size})`:''}</option>`).join('')}
@@ -319,7 +319,7 @@ function renderInventory(){
       const to = Math.min(invPage*invPageSize, totalItems);
       paginationEl.innerHTML = `
         <span style="font-size:13px;color:var(--ink-soft)">Показано ${from}–${to} из ${totalItems}</span>
-        <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost" style="padding:5px 12px" onclick="goInvPage(-1)" ${invPage<=1?'disabled':''}>← Назад</button>
           <span style="font-size:13px;color:var(--ink-soft);white-space:nowrap">Стр. ${invPage} из ${totalPages}</span>
           <button class="btn btn-ghost" style="padding:5px 12px" onclick="goInvPage(1)" ${invPage>=totalPages?'disabled':''}>Вперёд →</button>
@@ -476,14 +476,14 @@ function resolveDraftItem(d, clientName, warehouseId){
   }
   return findInventoryItem(d.sku, clientName, d.size||'', warehouseId);
 }
-function logMovement(sku, name, delta, type, client, size){
+function logMovement(sku, name, delta, type, client, size, warehouseId){
   const now = new Date();
   const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   movementLog.push({sku, name, delta, type, time, client, size});
   sb.from('movement_log').insert({sku, name, delta, type, client_name: client||null, size: size||null, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null})
     .then(({error})=>{ if(error) console.error(error); })
     .catch(e=>{ console.error(e); toast('Нет связи с базой — запись истории не сохранилась'); });
-  applyInventoryDelta(sku, client, size, undefined, delta);
+  applyInventoryDelta(sku, client, size, warehouseId, delta);
 }
 // Атомарно меняет остаток НА delta (может быть отрицательным) через серверную функцию —
 // не «прочитал-изменил-записал» из браузера (это теряет параллельные изменения от
