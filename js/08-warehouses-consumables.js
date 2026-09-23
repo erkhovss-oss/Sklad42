@@ -12,12 +12,12 @@ function renderWarehouses(){
   }
   wrap.innerHTML = `
     <div class="panel">
-      <table>
+      <table class="card-table">
         <thead><tr><th>Название</th><th></th></tr></thead>
         <tbody>
           ${warehouses.map(w=>`
             <tr>
-              <td>${escapeHtml(w.name)}${w.id==='MAIN'?' <span style="color:var(--ink-faint);font-size:12px">(основной, нельзя удалить)</span>':''}</td>
+              <td data-label="Склад">${escapeHtml(w.name)}${w.id==='MAIN'?' <span style="color:var(--ink-faint);font-size:12px">(основной, нельзя удалить)</span>':''}</td>
               <td style="text-align:right">
                 ${w.id!=='MAIN' ? `<button class="btn btn-ghost" style="padding:4px 10px;color:var(--warn)" onclick="deleteWarehouse('${w.id}')">Удалить</button>` : ''}
               </td>
