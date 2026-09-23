@@ -869,6 +869,9 @@ function renderSuppliesTableWrap(){
       if(pendingKizItem) kizInput.focus();
       kizInput.addEventListener('keydown', async (e)=>{
         if(e.key!=='Enter') return;
+        e.preventDefault();
+        // Та же защита от потери последнего символа при быстром сканировании.
+        await new Promise(r=>setTimeout(r, 0));
         const kizCode = kizInput.value.trim();
         kizInput.value='';
         if(!kizCode) return;
