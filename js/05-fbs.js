@@ -614,18 +614,25 @@ function wireWizardKizInput(order){
   kizInput.dataset.wired = '1';
   kizInput.addEventListener('keydown', (e2)=>{
     if(e2.key!=='Enter') return;
-    const kizCode = kizInput.value.trim();
-    kizInput.value='';
-    if(!kizCode) return;
-    if(kizCode===NEXT_ORDER_QR_CODE){ wizardNextOrder(); return; }
-    if(kizCode.length < MIN_KIZ_LENGTH){
-      playBeep('error');
-      toast(`Код слишком короткий (${kizCode.length} симв.) — отсканируйте ещё раз`);
-      return;
-    }
-    const dup = kizScans.find(k=>k.kizCode===kizCode);
-    if(dup){ playBeep('error'); toast(`Этот КИЗ уже был использован ранее (${dup.name})`); return; }
-    wizardAttachKiz(order, kizCode);
+    // Сканер иногда шлёт символы очень быстро — читаем значение поля не сразу,
+    // а после того как браузер точно успел записать последний символ (иначе
+    // изредка теряется самый последний символ кода, и проверка у WB не проходит).
+    setTimeout(()=>{
+      const kizCode = kizInput.value.trim();
+      kizInput.value='';
+      if(!kizCode) return;
+      if(kizCode===NEXT_ORDER_QR_CODE){ wizardNextOrder(); return; }
+      if(kizCode.length < MIN_KIZ_LENGTH){
+        playBeep('error');
+        toast(`Код слишком короткий (${kizCode.length} симв.) — отсканируйте ещё раз`);
+        return;
+      }
+      // Не подтверждённая/неудачная попытка не считается «использованием» кода —
+      // иначе повторный скан того же кода после сбоя навсегда блокируется как «дубль».
+      const dup = kizScans.find(k=>k.kizCode===kizCode);
+      if(dup){ playBeep('error'); toast(`Этот КИЗ уже был использован ранее (${dup.name})`); return; }
+      wizardAttachKiz(order, kizCode);
+    }, 0);
   });
 }
 function wizardAttachKiz(order, kizCode){
@@ -634,8 +641,10 @@ function wizardAttachKiz(order, kizCode){
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus;
-    kizScans.push({kizCode, supplyId: order.wbSupplyId || ('FBS-'+order.orderId), sku:order.article, name:order.name, size:order.size||'', clientName:order.clientName, time:new Date().toISOString()});
-    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id: order.wbSupplyId || ('FBS-'+order.orderId), sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
+    if(data.kizStatus !== 'verify_failed'){
+      kizScans.push({kizCode, supplyId: order.wbSupplyId || ('FBS-'+order.orderId), sku:order.article, name:order.name, size:order.size||'', clientName:order.clientName, time:new Date().toISOString()});
+      sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id: order.wbSupplyId || ('FBS-'+order.orderId), sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
+    }
     sb.from('wb_orders').update({kiz_code:kizCode, kiz_status:data.kizStatus, requires_kiz:true}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
     if(data.kizStatus==='attached'){
       playBeep('ok');
