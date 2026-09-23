@@ -232,17 +232,17 @@ function renderStocktakeDetail(c){
       <div style="border-top:1px solid var(--line);padding:16px 18px" onclick="event.stopPropagation()">
         <div class="eyebrow" style="margin-bottom:10px">Итог (уже применено к остаткам)</div>
         <div class="panel">
-          <table>
+          <table class="card-table">
             <thead><tr><th>Артикул</th><th>ШК</th><th>Клиент</th><th>Ячейка</th><th>Было по системе</th><th>Насчитано</th><th>Разница</th></tr></thead>
             <tbody>
               ${rows.map(r=>`<tr>
-                <td class="mono">${escapeHtml(r.sku)}${r.size?` (${r.size})`:''}</td>
-                <td class="mono">${r.barcode||'—'}</td>
-                <td>${escapeHtml(r.clientName)||'—'}</td>
-                <td>${r.cell||'—'}</td>
-                <td>${r.systemQty}</td>
-                <td>${r.countedQty}</td>
-                <td style="font-weight:700;color:${r.diff===0?'var(--ok)':'var(--warn)'}">${r.diff>0?'+':''}${r.diff}</td>
+                <td data-label="Артикул" class="mono">${escapeHtml(r.sku)}${r.size?` (${r.size})`:''}</td>
+                <td data-label="ШК" class="mono">${r.barcode||'—'}</td>
+                <td data-label="Клиент">${escapeHtml(r.clientName)||'—'}</td>
+                <td data-label="Ячейка">${r.cell||'—'}</td>
+                <td data-label="Было по системе">${r.systemQty}</td>
+                <td data-label="Насчитано">${r.countedQty}</td>
+                <td data-label="Разница" style="font-weight:700;color:${r.diff===0?'var(--ok)':'var(--warn)'}">${r.diff>0?'+':''}${r.diff}</td>
               </tr>`).join('')}
             </tbody>
           </table>
@@ -259,17 +259,17 @@ function renderStocktakeDetail(c){
         <div class="eyebrow" style="margin-bottom:10px">Сверка перед завершением</div>
         ${mismatches.length ? `<p style="font-size:12px;color:var(--warn);margin:0 0 10px 0">Расхождений: ${mismatches.length}. Совпадающие позиции ниже не показаны.</p>` : `<p style="font-size:12px;color:var(--ok);margin:0 0 10px 0">Расхождений нет — всё совпало.</p>`}
         <div class="panel" style="margin-bottom:14px">
-          <table>
+          <table class="card-table">
             <thead><tr><th>Артикул</th><th>ШК</th><th>Клиент</th><th>Ячейка</th><th>По системе</th><th>Насчитано</th><th>Разница</th></tr></thead>
             <tbody>
               ${mismatches.map(r=>`<tr>
-                <td class="mono">${escapeHtml(r.sku)}${r.size?` (${r.size})`:''}</td>
-                <td class="mono">${r.barcode||'—'}</td>
-                <td>${escapeHtml(r.clientName)||'—'}</td>
-                <td>${r.cell||'—'}</td>
-                <td>${r.systemQty}</td>
-                <td>${r.countedQty}${r.notScanned?' <span style="color:var(--ink-faint);font-size:11px">(не сканировали)</span>':''}</td>
-                <td style="font-weight:700;color:var(--warn)">${r.diff>0?'+':''}${r.diff}</td>
+                <td data-label="Артикул" class="mono">${escapeHtml(r.sku)}${r.size?` (${r.size})`:''}</td>
+                <td data-label="ШК" class="mono">${r.barcode||'—'}</td>
+                <td data-label="Клиент">${escapeHtml(r.clientName)||'—'}</td>
+                <td data-label="Ячейка">${r.cell||'—'}</td>
+                <td data-label="По системе">${r.systemQty}</td>
+                <td data-label="Насчитано">${r.countedQty}${r.notScanned?' <span style="color:var(--ink-faint);font-size:11px">(не сканировали)</span>':''}</td>
+                <td data-label="Разница" style="font-weight:700;color:var(--warn)">${r.diff>0?'+':''}${r.diff}</td>
               </tr>`).join('')}
             </tbody>
           </table>
