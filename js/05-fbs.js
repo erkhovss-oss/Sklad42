@@ -161,7 +161,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
     paginationHtml = `
       <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;margin-top:4px;flex-wrap:wrap">
         <span style="font-size:13px;color:var(--ink-soft)">Показано поставок ${totalGroups?from+1:0}–${to} из ${totalGroups}</span>
-        <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost" style="padding:5px 12px" onclick="goFbsCompletePage(-1)" ${page<=1?'disabled':''}>← Назад</button>
           <span style="font-size:13px;color:var(--ink-soft);white-space:nowrap">Стр. ${page} из ${totalPages}</span>
           <button class="btn btn-ghost" style="padding:5px 12px" onclick="goFbsCompletePage(1)" ${page>=totalPages?'disabled':''}>Вперёд →</button>
@@ -247,7 +247,7 @@ function renderFbsBody(){
       <div class="pick-row">
         <input type="checkbox" ${fbsSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsSelected(${o.orderId}, this.checked)">
         <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.orderCreatedAt?` <span style="color:${(Date.now()-new Date(o.orderCreatedAt))>24*60*60*1000?'var(--warn)':'var(--accent)'};font-weight:700;font-size:12px">· ${(Date.now()-new Date(o.orderCreatedAt))>24*60*60*1000?'⚠ ':''}${timeAgoRu(o.orderCreatedAt)}</span>`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}${o.wbWarehouseId ? renderFbsWarehouseBadge(o) : ' · <span style="color:var(--ink-faint)">склад не определён</span>'}</div></div>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-accent" style="padding:6px 12px" onclick="startAssembleOrder(${o.orderId})">Собрать</button>
           <button class="btn btn-ghost" style="padding:6px 12px" onclick="hideFbsOrder(${o.orderId})" title="Убрать только у нас, у WB заказ останется как есть">Скрыть</button>
           <button class="btn btn-ghost" style="padding:6px 12px;color:var(--warn)" onclick="cancelFbsOrder(${o.orderId})">Отменить</button>
@@ -517,7 +517,7 @@ function renderAssemblyModeStepContent(order, requiresKiz){
           <button class="btn btn-ghost" style="margin-bottom:14px" onclick="forceShowWizardKiz(${order.orderId})">+ Этому товару нужен КИЗ</button>
         `}
       </div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-accent" onclick="wizardNextOrder()">Следующий заказ →</button>
         <button class="btn btn-ghost" onclick="wizardSkipOrder()">Пропустить</button>
         <button class="btn btn-ghost" style="color:var(--warn)" onclick="markOrderOutOfStock(${order.orderId})">❌ Нет на складе</button>
@@ -882,12 +882,21 @@ function cancelFbsOrder(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
   if(!order) return;
   if(!confirm(`Отменить заказ №${orderId}?`)) return;
+  const wasConfirmed = order.supplierStatus === 'confirm';
   sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'cancel', orderId } }).then(({data, error})=>{
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    // Если заказ уже был собран (стало быть, остаток уже списался при сборке) и товар
+    // не был отмечен как «нет на складе» — значит, он реально стоит на полке, возвращаем.
+    // Если он был отмечен «нет на складе» — виртуальную единицу не возвращаем, её и так
+    // физически не было, восстановление тут создало бы фантомный остаток.
+    if(wasConfirmed && !order.outOfStock){
+      const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
+      if(inv) logMovement(inv.sku, inv.name, 1, `Возврат остатка — отмена собранного заказа FBS №${orderId}`, inv.client, inv.size);
+    }
     order.supplierStatus = 'cancel';
     fbsOrders = fbsOrders.filter(o=>o.orderId!==orderId);
     sb.from('wb_orders').update({supplier_status:'cancel'}).eq('order_id', orderId).then(()=>{});
-    toast(`Заказ №${orderId} отменён`);
+    toast(`Заказ №${orderId} отменён${(wasConfirmed && !order.outOfStock) ? ' — остаток возвращён на склад' : ''}`);
     renderFbsBody();
   });
 }
@@ -1140,6 +1149,7 @@ async function previewThermalInfoCard(){
       <div style="font-size:${ptPx(11)}px;font-weight:bold;margin-bottom:${mmPx(1.2)}px">1 шт.</div>
       <div style="font-size:${ptPx(8)}px;font-weight:bold;margin-bottom:${mmPx(1.2)}px;line-height:1.2">${nameHtml}</div>
       <table style="width:100%;font-size:${ptPx(6.5)}px;border-collapse:collapse;table-layout:fixed">
+        ${pi.cell?`<tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.4)}px ${mmPx(1.2)}px ${mmPx(0.4)}px 0">Ячейка</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.4)}px 0">${escapeHtml(String(pi.cell))}</td></tr>`:''}
         <tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.4)}px ${mmPx(1.2)}px ${mmPx(0.4)}px 0">Артикул</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.4)}px 0">${escapeHtml(o.article||'')}</td></tr>
         <tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.4)}px ${mmPx(1.2)}px ${mmPx(0.4)}px 0">ШК</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.4)}px 0">${o.barcode||'—'}</td></tr>
       </table>
@@ -1183,7 +1193,7 @@ async function printAllFbsStickersToThermalPrinter(){
     const key = o.clientId + '::' + (o.barcode || o.article || String(o.orderId));
     if(!groups[key]){
       const pi = findLocalProductInfo(o);
-      groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:o.barcode, color:pi.color, clientId:o.clientId, clientName:o.clientName, orders:[] };
+      groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:o.barcode, color:pi.color, cell:pi.cell, clientId:o.clientId, clientName:o.clientName, orders:[] };
     }
     groups[key].orders.push(o);
   });
@@ -1220,6 +1230,7 @@ async function printAllFbsStickersToThermalPrinter(){
         <div style="font-size:${ptPx(11)}px;font-weight:bold;margin-bottom:${mmPx(1.2)}px">${g.orders.length} шт.</div>
         <div style="font-size:${ptPx(8)}px;font-weight:bold;margin-bottom:${mmPx(1.2)}px;line-height:1.2">${nameHtml}</div>
         <table style="width:100%;font-size:${ptPx(6.5)}px;border-collapse:collapse;table-layout:fixed">
+          ${g.cell?`<tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.4)}px ${mmPx(1.2)}px ${mmPx(0.4)}px 0">Ячейка</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.4)}px 0">${escapeHtml(String(g.cell))}</td></tr>`:''}
           ${g.color?`<tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.4)}px ${mmPx(1.2)}px ${mmPx(0.4)}px 0">Цвет</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.4)}px 0">${escapeHtml(g.color)}</td></tr>`:''}
           ${g.size?`<tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.4)}px ${mmPx(1.2)}px ${mmPx(0.4)}px 0">Размер</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.4)}px 0">${escapeHtml(g.size)}</td></tr>`:''}
           <tr><td style="color:#666;white-space:nowrap;width:32%;padding:${mmPx(0.4)}px ${mmPx(1.2)}px ${mmPx(0.4)}px 0">Артикул</td><td style="font-weight:bold;word-break:break-all;padding:${mmPx(0.4)}px 0">${escapeHtml(g.article||'')}</td></tr>
@@ -1252,7 +1263,7 @@ function printAllFbsStickers(){
     const key = o.clientId + '::' + (o.barcode || o.article || String(o.orderId));
     if(!groups[key]){
       const pi = findLocalProductInfo(o);
-      groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:o.barcode, color:pi.color, clientId:o.clientId, clientName:o.clientName, orders:[] };
+      groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:o.barcode, color:pi.color, cell:pi.cell, clientId:o.clientId, clientName:o.clientName, orders:[] };
     }
     groups[key].orders.push(o);
   });
@@ -1307,6 +1318,7 @@ function printAllFbsStickers(){
               <div class="qty">${g.orders.length} шт.</div>
               <div class="name">${escapeHtml(g.name||g.article)}</div>
               <table>
+                ${g.cell?`<tr><td class="label-cell">Ячейка</td><td class="value-cell">${escapeHtml(String(g.cell))}</td></tr>`:''}
                 ${g.color?`<tr><td class="label-cell">Цвет</td><td class="value-cell">${escapeHtml(g.color)}</td></tr>`:''}
                 ${g.size?`<tr><td class="label-cell">Размер</td><td class="value-cell">${escapeHtml(g.size)}</td></tr>`:''}
                 <tr><td class="label-cell">Артикул</td><td class="value-cell">${escapeHtml(g.article||'')}</td></tr>
@@ -1843,9 +1855,17 @@ async function syncOzonStatuses(){
 function shipOzonOrder(postingNumber){
   const order = ozonOrders.find(o=>o.postingNumber===postingNumber);
   if(!order) return;
+  const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
+  const needQty = order.qty || 1;
+  const available = inv ? (inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty) : 0;
+  if(!inv || available < needQty){
+    toast(`Недостаточно на складе «${order.name||order.article}» — нужно ${needQty} шт, есть ${available}`);
+    return;
+  }
   toast('Подтверждаю сборку…');
   sb.functions.invoke('ozon-orders-ts', { body: { clientId: order.clientId, action:'ship', postingNumber } }).then(({data, error})=>{
     if(error || (data && data.error)){ toast('Ozon: ' + (data?.error || error.message)); return; }
+    deductStockForShipment(inv, needQty, `Отгрузка Ozon, отправление ${postingNumber}`);
     order.status = 'awaiting_deliver';
     if(data.warning) toast('Собрано, но есть предупреждение: ' + data.warning);
     else toast('Отправление собрано и подтверждено');
@@ -1867,6 +1887,7 @@ function getOzonSticker(postingNumber){
 function cancelOzonOrder(postingNumber){
   const order = ozonOrders.find(o=>o.postingNumber===postingNumber);
   if(!order) return;
+  const wasShipped = order.status !== 'awaiting_packaging';
   sb.functions.invoke('ozon-orders-ts', { body: { clientId: order.clientId, action:'cancel_reasons', postingNumber } }).then(({data, error})=>{
     if(error || (data && data.error)){ toast('Ozon: ' + (data?.error || error.message)); return; }
     const reasons = data.reasons || [];
@@ -1876,8 +1897,12 @@ function cancelOzonOrder(postingNumber){
     if(!chosen) return;
     sb.functions.invoke('ozon-orders-ts', { body: { clientId: order.clientId, action:'cancel', postingNumber, cancelReasonId: chosen } }).then(({data, error})=>{
       if(error || (data && data.error)){ toast('Ozon: ' + (data?.error || error.message)); return; }
+      if(wasShipped && !order.outOfStock){
+        const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
+        if(inv) logMovement(inv.sku, inv.name, order.qty||1, `Возврат остатка — отмена отправления Ozon ${postingNumber}`, inv.client, inv.size);
+      }
       order.status = 'cancelled';
-      toast('Отправление отменено');
+      toast('Отправление отменено' + (wasShipped && !order.outOfStock ? ' — остаток возвращён на склад' : ''));
       renderOzonBody();
     });
   });
@@ -1925,7 +1950,7 @@ function renderOzonBody(){
     paginationHtml = `
       <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;margin-top:10px;flex-wrap:wrap">
         <span style="font-size:13px;color:var(--ink-soft)">Показано ${totalItems?from+1:0}–${to} из ${totalItems}</span>
-        <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost" style="padding:5px 12px" onclick="goOzonDonePage(-1)" ${ozonDonePage<=1?'disabled':''}>← Назад</button>
           <span style="font-size:13px;color:var(--ink-soft);white-space:nowrap">Стр. ${ozonDonePage} из ${totalPages}</span>
           <button class="btn btn-ghost" style="padding:5px 12px" onclick="goOzonDonePage(1)" ${ozonDonePage>=totalPages?'disabled':''}>Вперёд →</button>
