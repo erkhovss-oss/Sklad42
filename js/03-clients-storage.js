@@ -331,6 +331,17 @@ async function pushStocksToWb(clientId){
     toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
   }
 }
+async function pushStocksToOzon(clientId){
+  toast('Отправляем остатки на Ozon…');
+  try{
+    const { data, error } = await sb.functions.invoke('ozon-orders-ts', { body: { clientId, action: 'push_stocks' } });
+    if(error){ toast('Ozon: ' + await extractFnErrorMessage(error)); return; }
+    if(data && data.error){ toast('Ozon: ' + data.error); return; }
+    toast(`Отправлено на Ozon: ${data.sent} поз.${data.failed ? `, не обновилось: ${data.failed}` : ''}`);
+  }catch(e){
+    toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
+  }
+}
 async function loadWbProducts(clientId){
   const client = clients.find(c=>c.id===clientId);
   toast('Запрашиваем карточки товаров у Wildberries…');
@@ -533,7 +544,7 @@ function renderClientDetail(body){
         <button class="btn btn-primary" onclick="saveTariff('${c.id}')">Сохранить цену</button>
       </div>
       ${withoutDims ? `<p style="font-size:12px;color:var(--warn);margin-top:12px">⚠ У ${withoutDims} товарных позиций не указаны габариты — они не учтены в объёме выше</p>` : ''}
-      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:baseline;gap:8px">
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
         <span style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700">${(liters*c.pricePerLiter).toFixed(2)} ₽</span>
         <span style="font-size:12px;color:var(--ink-soft)">в сутки, при текущем объёме</span>
       </div>
@@ -677,6 +688,7 @@ function renderClientDetail(body){
           </div>
           <p style="font-size:11px;color:var(--ink-faint);margin-top:4px">Без выбранного склада будут подгружаться заказы со всех складов продавца — это и есть причина лишних заказов, если склад не указан.</p>
         ` : ''}
+        ${c.ozonWarehouseId ? `<button class="btn btn-accent" style="margin-top:12px" onclick="pushStocksToOzon('${c.id}')">🔄 Отправить остатки на Ozon сейчас</button>` : ''}
       ` : ''}
     </div>
 
