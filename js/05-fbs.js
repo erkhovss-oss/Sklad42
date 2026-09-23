@@ -647,6 +647,10 @@ function wizardAttachKiz(order, kizCode){
         toast('Товар «' + invItem.name + '» теперь отмечен как требующий КИЗ в Остатках — в следующий раз определится сам');
       }
     }
+    else if(data.kizStatus==='pending'){
+      playBeep('ok');
+      toast('⏳ КИЗ отправлен, WB ещё проверяет — можно продолжать сборку, статус обновится сам');
+    }
     else { playBeep('warn'); toast('⚠ WB не подтвердил КИЗ — ' + (data.warning||'проверьте вручную')); }
     const statusDiv = document.getElementById('wizardKizStatus');
     if(statusDiv) statusDiv.innerHTML = renderKizStatusLabel(order);
@@ -654,7 +658,7 @@ function wizardAttachKiz(order, kizCode){
 }
 function wizardNextOrder(){
   const order = assemblyModeQueue[assemblyModeIndex];
-  if(order && order.requiresKiz && order.kizStatus!=='attached'){
+  if(order && order.requiresKiz && order.kizStatus!=='attached' && order.kizStatus!=='pending'){
     if(!confirm('КИЗ ещё не подтверждён для этого заказа — всё равно перейти дальше?')) return;
   }
   assemblyModeIndex++;
@@ -772,6 +776,7 @@ function hideOrdersFromOtherWarehouse(clientId){
 function renderKizStatusLabel(o){
   if(!o.requiresKiz && !o.kizCode) return '';
   if(o.kizStatus==='attached') return ' · <span style="color:var(--ok);font-weight:700">✅ КИЗ подтверждён WB</span>';
+  if(o.kizStatus==='pending') return ' · <span style="color:var(--ink-soft)">⏳ WB проверяет маркировку…</span>';
   if(o.kizStatus==='verify_failed') return ' · <span style="color:var(--warn);font-weight:700">⚠ WB не подтвердил КИЗ</span>';
   if(o.kizCode) return ' · КИЗ отправлен, статус не проверен';
   return o.requiresKiz ? ' · <span style="color:var(--warn)">КИЗ не прикреплён ⚠</span>' : '';
@@ -872,6 +877,7 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
       });
     }
     if(data.kizStatus === 'attached') toast(`Заказ №${order.orderId}: КИЗ прикреплён и подтверждён у WB ✅`);
+    else if(data.kizStatus === 'pending') toast(`Заказ №${order.orderId}: КИЗ отправлен, WB ещё проверяет — можно продолжать ⏳`);
     else if(data.kizStatus === 'verify_failed') toast(`Заказ №${order.orderId}: собран, но КИЗ WB не подтвердил — ${data.warning||'проверьте вручную'} ⚠`);
     if(skipViewSwitch) renderFbsBody();
     else if(fbsView!=='confirm') setFbsView('confirm');
