@@ -241,9 +241,16 @@ function forceEnglishInput(input){
   if(!input || input.dataset.forceEnDone) return;
   input.dataset.forceEnDone = '1';
   input.addEventListener('keydown', function(e){
-    if(e.ctrlKey || e.metaKey || e.altKey) return;
+    if(e.ctrlKey || e.metaKey) return;
     if(e.key==='Enter' || e.key==='Backspace' || e.key==='Delete' || e.key==='Tab' ||
        e.key==='ArrowLeft' || e.key==='ArrowRight' || e.key==='Home' || e.key==='End') return;
+    // Alt+код на цифровой клавиатуре — так сканер теперь вводит невидимый
+    // разделитель (GS) внутри кода КИЗ. Тут не вмешиваемся, чтобы сработал
+    // штатный механизм Windows. Но если Alt «залипнет» дольше нужного и под
+    // него попадёт обычная буква — эту букву всё равно принудительно переводим
+    // в английскую раскладку, а не пропускаем как есть (иначе именно так код
+    // превращается в кириллицу и не проходит проверку у WB).
+    if(e.altKey && e.code && e.code.startsWith('Numpad')) return;
     const mapped = US_LAYOUT_MAP[e.code];
     if(mapped){
       e.preventDefault();
