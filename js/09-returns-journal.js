@@ -109,7 +109,7 @@ function renderReturnForm(){
         </select>
         <input class="search" id="returnOrderId" placeholder="№ заказа WB (необязательно)" style="width:200px">
       </div>
-      <div style="display:flex;gap:10px;margin-top:12px">
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
         <button class="btn btn-accent" onclick="submitReturn('restock')">↩ Вернуть на склад</button>
         <button class="btn btn-ghost" style="color:var(--warn)" onclick="submitReturn('defect')">🗑 Списать в брак</button>
       </div>
