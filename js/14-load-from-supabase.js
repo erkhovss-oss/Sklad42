@@ -22,7 +22,7 @@ async function loadEmployees(){
 async function loadInventory(){
   const { data, error } = await sb.from('inventory').select('*').order('sku').limit(50000);
   if(error){ console.error(error); return; }
-  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', warehouseId:i.warehouse_id||'MAIN', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null, requiresKiz:i.requires_kiz||false, color:i.color||'', isKit:i.is_kit||false, kitMode:i.kit_mode||null}));
+  inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', warehouseId:i.warehouse_id||'MAIN', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null, requiresKiz:i.requires_kiz||false, color:i.color||'', isKit:i.is_kit||false, kitMode:i.kit_mode||null, wbAllocatedQty:i.wb_allocated_qty||0, ozonAllocatedQty:i.ozon_allocated_qty||0, safetyBuffer:i.safety_buffer||0}));
 }
 async function loadInventoryBarcodes(){
   const { data, error } = await sb.from('inventory_barcodes').select('*').limit(50000);
@@ -85,7 +85,8 @@ async function loadClients(){
     wbWarehouseId:c.wb_warehouse_id||'', wbAutoSync: c.wb_auto_sync!==false, wbProducts:[], storageLiters:c.storage_liters||0, pricePerLiter:c.price_per_liter||0, receivingPricePerUnit:c.receiving_price_per_unit||0,
     inn:c.inn||'', kpp:c.kpp||'', legalAddress:c.legal_address||'', bankDetails:c.bank_details||'', directorName:c.director_name||'',
     portalToken:c.portal_token||'',
-    ozonClientId:c.ozon_client_id||'', ozonKey:c.ozon_key||'', ozonConnected:c.ozon_connected||false, ozonWarehouseId:c.ozon_warehouse_id||'', ozonAutoSync: c.ozon_auto_sync!==false
+    ozonClientId:c.ozon_client_id||'', ozonKey:c.ozon_key||'', ozonConnected:c.ozon_connected||false, ozonWarehouseId:c.ozon_warehouse_id||'', ozonAutoSync: c.ozon_auto_sync!==false,
+    stockAllocationMode: c.stock_allocation_mode || 'shared'
   }));
 }
 async function loadStorageHistory(){
@@ -134,4 +135,3 @@ async function loadKizScans(){
   if(error){ console.error(error); return; }
   kizScans = data.map(k=>({kizCode:k.kiz_code, supplyId:k.supply_id, sku:k.sku, name:k.name, size:k.size||'', clientName:k.client_name, time:k.created_at, employeeName:k.employee_name||''}));
 }
-

@@ -204,7 +204,7 @@ function renderEmployeesTab(){
         </div>
         <div style="display:flex;gap:18px;flex-wrap:wrap">
           ${permLabels.map(([key,label])=>`
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;flex-wrap:wrap">
               <input type="checkbox" ${r.permissions[key]?'checked':''} onchange="togglePermission('${r.id}','${key}')">
               ${label}
             </label>
@@ -295,4 +295,3 @@ function renderEmployeesTab(){
 
   body.innerHTML = formHtml + listHtml;
 }
-

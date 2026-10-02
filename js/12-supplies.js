@@ -660,7 +660,7 @@ function renderSupplyReceivingPanel(s){
           const over = it.receivedQty > it.qty;
           return `<div class="pick-row ${done?'done':''}" ${over?'style="background:var(--warn-bg)"':''}>
             <div><div class="sku-name">${it.name}${it.size?` · размер ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:' · без штрихкода'}</div></div>
-            <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+            <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap">
               <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',-1,'${it.size||''}')">−</button>
               <div class="qty-need" style="min-width:56px;text-align:center;${over?'color:var(--warn);font-weight:700':''}">${it.receivedQty}/${it.qty}</div>
               <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',1,'${it.size||''}')">+</button>
@@ -693,7 +693,7 @@ function renderSupplyReceivingPanel(s){
       </div>
       ` : ''}
 
-      <div style="display:flex;gap:10px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="undoLastScan()" ${!scanHistory.length?'disabled':''}>↩ Отменить скан${scanHistory.length>1?` (${scanHistory.length})`:''}</button>
         <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="finishSupplyReceiving('${s.id}')">Завершить приёмку</button>
       </div>
@@ -759,7 +759,7 @@ function renderSuppliesCreatePanel(){
         </label>
         <button class="btn ${canCreate?'btn-accent':'btn-ghost'}" ${canCreate?'':'disabled'} onclick="createSupply()">Создать поставку</button>
       </div>
-      <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--ink-soft);cursor:pointer">
+      <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--ink-soft);cursor:pointer;flex-wrap:wrap">
         <input type="checkbox" id="draftSupplyRequiresKiz">
         Требует приёмку по КИЗ (Честный Знак) — при сканировании штрихкода дополнительно попросит код каждой единицы
       </label>
@@ -942,7 +942,7 @@ function renderKizScansList(supplyId, limit){
   const shown = limit ? rows.slice(0, limit) : rows;
   if(!shown.length) return `<p style="font-size:12px;color:var(--ink-faint);margin:8px 0">КИЗ ещё не отсканированы</p>`;
   return shown.map(r=>`
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
       <div style="flex:1;min-width:0">
         <div class="sku-name" style="font-size:12px">${escapeHtml(r.name)}</div>
         <div class="sku-code mono" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(r.kizCode)}">${escapeHtml(r.kizCode)}</div>
@@ -1006,6 +1006,8 @@ document.addEventListener('click', function(e){
   else if(act==='confirmDelete') confirmDelete(key);
   else if(act==='addExtraBarcode') addExtraBarcode(key);
   else if(act==='removeExtraBarcode') removeExtraBarcode(key, btn.dataset.barcode);
+  else if(act==='openAllocate') openAllocate(key);
+  else if(act==='saveAllocate') saveAllocate(key);
 });
 function downloadFbsKizExcel(wbSupplyId, clientName){
   const rows = kizScans.filter(k=>k.supplyId===wbSupplyId);
@@ -1041,5 +1043,3 @@ function downloadKizExcel(supplyId){
   XLSX.writeFile(wb, `KIZ_${supplyId}.xlsx`);
 }
 document.getElementById('supplySearch').addEventListener('input', renderSuppliesTableWrap);
-
-

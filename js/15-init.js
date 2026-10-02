@@ -213,7 +213,7 @@ function renderPortalKizList(){
     return `
     <div class="panel" style="padding:0;margin-bottom:10px;overflow:hidden">
       <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;cursor:pointer" onclick="togglePortalKizGroup('${escapeHtml(g.supply_id)}')">
-        <div style="display:flex;align-items:center;gap:12px">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <span style="font-size:12px;color:var(--ink-faint)">${expanded?'▼':'▶'}</span>
           <div>
             <div style="font-weight:600;font-size:14px">Поставка ${escapeHtml(g.supply_id)}</div>
@@ -224,7 +224,7 @@ function renderPortalKizList(){
       </div>
       ${expanded ? `
         <div style="padding:0 20px 16px 20px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-soft);line-height:1.8">
-          ${g.items.map(it=>`<div style="display:flex;justify-content:space-between;gap:10px">
+          ${g.items.map(it=>`<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
             <span>${escapeHtml(it.name||it.sku)}${it.size?' ('+escapeHtml(it.size)+')':''}</span>
             <span class="mono">${escapeHtml(it.kizCode)}</span>
           </div>`).join('')}
@@ -299,7 +299,7 @@ function renderPortalSuppliesList(){
             ${s.items.map(it=>{
               const fact = it.receivedQty||0;
               const mismatch = !inProgress && fact !== it.qty;
-              return `<div style="display:flex;justify-content:space-between;gap:10px">
+              return `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
                 <span>${escapeHtml(it.name||it.sku)}${it.size?' ('+escapeHtml(it.size)+')':''}</span>
                 <span class="mono" style="${mismatch?'color:var(--warn);font-weight:600':(inProgress?'color:var(--ink-faint)':'color:var(--ok);font-weight:600')}">${inProgress ? it.qty : `${fact}/${it.qty}`} шт</span>
               </div>`;
