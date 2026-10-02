@@ -306,7 +306,7 @@ function renderDdsTable(){
   const allSelected = ddsSelected.length>0 && visibleIds.every(id=>ddsSelected.includes(id));
   wrap.innerHTML = `
     ${ddsSelected.length ? `
-      <div class="panel" style="padding:10px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;background:var(--warn-bg)">
+      <div class="panel" style="padding:10px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;background:var(--warn-bg);flex-wrap:wrap">
         <span style="font-size:13px;font-weight:600">Выбрано: ${ddsSelected.length}</span>
         <button class="btn btn-ghost" style="color:var(--warn)" onclick="deleteSelectedDdsEntries()">Удалить выбранные</button>
         <button class="btn btn-ghost" onclick="clearDdsSelection()">Снять выделение</button>
@@ -369,4 +369,3 @@ function deleteSelectedDdsEntries(){
 document.getElementById('ddsType').addEventListener('change', updateDdsCategoryOptions);
 document.getElementById('ddsSearch').addEventListener('input', renderDdsTable);
 document.getElementById('ddsFilterType').addEventListener('change', renderDdsTable);
-
