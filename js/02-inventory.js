@@ -124,6 +124,8 @@ function renderInventory(){
   if(invPage < 1) invPage = 1;
   const pageRows = rows.slice((invPage-1)*invPageSize, invPage*invPageSize);
 
+  const splitModeClients = new Set(clients.filter(c=>c.stockAllocationMode==='split').map(c=>c.name));
+
   body.innerHTML = pageRows.map(i => {
     const key = itemKey(i);
     if(!readOnly && editingSku === key){
@@ -146,23 +148,23 @@ function renderInventory(){
                 ${warehouses.map(w=>`<option value="${w.id}" ${(i.warehouseId||'MAIN')===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')}
               </select>
             </div>
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);cursor:pointer;align-self:flex-end;padding-bottom:8px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);cursor:pointer;align-self:flex-end;padding-bottom:8px;flex-wrap:wrap">
               <input type="checkbox" id="editRequiresKiz-${escapeHtml(key)}" ${i.requiresKiz?'checked':''}>
               Требует КИЗ (Честный Знак)
             </label>
             <a href="https://xn--80ajghhoc2aj1c8b.xn--p1ai/business/projects/" target="_blank" rel="noopener" style="font-size:11px;color:var(--accent);align-self:flex-end;padding-bottom:10px;white-space:nowrap">проверить категорию →</a>
           </div>
           <div style="margin-bottom:8px">
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);cursor:pointer">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);cursor:pointer;flex-wrap:wrap">
               <input type="checkbox" id="editIsKit-${escapeHtml(key)}" ${i.isKit?'checked':''} onchange="toggleKitEditor('${escapeHtml(key)}')">
               🧩 Это набор/комплект
             </label>
             <div id="kitEditor-${escapeHtml(key)}" style="display:${i.isKit?'block':'none'};margin-top:8px;padding:12px;background:var(--bg);border-radius:8px">
               <div style="display:flex;gap:16px;margin-bottom:10px;flex-wrap:wrap">
-                <label style="display:flex;align-items:center;gap:4px;font-size:12px">
+                <label style="display:flex;align-items:center;gap:4px;font-size:12px;flex-wrap:wrap">
                   <input type="radio" name="kitMode-${escapeHtml(key)}" value="virtual" ${i.kitMode!=='assembled'?'checked':''}> Виртуальный (считать по составляющим)
                 </label>
-                <label style="display:flex;align-items:center;gap:4px;font-size:12px">
+                <label style="display:flex;align-items:center;gap:4px;font-size:12px;flex-wrap:wrap">
                   <input type="radio" name="kitMode-${escapeHtml(key)}" value="assembled" ${i.kitMode==='assembled'?'checked':''}> Собран заранее (свой остаток)
                 </label>
               </div>
@@ -170,7 +172,7 @@ function renderInventory(){
               <div id="kitComponentsList-${escapeHtml(key)}" style="margin-bottom:8px">
                 ${getKitComponents(i).map(c=>{
                   const compItem = findInventoryItem(c.componentSku, i.client, c.componentSize, i.warehouseId);
-                  return `<div class="kit-component-row" data-sku="${escapeHtml(c.componentSku)}" data-size="${escapeHtml(c.componentSize||'')}" style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+                  return `<div class="kit-component-row" data-sku="${escapeHtml(c.componentSku)}" data-size="${escapeHtml(c.componentSize||'')}" style="display:flex;gap:8px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
                     <span style="flex:1;font-size:12px">${escapeHtml(compItem?compItem.name:c.componentSku)}${c.componentSize?` (${c.componentSize})`:''}</span>
                     <input class="search mono kit-comp-qty" type="number" min="0.01" step="0.01" value="${c.qtyNeeded}" style="width:70px">
                     <span style="font-size:11px;color:var(--ink-faint)">шт/набор</span>
@@ -209,7 +211,7 @@ function renderInventory(){
             <input class="search mono" style="width:150px" id="newExtraBarcode-${escapeHtml(key)}" placeholder="ещё один ШК" autocomplete="off">
             <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="addExtraBarcode" data-key="${escapeHtml(key)}">+ Добавить</button>
           </div>
-          <div style="display:flex;justify-content:flex-start;gap:8px;padding-top:8px;border-top:1px solid var(--line)">
+          <div style="display:flex;justify-content:flex-start;gap:8px;padding-top:8px;border-top:1px solid var(--line);flex-wrap:wrap">
             <button class="btn btn-primary inv-act" style="padding:6px 14px" data-act="saveEdit" data-key="${escapeHtml(key)}">Сохранить</button>
             <button class="btn btn-ghost" style="padding:6px 14px" onclick="cancelEdit()">Отмена</button>
           </div>
@@ -240,6 +242,26 @@ function renderInventory(){
         </td>
       </tr>`;
     }
+    if(!readOnly && allocatingSku === key){
+      return `<tr>
+        <td class="mono">${i.sku}</td>
+        <td colspan="5">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <span style="font-size:13px;color:var(--ink-soft)">Всего физически: ${i.qty} шт ·</span>
+            <span style="font-size:12px">WB:</span>
+            <input class="search mono" type="number" min="0" value="${i.wbAllocatedQty||0}" id="allocWb-${escapeHtml(key)}" style="width:70px;padding:6px 10px">
+            <span style="font-size:12px">Ozon:</span>
+            <input class="search mono" type="number" min="0" value="${i.ozonAllocatedQty||0}" id="allocOzon-${escapeHtml(key)}" style="width:70px;padding:6px 10px">
+            <span style="font-size:12px">Резерв (не показывать нигде):</span>
+            <input class="search mono" type="number" min="0" value="${i.safetyBuffer||0}" id="allocBuffer-${escapeHtml(key)}" style="width:70px;padding:6px 10px">
+          </div>
+        </td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn btn-accent inv-act" style="padding:5px 10px" data-act="saveAllocate" data-key="${escapeHtml(key)}">Сохранить</button>
+          <button class="btn btn-ghost" style="padding:5px 10px" onclick="cancelAllocate()">Отмена</button>
+        </td>
+      </tr>`;
+    }
     if(!readOnly && deletingSku === key){
       return `<tr>
         <td class="mono">${i.sku}</td>
@@ -265,7 +287,12 @@ function renderInventory(){
         i.isKit && i.kitMode!=='assembled'
           ? (()=>{ const av=computeKitAvailability(i); return `${av.available} шт <span style="font-size:10px;color:var(--accent)">🧩 виртуальный</span>${av.bottleneck?`<div style="color:var(--ink-faint);font-size:10px">лимит: ${escapeHtml(av.bottleneck.name)} (${av.bottleneck.have} шт)</div>`:''}`; })()
           : `${i.qty} шт${i.isKit?' <span style="font-size:10px;color:var(--accent)">🧩 собран</span>':''}${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}`
-      }</td>
+      }${splitModeClients.has(i.client) ? `
+        <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">
+          WB: ${i.wbAllocatedQty||0} · Ozon: ${i.ozonAllocatedQty||0}${(i.wbAllocatedQty||0)+(i.ozonAllocatedQty||0)<i.qty ? ` · в запасе: ${i.qty-(i.wbAllocatedQty||0)-(i.ozonAllocatedQty||0)}` : ''}${i.safetyBuffer?` · резерв: ${i.safetyBuffer}`:''}
+          ${!readOnly ? `<span class="inv-act" style="cursor:pointer;color:var(--accent)" data-act="openAllocate" data-key="${escapeHtml(key)}"> · распределить</span>` : ''}
+        </div>
+      ` : ''}</td>
       <td style="text-align:right;white-space:nowrap">
         ${readOnly ? `
         <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="openHistory" data-key="${escapeHtml(key)}">История</button>
@@ -404,6 +431,34 @@ async function saveEdit(key){
   if(cl) recordStorageSnapshot(cl);
 }
 function openWriteOff(key){ writeOffSku = key; editingSku = null; deletingSku = null; historySku = null; renderInventory(); }
+function openAllocate(key){ allocatingSku = key; editingSku=null; writeOffSku=null; deletingSku=null; renderInventory(); }
+function cancelAllocate(){ allocatingSku = null; renderInventory(); }
+function saveAllocate(key){
+  const {sku, client, size} = parseItemKey(key);
+  const item = findInventoryItem(sku, client, size);
+  if(!item) return;
+  const wb = Math.max(0, parseInt(document.getElementById('allocWb-'+key).value) || 0);
+  const ozon = Math.max(0, parseInt(document.getElementById('allocOzon-'+key).value) || 0);
+  const buffer = Math.max(0, parseInt(document.getElementById('allocBuffer-'+key).value) || 0);
+  if(wb + ozon > item.qty){
+    toast(`Сумма WB + Ozon (${wb+ozon}) больше, чем есть физически (${item.qty}) — поправьте числа`);
+    return;
+  }
+  item.wbAllocatedQty = wb;
+  item.ozonAllocatedQty = ozon;
+  item.safetyBuffer = buffer;
+  allocatingSku = null;
+  renderInventory();
+  sb.from('inventory').update({wb_allocated_qty: wb, ozon_allocated_qty: ozon, safety_buffer: buffer})
+    .eq('sku', item.sku).eq('client_name', item.client||'').eq('size', item.size||'').eq('warehouse_id', item.warehouseId||'MAIN')
+    .then(({error})=>{
+      if(error){ console.error(error); toast('Не удалось сохранить в базе'); return; }
+      toast('Распределение сохранено');
+      const cl = clients.find(c=>c.name===item.client);
+      scheduleWbAutoSync(item.client);
+      if(cl && cl.ozonConnected && cl.ozonAutoSync) pushStocksToOzon(cl.id);
+    });
+}
 function cancelWriteOff(){ writeOffSku = null; renderInventory(); }
 function confirmWriteOff(key){
   const {sku, client, size} = parseItemKey(key);
@@ -570,7 +625,7 @@ function renderReceiving(mode){
     <div class="assembly-layout">
       <div class="scan-box">
         <div class="eyebrow">Режим приёмки</div>
-        <div style="display:flex;gap:8px;margin-top:8px">
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
           <button class="btn ${currentReceivingMode==='scan'?'btn-accent':'btn-ghost'}" style="flex:1;justify-content:center;${currentReceivingMode!=='scan'?'color:#fff;border-color:#3A362D':''}" onclick="renderReceiving('scan')">Сканером</button>
           <button class="btn ${currentReceivingMode==='manual'?'btn-accent':'btn-ghost'}" style="flex:1;justify-content:center;${currentReceivingMode!=='manual'?'color:#fff;border-color:#3A362D':''}" onclick="renderReceiving('manual')">Вручную</button>
           <button class="btn btn-ghost sound-toggle" style="color:#fff;border-color:#3A362D;white-space:nowrap" onclick="toggleSound()">${soundEnabled?'🔊 Звук':'🔇 Звук'}</button>
@@ -704,4 +759,3 @@ function logReceipt(sku, name, qty, client, size){
     }
   }
 }
-
