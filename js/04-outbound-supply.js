@@ -34,7 +34,7 @@ function renderOutboundCreatePanel(){
         </div>
       </div>
 
-      <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;color:var(--ink-soft);cursor:pointer">
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;color:var(--ink-soft);cursor:pointer;flex-wrap:wrap">
         <input type="checkbox" id="outboundIsInternalTransfer" ${draftOutboundIsInternalTransfer?'checked':''} onchange="toggleOutboundInternalTransfer(this.checked)">
         Это перемещение на наш склад в другом регионе (не клиенту/не на маркетплейс)
       </label>
@@ -585,4 +585,3 @@ function printPickList(id){
   win.document.close();
 }
 document.getElementById('outboundSearch').addEventListener('input', renderOutboundTableWrap);
-
