@@ -33,6 +33,7 @@ let clientViewMode = null;
 let receivingLog = []; // загружается из базы (loadReceivingLog)
 let currentReceivingMode = 'scan';
 let editingSku = null;
+let allocatingSku = null;
 let writeOffSku = null;
 let writeOffLog = []; // загружается из базы (loadWriteOffLog)
 let historySku = null;
@@ -490,4 +491,3 @@ function closeMobileSidebar(){
   document.getElementById('sidebarEl').classList.remove('open');
   document.getElementById('sidebarOverlay').classList.remove('open');
 }
-
