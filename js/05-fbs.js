@@ -192,7 +192,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
               <div class="pick-row">
                 ${!isDelivered ? `<input type="checkbox" ${fbsCloseSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsCloseSelected(${o.orderId}, this.checked)">` : ''}
                 <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.orderCreatedAt?` · ${timeAgoRu(o.orderCreatedAt)}`:''}${isDelivered?'':renderKizStatusLabel(o)}</div></div>
-                <div style="display:flex;gap:6px;align-items:center">
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                   ${!isDelivered && clientId ? renderTrbxAssignControl(o) : ''}
                   ${isDelivered ? `<span class="status shipped">В доставке</span>` : ''}
                   <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
@@ -234,7 +234,7 @@ function renderFbsBody(){
     }).length : 0;
     body.innerHTML = `
       <div class="panel" style="padding:10px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;flex-wrap:wrap">
           <input type="checkbox" ${allSelected?'checked':''} onchange="toggleAllFbsSelected(this.checked)"> Выбрать все
         </label>
         ${fbsSelectedOrders.length ? `
@@ -265,7 +265,7 @@ function renderFbsBody(){
       <div class="panel" style="padding:14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length}. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
-          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;white-space:nowrap">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;white-space:nowrap;flex-wrap:wrap">
             <input type="checkbox" ${allSelected?'checked':''} onchange="toggleAllFbsCloseSelected(this.checked, ${JSON.stringify(visibleIds)})"> Выбрать все
           </label>
           ${fbsCloseSelectedOrders.length ? `<span style="font-size:12px;font-weight:600">Выбрано: ${fbsCloseSelectedOrders.length} из ${rows.length}</span>` : ''}
@@ -291,7 +291,7 @@ function renderFbsBody(){
               <span>«${escapeHtml(o.name||o.article)}» · заказ №${o.orderId}</span>
               ${o.movedToHolding
                 ? `<span style="color:var(--ok);font-weight:600;font-size:12px">✅ Перенесён в отдельную поставку</span>`
-                : `<div style="display:flex;gap:6px">
+                : `<div style="display:flex;gap:6px;flex-wrap:wrap">
                     <button class="btn btn-ghost" style="padding:3px 10px;font-size:12px" onclick="moveFbsOrderToHolding(${o.orderId})">📦 В отдельную поставку</button>
                     <button class="btn btn-ghost" style="padding:3px 10px;font-size:12px" onclick="cancelFbsOrder(${o.orderId})">Отменить у WB</button>
                   </div>`
@@ -726,7 +726,7 @@ function renderAssembleOrderForm(order, requiresKiz){
   body.innerHTML = `
     <div class="panel" style="padding:20px">
       <div class="eyebrow" style="margin-bottom:10px">Отправка на сборку — заказ №${order.orderId}</div>
-      <div style="display:flex;gap:14px;align-items:center;margin-bottom:16px">
+      <div style="display:flex;gap:14px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
         <div><div class="sku-name" style="font-size:16px">${order.name||order.article}${order.size?` · ${order.size}`:''}</div><div class="sku-code mono">${order.article} · ШК ${order.barcode||'—'}</div></div>
       </div>
       <div class="eyebrow" style="margin-bottom:6px">Штрихкод товара</div>
@@ -1481,7 +1481,7 @@ async function getQzPrinterName(){
         <select id="qzPrinterSelect" class="search" style="width:100%;margin-bottom:16px">
           ${list.map(p=>`<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('')}
         </select>
-        <div style="display:flex;gap:8px;justify-content:flex-end">
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
           <button class="btn btn-ghost" id="qzPrinterCancel">Отмена</button>
           <button class="btn btn-primary" id="qzPrinterConfirm">Выбрать</button>
         </div>
@@ -1523,7 +1523,7 @@ function openLabelSettingsModal(){
     <div style="background:#fff;border-radius:12px;padding:24px;max-width:380px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.2)">
       <div style="font-weight:700;font-size:15px;margin-bottom:4px">⚙️ Настройки этикетки</div>
       <div style="font-size:12px;color:var(--ink-faint);margin-bottom:16px">Для печати через QZ Tray на термопринтер. Хранится в этом браузере.</div>
-      <div style="display:flex;gap:10px;margin-bottom:12px">
+      <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">
         <div style="flex:1"><div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">Ширина, мм</div><input class="search" type="number" id="lblSetWidth" value="${s.widthMm}" style="width:100%"></div>
         <div style="flex:1"><div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">Высота, мм</div><input class="search" type="number" id="lblSetHeight" value="${s.heightMm}" style="width:100%"></div>
       </div>
@@ -1543,7 +1543,7 @@ function openLabelSettingsModal(){
         <button class="btn btn-ghost" id="lblSetPreview">👁 Предпросмотр (без принтера)</button>
         <button class="btn btn-ghost" id="lblSetTestPrint">🖨 Пробная печать на принтере</button>
       </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
+      <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
         <button class="btn btn-ghost" id="lblSetCancel">Закрыть без сохранения</button>
         <button class="btn btn-primary" id="lblSetSave">Сохранить</button>
       </div>
@@ -1991,4 +1991,3 @@ function renderOzonBody(){
 }
 document.getElementById('ozonClientSelect').addEventListener('change', function(){ ozonSelectedClientId = this.value; ozonDonePage = 1; renderOzonBody(); });
 document.getElementById('ozonDonePageSize').addEventListener('change', function(){ changeOzonDonePageSize(this.value); });
-
