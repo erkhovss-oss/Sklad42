@@ -250,13 +250,14 @@
   .btn-ghost:hover{border-color:var(--ink-soft);color:var(--ink);}
   .btn:disabled{opacity:0.4;cursor:not-allowed;}
 
-  .stat-row{display:flex;gap:14px;margin-bottom:22px;}
+  .stat-row{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:22px;}
   .stat{
     background:var(--panel);
     border:1px solid var(--line);
     border-radius:12px;
     padding:14px 18px;
-    flex:1;
+    flex:1 1 140px;
+    min-width:140px;
   }
   .stat .val{font-family:'Barlow Condensed',sans-serif;font-size:28px;font-weight:700;}
   .stat .lbl{font-size:12px;color:var(--ink-soft);margin-top:2px;}
@@ -763,7 +764,7 @@
             <h1>Заказы FBS</h1>
             <p>Заказы из личного кабинета Wildberries — новые, на сборке, в доставке</p>
           </div>
-          <div style="display:flex;gap:8px;align-items:center">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <select class="search" id="fbsClientSelect" style="width:220px"></select>
             <button class="btn btn-ghost" onclick="fetchNewFbsOrders()">🔄 Обновить сейчас</button>
             <button class="btn btn-ghost" onclick="syncFbsOrderStatuses()">📡 Сверить статусы с WB</button>
@@ -961,7 +962,7 @@
           <div id="returnFoundWrap"></div>
         </div>
         <div id="returnsStats" class="stats" style="margin-bottom:14px"></div>
-        <div style="display:flex;gap:10px;margin-bottom:14px">
+        <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
           <input class="search" id="returnsSearch" placeholder="Поиск по артикулу, товару, клиенту" style="flex:1;max-width:320px" oninput="renderReturns()">
         </div>
         <div id="returnsTableWrap"></div>
