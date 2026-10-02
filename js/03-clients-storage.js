@@ -289,6 +289,17 @@ function toggleWbAutoSync(clientId){
     if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
   });
 }
+function setStockAllocationMode(clientId, mode){
+  const c = clients.find(x=>x.id===clientId);
+  if(!c || c.stockAllocationMode===mode) return;
+  if(mode==='split' && !confirm('При переключении на «Раздельно» WB и Ozon начнут видеть только то, что явно выделено под каждую площадку в «Остатках» — если ничего не выделить, обе площадки увидят 0. Продолжить?')) return;
+  c.stockAllocationMode = mode;
+  toast(mode==='split' ? 'Включено раздельное распределение по площадкам' : 'Включён общий остаток на все площадки');
+  renderClients();
+  sb.from('clients').update({stock_allocation_mode: mode}).eq('id', clientId).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
+  });
+}
 async function extractFnErrorMessage(error){
   if(error && error.context && typeof error.context.json === 'function'){
     try{
@@ -501,7 +512,7 @@ function renderClientDetail(body){
             ${(!c.contact || c.contact==='—') && !c.telegram ? 'Контакты не указаны' : ''}
           </div>
         </div>
-        <div style="display:flex;gap:8px;flex-shrink:0">
+        <div style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap">
           <button class="btn btn-primary" onclick="copyClientLink('${c.id}')">🔗 Ссылка для клиента</button>
           <button class="btn btn-ghost" onclick="startEditClient('${c.id}')">Изменить</button>
           <button class="btn btn-ghost" style="color:var(--warn)" onclick="openDeleteClient('${c.id}')">Удалить</button>
@@ -629,7 +640,7 @@ function renderClientDetail(body){
         <div class="barcode-rule"></div>
         <button class="btn btn-accent" onclick="loadWbProducts('${c.id}')">↓ Загрузить карточки товаров</button>
         ${c.wbProducts.length ? `
-          <div style="display:flex;gap:8px;margin-top:14px;margin-bottom:4px">
+          <div style="display:flex;gap:8px;margin-top:14px;margin-bottom:4px;flex-wrap:wrap">
             <button class="btn btn-ghost" onclick="addAllWbProducts('${c.id}')">+ Добавить все в остатки</button>
             <button class="btn btn-ghost" onclick="addSelectedWbProducts('${c.id}')">+ Добавить выбранные</button>
           </div>
@@ -692,6 +703,22 @@ function renderClientDetail(body){
       ` : ''}
     </div>
 
+    ${c.wbConnected && c.ozonConnected ? `
+    <div class="panel" style="padding:20px;margin-bottom:18px">
+      <div class="eyebrow" style="margin-bottom:4px">Распределение остатков между площадками</div>
+      <h3 style="font-size:18px;margin-bottom:12px">Как делить остаток между WB и Ozon</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <button class="btn ${c.stockAllocationMode!=='split'?'btn-accent':'btn-ghost'}" onclick="setStockAllocationMode('${c.id}', 'shared')">Общий остаток</button>
+        <button class="btn ${c.stockAllocationMode==='split'?'btn-accent':'btn-ghost'}" onclick="setStockAllocationMode('${c.id}', 'split')">Раздельно по площадкам</button>
+      </div>
+      <p style="font-size:12px;color:var(--ink-soft);line-height:1.6;margin:0">
+        ${c.stockAllocationMode==='split'
+          ? 'Обе площадки видят только то, что явно выделено под них в «Остатках» — не мешают друг другу, но и не делятся общим пулом. Новый принятый товар по умолчанию лежит «в запасе» и не появляется ни на одной площадке, пока не распределите его вручную.'
+          : 'WB и Ozon видят одно и то же число — физический остаток минус то, что уже в необработанных заказах на обеих площадках. Так проще, но есть риск, что при очень частых заказах обновление не успеет, и обе площадки примут заказ на последнюю единицу почти одновременно.'}
+      </p>
+    </div>
+    ` : ''}
+
     ${c.wbConnected ? `
     <div class="panel" style="padding:20px;margin-bottom:18px">
       <div class="eyebrow" style="margin-bottom:4px">Wildberries · настоящая передача остатков</div>
@@ -711,7 +738,7 @@ function renderClientDetail(body){
         </div>
       ` : ''}
       ${c.wbWarehouseId ? `
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
           <button class="btn ${c.wbAutoSync?'btn-accent':'btn-ghost'}" style="padding:6px 12px;font-size:12px" onclick="toggleWbAutoSync('${c.id}')">${c.wbAutoSync?'🔄 Автосинхронизация: Вкл':'⏸ Автосинхронизация: Выкл'}</button>
           <span style="font-size:11px;color:var(--ink-faint)">${c.wbAutoSync ? 'Остатки отправляются на WB сами, через пару секунд после изменения' : 'Отправка только вручную, кнопкой ниже'}</span>
         </div>
@@ -798,4 +825,3 @@ function renderStorageChartSvg(data){
   </svg>`;
 }
 document.getElementById('storageClientFilter').addEventListener('change', renderStorage);
-
