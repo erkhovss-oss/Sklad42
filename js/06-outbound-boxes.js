@@ -318,7 +318,7 @@ function renderBoxCard(supply, box){
             <button class="btn btn-ghost" style="margin-top:8px;width:100%;justify-content:center" ${(boxScanHistory.length && lastBoxScanInfo && lastBoxScanInfo.boxId===box.id)?'':'disabled'} onclick="undoLastBoxScan()">↩ Отменить скан${(lastBoxScanInfo && lastBoxScanInfo.boxId===box.id)?` (${lastBoxScanInfo.name})`:''}${boxScanHistory.length>1?` [${boxScanHistory.length}]`:''}</button>
           </div>
           <button class="btn btn-primary" style="margin-top:10px;width:100%;justify-content:center" onclick="closeBoxAndAddNext('${supply.id}','${box.id}')">✅ Закрыть короб и добавить следующий</button>
-          <div style="display:flex;gap:8px;margin-top:8px">
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
             <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="downloadBoxExcel('${supply.id}','${box.id}')">📊 Скачать состав (Excel)</button>
             <button class="btn btn-ghost" style="flex:1;justify-content:center;color:var(--warn)" onclick="deleteOutboundBox('${box.id}')">Удалить короб</button>
           </div>
@@ -370,7 +370,7 @@ function renderBoxPanel(supply){
       </div>
       ${boxes.length ? `<div style="margin-bottom:14px">${sizeBreakdown}</div>` : ''}
       ${boxes.map(box=>renderBoxCard(supply, box)).join('')}
-      <div style="display:flex;gap:8px;margin-top:8px">
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
         <button class="btn btn-accent" style="flex:1;justify-content:center" ${fullyDistributed?'':'disabled'} onclick="printBoxLabels('${supply.id}')">🖨 Распечатать QR-коды коробов</button>
         <button class="btn btn-ghost" style="flex:1;justify-content:center" ${boxes.length?'':'disabled'} onclick="downloadAllBoxesExcel('${supply.id}')">📊 Скачать все короба (Excel)</button>
       </div>
@@ -516,4 +516,3 @@ function printBoxLabels(supplyId){
   `);
   win.document.close();
 }
-
