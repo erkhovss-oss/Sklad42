@@ -289,10 +289,10 @@ function toggleWbAutoSync(clientId){
     if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
   });
 }
-function setStockAllocationMode(clientId, mode){
+async function setStockAllocationMode(clientId, mode){
   const c = clients.find(x=>x.id===clientId);
   if(!c || c.stockAllocationMode===mode) return;
-  if(mode==='split' && !confirm('При переключении на «Раздельно» WB и Ozon начнут видеть только то, что явно выделено под каждую площадку в «Остатках» — если ничего не выделить, обе площадки увидят 0. Продолжить?')) return;
+  if(mode==='split' && !await customConfirm('При переключении на «Раздельно» WB и Ozon начнут видеть только то, что явно выделено под каждую площадку в «Остатках» — если ничего не выделить, обе площадки увидят 0. Продолжить?')) return;
   c.stockAllocationMode = mode;
   toast(mode==='split' ? 'Включено раздельное распределение по площадкам' : 'Включён общий остаток на все площадки');
   renderClients();
@@ -331,27 +331,49 @@ function useWbWarehouseFromList(clientId){
   document.getElementById('wbWarehouseId-'+clientId).value = select.value;
   saveWbWarehouseId(clientId);
 }
+function withButtonLoading(btn, loadingText, fn){
+  if(!btn) return fn();
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.dataset.loading = '1';
+  btn.innerHTML = loadingText;
+  return Promise.resolve(fn()).finally(()=>{
+    btn.disabled = false;
+    delete btn.dataset.loading;
+    btn.innerHTML = original;
+  });
+}
 async function pushStocksToWb(clientId){
-  toast('Отправляем остатки на Wildberries…');
-  try{
-    const { data, error } = await sb.functions.invoke('wb-sync-stocks-ts', { body: { clientId, action: 'push_stocks' } });
-    if(error){ toast('WB: ' + await extractFnErrorMessage(error)); return; }
-    if(data && data.error){ toast('WB: ' + data.error); return; }
-    toast(`Отправлено на WB: ${data.sent} поз.${data.skipped ? `, пропущено без штрихкода: ${data.skipped}` : ''}`);
-  }catch(e){
-    toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
-  }
+  const btn = typeof event!=='undefined' && event ? event.target.closest('button') : null;
+  await withButtonLoading(btn, '⏳ Отправляю…', async ()=>{
+    toast('Отправляем остатки на Wildberries…');
+    const c = clients.find(x=>x.id===clientId);
+    try{
+      const { data, error } = await sb.functions.invoke('wb-sync-stocks-ts', { body: { clientId, action: 'push_stocks' } });
+      if(error){ toast('WB: ' + await extractFnErrorMessage(error)); return; }
+      if(data && data.error){ if(c){ c.wbLastSyncError = data.error; renderClients(); } toast('WB: ' + data.error); return; }
+      if(c){ c.wbLastSyncedAt = new Date().toISOString(); c.wbLastSyncError = null; renderClients(); }
+      toast(`Отправлено на WB: ${data.sent} поз.${data.skipped ? `, пропущено без штрихкода: ${data.skipped}` : ''}`);
+    }catch(e){
+      toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
+    }
+  });
 }
 async function pushStocksToOzon(clientId){
-  toast('Отправляем остатки на Ozon…');
-  try{
-    const { data, error } = await sb.functions.invoke('ozon-orders-ts', { body: { clientId, action: 'push_stocks' } });
-    if(error){ toast('Ozon: ' + await extractFnErrorMessage(error)); return; }
-    if(data && data.error){ toast('Ozon: ' + data.error); return; }
-    toast(`Отправлено на Ozon: ${data.sent} поз.${data.failed ? `, не обновилось: ${data.failed}` : ''}`);
-  }catch(e){
-    toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
-  }
+  const btn = typeof event!=='undefined' && event ? event.target.closest('button') : null;
+  await withButtonLoading(btn, '⏳ Отправляю…', async ()=>{
+    toast('Отправляем остатки на Ozon…');
+    const c = clients.find(x=>x.id===clientId);
+    try{
+      const { data, error } = await sb.functions.invoke('ozon-orders-ts', { body: { clientId, action: 'push_stocks' } });
+      if(error){ toast('Ozon: ' + await extractFnErrorMessage(error)); return; }
+      if(data && data.error){ if(c){ c.ozonLastSyncError = data.error; renderClients(); } toast('Ozon: ' + data.error); return; }
+      if(c){ c.ozonLastSyncedAt = new Date().toISOString(); c.ozonLastSyncError = null; renderClients(); }
+      toast(`Отправлено на Ozon: ${data.sent} поз.${data.failed ? `, не обновилось: ${data.failed}` : ''}`);
+    }catch(e){
+      toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
+    }
+  });
 }
 async function loadWbProducts(clientId){
   const client = clients.find(c=>c.id===clientId);
@@ -699,7 +721,14 @@ function renderClientDetail(body){
           </div>
           <p style="font-size:11px;color:var(--ink-faint);margin-top:4px">Без выбранного склада будут подгружаться заказы со всех складов продавца — это и есть причина лишних заказов, если склад не указан.</p>
         ` : ''}
-        ${c.ozonWarehouseId ? `<button class="btn btn-accent" style="margin-top:12px" onclick="pushStocksToOzon('${c.id}')">🔄 Отправить остатки на Ozon сейчас</button>` : ''}
+        ${c.ozonWarehouseId ? `
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px">
+            <button class="btn btn-accent" onclick="pushStocksToOzon('${c.id}')">🔄 Отправить остатки на Ozon сейчас</button>
+            ${c.ozonLastSyncError
+              ? `<span style="font-size:11px;color:var(--warn)" title="${escapeHtml(c.ozonLastSyncError)}">⚠ ошибка последней отправки</span>`
+              : c.ozonLastSyncedAt ? `<span style="font-size:11px;color:var(--ink-faint)">остатки на Ozon обновлены ${timeAgoRu(c.ozonLastSyncedAt)}</span>` : ''}
+          </div>
+        ` : ''}
       ` : ''}
     </div>
 
@@ -743,7 +772,12 @@ function renderClientDetail(body){
           <span style="font-size:11px;color:var(--ink-faint)">${c.wbAutoSync ? 'Остатки отправляются на WB сами, через пару секунд после изменения' : 'Отправка только вручную, кнопкой ниже'}</span>
         </div>
       ` : `<p style="font-size:11px;color:var(--ink-faint);margin-bottom:12px">Укажите ID склада — тогда можно будет включить автосинхронизацию</p>`}
-      <button class="btn btn-accent" onclick="pushStocksToWb('${c.id}')">🔄 Обновить сейчас</button>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-accent" onclick="pushStocksToWb('${c.id}')">🔄 Обновить сейчас</button>
+        ${c.wbLastSyncError
+          ? `<span style="font-size:11px;color:var(--warn)" title="${escapeHtml(c.wbLastSyncError)}">⚠ ошибка последней отправки</span>`
+          : c.wbLastSyncedAt ? `<span style="font-size:11px;color:var(--ink-faint)">остатки на WB обновлены ${timeAgoRu(c.wbLastSyncedAt)}</span>` : ''}
+      </div>
     </div>
     ` : ''}
   `;

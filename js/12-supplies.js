@@ -101,7 +101,7 @@ function createSupply(){
 function toggleSupplyReceiving(id){
   const supply = supplies.find(s=>s.id===id);
   if(!supply) return;
-  if(activeSupplyId !== id){ lastScanInfo = null; scanHistory = []; pendingKizItem = null; }
+  if(activeSupplyId !== id){ lastScanInfo = null; scanHistory = []; pendingKizItem = null; delete receivingToBrak[id]; }
   activeSupplyId = activeSupplyId===id ? null : id;
   renderSuppliesTableWrap();
 }
@@ -627,8 +627,12 @@ function renderSupplyReceivingPanel(s){
       ${renderScanScoreboard()}
 
       <div class="eyebrow" style="margin:16px 0 8px 0">Сканирование${s.requiresKiz?' · требует КИЗ':''}</div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:${receivingToBrak[s.id]?'var(--warn)':'var(--ink-soft)'};cursor:pointer;margin-bottom:8px;font-weight:${receivingToBrak[s.id]?'700':'400'}">
+        <input type="checkbox" ${receivingToBrak[s.id]?'checked':''} onchange="toggleReceivingToBrak('${s.id}', this.checked)">
+        ⚠ Принимать как брак (пришло повреждённым) — считается полученным по плану, но не идёт на WB/Ozon
+      </label>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">
-        <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="flex:1;min-width:240px" autocomplete="off" ${(s.requiresKiz && pendingKizItem)?'disabled':''}>
+        <input class="search" id="supplyScanInput-${s.id}" placeholder="Штрихкод…" style="flex:1;min-width:240px${receivingToBrak[s.id]?';border-color:var(--warn)':''}" autocomplete="off" ${(s.requiresKiz && pendingKizItem)?'disabled':''}>
         ${s.requiresKiz ? `<input class="search mono" id="supplyKizInput-${s.id}" placeholder="КИЗ (Честный Знак)…" style="flex:1;min-width:240px" autocomplete="off" ${pendingKizItem?'':'disabled'}>` : ''}
       </div>
       ${pendingKizItem ? `<div style="padding:8px 10px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--ink-soft);margin-bottom:8px">Ожидается КИЗ для: <b>${pendingKizItem.name}</b></div>` : ''}
@@ -898,7 +902,8 @@ function renderSuppliesTableWrap(){
 async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   const sku = item.sku;
   const size = item.size || '';
-  const warehouseId = supply.warehouseId || 'MAIN';
+  const toBrak = !!receivingToBrak[supply.id];
+  const warehouseId = toBrak ? 'BRAK' : (supply.warehouseId || 'MAIN');
   const wasOver = item.receivedQty > item.qty;
   item.receivedQty++;
   let inv = barcode ? findInventoryItemByBarcode(barcode, supply.clientName, warehouseId) : findInventoryItem(sku, supply.clientName, size, warehouseId);
@@ -908,6 +913,21 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   }
   inv.qty++;
   logReceipt(inv.sku, inv.name, 1, inv.client, inv.size);
+  if(toBrak){
+    playBeep('warn');
+    toast(`«${item.name}»${size?` (${size})`:''} → склад «БРАК» (не идёт на WB/Ozon). Принято ${item.receivedQty} из ${item.qty}`);
+    pushRecentAction({name:item.name + (size?` (${size})`:''), sku, qty:1, cell:'БРАК', note:'принято как брак'});
+    lastScanInfo = {
+      supplyId: supply.id, sku, size, name:item.name + (size?` · ${size}`:''), barcode: barcode||'', cell:'БРАК', delta:1, canUndo:true,
+      status:'brak', message:`Принято в брак: ${item.receivedQty} из ${item.qty}`
+    };
+    scanHistory.push({supplyId: supply.id, sku, size, name:item.name + (size?` · ${size}`:''), barcode: barcode||'', delta:1, warehouseId});
+    renderSuppliesTableWrap();
+    (size ? sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).eq('size', size) : sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).is('size', null)).then(({error})=>{
+      if(error) console.error(error);
+    }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
+    return;
+  }
   const cell = await ensureCellAssigned(inv);
   const isOver = item.receivedQty>item.qty && !wasOver;
   if(isOver){ playBeep('warn'); toast(`«${item.name}»${size?` (${size})`:''}: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
@@ -919,7 +939,7 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
     status: isOver ? 'over' : 'ok',
     message: isOver ? `Принято больше плана: ${item.receivedQty} из ${item.qty}` : `Принято ${item.receivedQty} из ${item.qty}`
   };
-  scanHistory.push({supplyId: supply.id, sku, size, name:item.name + (size?` · ${size}`:''), barcode: barcode||'', delta:1});
+  scanHistory.push({supplyId: supply.id, sku, size, name:item.name + (size?` · ${size}`:''), barcode: barcode||'', delta:1, warehouseId});
   if(kizCode){
     const scan = {kizCode, supplyId:supply.id, sku, name:item.name, size:size||'', clientName:supply.clientName, time:new Date().toISOString()};
     kizScans.push(scan);
@@ -978,10 +998,10 @@ function removeKizScan(supplyId, kizCode, silent){
     renderSuppliesTableWrap();
   }
 }
-function removeAllKizScans(supplyId){
+async function removeAllKizScans(supplyId){
   const count = kizScans.filter(k=>k.supplyId===supplyId).length;
   if(!count){ toast('Нечего удалять'); return; }
-  if(!confirm(`Удалить все ${count} отсканированных КИЗ по этой поставке? Количество по каждой позиции будет уменьшено соответственно. Отменить нельзя.`)) return;
+  if(!await customConfirm(`Удалить все ${count} отсканированных КИЗ по этой поставке? Количество по каждой позиции будет уменьшено соответственно. Отменить нельзя.`)) return;
   const codes = kizScans.filter(k=>k.supplyId===supplyId).map(k=>k.kizCode);
   codes.forEach(code=>removeKizScan(supplyId, code, true));
   toast(`Удалено КИЗ: ${codes.length}`);

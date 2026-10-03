@@ -165,14 +165,14 @@ function createRole(){
     if(error){ console.error(error); toast('Не удалось сохранить роль в базе'); }
   });
 }
-function deleteRole(roleId){
+async function deleteRole(roleId){
   const role = roles.find(r=>r.id===roleId);
   const inUse = employees.filter(e=>e.roleId===roleId);
   if(inUse.length){
     toast(`Нельзя удалить — роль назначена сотрудникам: ${inUse.map(e=>e.name).join(', ')}`);
     return;
   }
-  if(!confirm(`Удалить роль «${role.name}»?`)) return;
+  if(!await customConfirm(`Удалить роль «${role.name}»?`)) return;
   roles = roles.filter(r=>r.id!==roleId);
   toast('Роль удалена');
   renderEmployeesTab();

@@ -202,10 +202,10 @@ function computeStocktakeReconciliation(c){
   });
   return rows.sort((a,b)=> Math.abs(b.diff) - Math.abs(a.diff));
 }
-function applyStocktakeCorrections(countId){
+async function applyStocktakeCorrections(countId){
   const c = stocktakes.find(x=>x.id===countId);
   if(!c) return;
-  if(!confirm('Применить результаты инвентаризации к остаткам? Это изменит фактические количества на складе, действие нельзя отменить одной кнопкой.')) return;
+  if(!await customConfirm('Применить результаты инвентаризации к остаткам? Это изменит фактические количества на складе, действие нельзя отменить одной кнопкой.')) return;
   const rows = computeStocktakeReconciliation(c);
   rows.forEach(r=>{
     if(r.diff===0) return;
@@ -314,4 +314,3 @@ function renderStocktakeDetail(c){
     </div>
   `;
 }
-

@@ -109,9 +109,10 @@ function renderReturnForm(){
         </select>
         <input class="search" id="returnOrderId" placeholder="№ заказа WB (необязательно)" style="width:200px">
       </div>
-      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+      <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
         <button class="btn btn-accent" onclick="submitReturn('restock')">↩ Вернуть на склад</button>
         <button class="btn btn-ghost" style="color:var(--warn)" onclick="submitReturn('defect')">🗑 Списать в брак</button>
+        <span style="font-size:12px;color:var(--ink-faint);cursor:help" title="Товар НЕ удаляется совсем — он попадает на отдельный склад «БРАК», виден в «Остатках», но автоматически исключается из того, что отправляется на WB/Ozon.">ⓘ что это значит</span>
       </div>
     </div>
   `;

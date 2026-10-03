@@ -24,9 +24,9 @@ function addBoxSize(){
     if(error){ console.error(error); toast('Не удалось сохранить размер в базе'); }
   });
 }
-function deleteBoxSize(id){
+async function deleteBoxSize(id){
   const s = boxSizes.find(x=>x.id===id);
-  if(!confirm(`Удалить размер «${s?s.name:id}»? У коробов, где он уже указан, размер просто очистится.`)) return;
+  if(!await customConfirm(`Удалить размер «${s?s.name:id}»? У коробов, где он уже указан, размер просто очистится.`)) return;
   boxSizes = boxSizes.filter(x=>x.id!==id);
   outboundBoxes.forEach(b=>{ if(b.sizeId===id) b.sizeId = null; });
   toast('Размер удалён');
@@ -144,8 +144,8 @@ function closeBoxAndAddNext(supplyId, currentBoxId){
     if(!success){ console.error(error); toast('Не удалось сохранить новый короб в базе'); }
   });
 }
-function deleteOutboundBox(boxId){
-  if(!confirm('Удалить этот короб? Все его позиции вернутся в «не распределено».')) return;
+async function deleteOutboundBox(boxId){
+  if(!await customConfirm('Удалить этот короб? Все его позиции вернутся в «не распределено».')) return;
   outboundBoxes = outboundBoxes.filter(b=>b.id!==boxId);
   if(expandedBoxId===boxId) expandedBoxId = null;
   toast('Короб удалён');

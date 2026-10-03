@@ -99,8 +99,8 @@ function createDdsEntry(){
     if(error){ console.error(error); toast('Не удалось сохранить операцию в базе'); }
   });
 }
-function deleteDdsEntry(id){
-  if(!confirm('Удалить эту операцию?')) return;
+async function deleteDdsEntry(id){
+  if(!await customConfirm('Удалить эту операцию?')) return;
   ddsEntries = ddsEntries.filter(d=>d.id!==id);
   toast('Операция удалена');
   renderDdsTable();
@@ -354,9 +354,9 @@ function toggleAllDdsSelected(checked){
   renderDdsTable();
 }
 function clearDdsSelection(){ ddsSelected = []; renderDdsTable(); }
-function deleteSelectedDdsEntries(){
+async function deleteSelectedDdsEntries(){
   if(!ddsSelected.length) return;
-  if(!confirm(`Удалить выбранные операции (${ddsSelected.length})? Отменить нельзя.`)) return;
+  if(!await customConfirm(`Удалить выбранные операции (${ddsSelected.length})? Отменить нельзя.`)) return;
   const idsToDelete = [...ddsSelected];
   ddsEntries = ddsEntries.filter(d=>!idsToDelete.includes(d.id));
   ddsSelected = [];

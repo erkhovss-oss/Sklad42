@@ -99,8 +99,8 @@ function toggleOutboundDraftCollapse(){
   outboundDraftCollapsed = !outboundDraftCollapsed;
   renderOutboundCreatePanel();
 }
-function cancelOutboundDraft(){
-  if(draftOutboundItems.length && !confirm('Отменить создание поставки? Все добавленные позиции будут убраны.')) return;
+async function cancelOutboundDraft(){
+  if(draftOutboundItems.length && !await customConfirm('Отменить создание поставки? Все добавленные позиции будут убраны.')) return;
   draftOutboundClientId = '';
   draftOutboundItems = [];
   outboundDraftCollapsed = false;

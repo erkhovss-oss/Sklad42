@@ -36,25 +36,28 @@ async function syncFbsOrderStatuses(){
   const clientId = document.getElementById('fbsClientSelect').value;
   const targets = clientId ? [clientId] : clients.filter(c=>c.wbConnected).map(c=>c.id);
   if(!targets.length) return;
-  toast('Сверяем статусы заказов с WB…');
-  let totalChecked = 0;
-  const allChanged = [];
-  let hadError = false;
-  for(const cid of targets){
-    try{
-      const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action:'sync_order_statuses' } });
-      if(error || (data && data.error)){ hadError = true; console.error(error||(data&&data.error)); continue; }
-      totalChecked += data.total || 0;
-      if(data.changed && data.changed.length) allChanged.push(...data.changed);
-    }catch(e){ hadError = true; console.error(e); }
-  }
-  await loadFbsOrders();
-  renderFbsBody();
-  if(allChanged.length){
-    toast(`Сверено ${totalChecked} — обновлено статусов: ${allChanged.length}${hadError?' (у части клиентов была ошибка)':''}`);
-  } else {
-    toast(`Сверено ${totalChecked} заказ(ов) — все статусы совпадают${hadError?' (у части клиентов была ошибка)':''}`);
-  }
+  const btn = typeof event!=='undefined' && event ? event.target.closest('button') : null;
+  await withButtonLoading(btn, '⏳ Сверяю…', async ()=>{
+    toast('Сверяем статусы заказов с WB…');
+    let totalChecked = 0;
+    const allChanged = [];
+    let hadError = false;
+    for(const cid of targets){
+      try{
+        const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action:'sync_order_statuses' } });
+        if(error || (data && data.error)){ hadError = true; console.error(error||(data&&data.error)); continue; }
+        totalChecked += data.total || 0;
+        if(data.changed && data.changed.length) allChanged.push(...data.changed);
+      }catch(e){ hadError = true; console.error(e); }
+    }
+    await loadFbsOrders();
+    renderFbsBody();
+    if(allChanged.length){
+      toast(`Сверено ${totalChecked} — обновлено статусов: ${allChanged.length}${hadError?' (у части клиентов была ошибка)':''}`);
+    } else {
+      toast(`Сверено ${totalChecked} заказ(ов) — все статусы совпадают${hadError?' (у части клиентов была ошибка)':''}`);
+    }
+  });
 }
 async function fetchNewFbsOrders(silent){
   const clientId = document.getElementById('fbsClientSelect').value;
@@ -665,10 +668,10 @@ function wizardAttachKiz(order, kizCode){
     if(statusDiv) statusDiv.innerHTML = renderKizStatusLabel(order);
   });
 }
-function wizardNextOrder(){
+async function wizardNextOrder(){
   const order = assemblyModeQueue[assemblyModeIndex];
   if(order && order.requiresKiz && order.kizStatus!=='attached' && order.kizStatus!=='pending'){
-    if(!confirm('КИЗ ещё не подтверждён для этого заказа — всё равно перейти дальше?')) return;
+    if(!await customConfirm('КИЗ ещё не подтверждён для этого заказа — всё равно перейти дальше?')) return;
   }
   assemblyModeIndex++;
   renderAssemblyModeStep();
@@ -690,10 +693,10 @@ function moveFbsOrderToHolding(orderId){
     renderFbsBody();
   });
 }
-function markOrderOutOfStock(orderId){
+async function markOrderOutOfStock(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
   if(!order) return;
-  if(!confirm(`Отметить «${order.name||order.article}» (заказ №${order.orderId}) как отсутствующий на складе? Заказ останется на сборке, но будет помечен — нужно будет вручную решить, отменять его у WB или искать замену.`)) return;
+  if(!await customConfirm(`Отметить «${order.name||order.article}» (заказ №${order.orderId}) как отсутствующий на складе? Заказ останется на сборке, но будет помечен — нужно будет вручную решить, отменять его у WB или искать замену.`)) return;
   order.outOfStock = true;
   toast(`Отмечено: нет на складе — «${order.name||order.article}»`);
   sb.from('wb_orders').update({out_of_stock:true}).eq('order_id', orderId).then(({error})=>{
@@ -757,8 +760,8 @@ function cancelAssembleOrder(){
   fbsPendingKiz = null;
   renderFbsBody();
 }
-function hideFbsOrder(orderId){
-  if(!confirm('Убрать этот заказ из списка только у нас? У Wildberries и у клиента заказ останется как есть — его должен собрать тот, кто отвечает за нужный склад.')) return;
+async function hideFbsOrder(orderId){
+  if(!await customConfirm('Убрать этот заказ из списка только у нас? У Wildberries и у клиента заказ останется как есть — его должен собрать тот, кто отвечает за нужный склад.')) return;
   fbsOrders = fbsOrders.filter(o=>o.orderId!==orderId);
   fbsSelectedOrders = fbsSelectedOrders.filter(id=>id!==orderId);
   toast('Заказ убран из списка (у WB не тронут)');
@@ -767,12 +770,12 @@ function hideFbsOrder(orderId){
     if(error){ console.error(error); toast('Не удалось удалить локально в базе'); }
   });
 }
-function hideOrdersFromOtherWarehouse(clientId){
+async function hideOrdersFromOtherWarehouse(clientId){
   const client = clients.find(c=>c.id===clientId);
   if(!client || !client.wbWarehouseId){ toast('У клиента не указан ID склада WB'); return; }
   const toRemove = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='new' && o.wbWarehouseId && String(o.wbWarehouseId)!==String(client.wbWarehouseId));
   if(!toRemove.length){ toast('Таких заказов не найдено'); return; }
-  if(!confirm(`Убрать из списка ${toRemove.length} заказ(ов) с других складов? У Wildberries они останутся как есть.`)) return;
+  if(!await customConfirm(`Убрать из списка ${toRemove.length} заказ(ов) с других складов? У Wildberries они останутся как есть.`)) return;
   const idsToRemove = toRemove.map(o=>o.orderId);
   fbsOrders = fbsOrders.filter(o=>!idsToRemove.includes(o.orderId));
   fbsSelectedOrders = fbsSelectedOrders.filter(id=>!idsToRemove.includes(id));
@@ -893,10 +896,10 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
     else renderFbsBody();
   });
 }
-function cancelFbsOrder(orderId){
+async function cancelFbsOrder(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
   if(!order) return;
-  if(!confirm(`Отменить заказ №${orderId}?`)) return;
+  if(!await customConfirm(`Отменить заказ №${orderId}?`)) return;
   const wasConfirmed = order.supplierStatus === 'confirm';
   sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'cancel', orderId } }).then(({data, error})=>{
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
@@ -1037,12 +1040,12 @@ async function closeFbsSupply(explicitClientId){
   if(missingKiz.length){
     const names = missingKiz.slice(0,5).map(o=>`«${o.name||o.article}» (заказ №${o.orderId})`).join(', ');
     const more = missingKiz.length>5 ? ` и ещё ${missingKiz.length-5}` : '';
-    if(!confirm(`⚠ У ${missingKiz.length} заказ(ов) не привязан КИЗ, хотя он требуется: ${names}${more}.\n\nЗакрыть поставку без КИЗ рискованно — WB может отклонить поставку или заблокировать продажу. Всё равно закрыть?`)) return;
+    if(!await customConfirm(`⚠ У ${missingKiz.length} заказ(ов) не привязан КИЗ, хотя он требуется: ${names}${more}.\n\nЗакрыть поставку без КИЗ рискованно — WB может отклонить поставку или заблокировать продажу. Всё равно закрыть?`)) return;
   } else {
     const confirmMsg = isPartial
       ? `Закрыть ${toClose.length} из ${allConfirmed.length} заказов клиента «${client?client.name:''}»? Остальные ${toHold.length} останутся в отдельной поставке до следующего раза.`
       : `Закрыть текущую поставку клиента «${client?client.name:''}» и передать на склад WB?`;
-    if(!confirm(confirmMsg)) return;
+    if(!await customConfirm(confirmMsg)) return;
   }
 
   if(isPartial){
@@ -1462,6 +1465,35 @@ async function connectThermalPrinter(){
     toast('Не удалось подключиться к QZ Tray — убедитесь, что программа запущена на компьютере (значок в трее). Ошибка: ' + (e.message||e));
     return false;
   }
+}
+// Своё окно подтверждения вместо браузерного confirm() — тот стандартный серый
+// попап "ОК/Отмена" выбивается из стиля приложения и особенно плохо смотрится
+// на телефоне. Возвращает Promise<boolean> — использовать как
+// `if(!await customConfirm('...')) return;` вместо `if(!confirm('...')) return;`
+// (содержащая функция должна быть async).
+function customConfirm(message, options={}){
+  return new Promise((resolve)=>{
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+    const danger = options.danger !== false; // по умолчанию акцентная кнопка — т.к. обычно это подтверждение удаления/отмены
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.2)">
+        <div style="font-size:14px;line-height:1.6;margin-bottom:18px;white-space:pre-line">${escapeHtml(message)}</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button class="btn btn-ghost" id="customConfirmCancel">${options.cancelText||'Отмена'}</button>
+          <button class="btn ${danger?'btn-accent':'btn-primary'}" id="customConfirmOk">${options.okText||'Да'}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const cleanup = (result)=>{ overlay.remove(); resolve(result); };
+    overlay.querySelector('#customConfirmOk').onclick = ()=>cleanup(true);
+    overlay.querySelector('#customConfirmCancel').onclick = ()=>cleanup(false);
+    overlay.addEventListener('click', (e)=>{ if(e.target===overlay) cleanup(false); });
+    document.addEventListener('keydown', function escHandler(e){
+      if(e.key==='Escape'){ cleanup(false); document.removeEventListener('keydown', escHandler); }
+    });
+  });
 }
 async function getQzPrinterName(){
   let stored = null;

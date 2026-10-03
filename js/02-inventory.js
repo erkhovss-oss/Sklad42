@@ -289,7 +289,7 @@ function renderInventory(){
           : `${i.qty} шт${i.isKit?' <span style="font-size:10px;color:var(--accent)">🧩 собран</span>':''}${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}`
       }${splitModeClients.has(i.client) ? `
         <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">
-          WB: ${i.wbAllocatedQty||0} · Ozon: ${i.ozonAllocatedQty||0}${(i.wbAllocatedQty||0)+(i.ozonAllocatedQty||0)<i.qty ? ` · в запасе: ${i.qty-(i.wbAllocatedQty||0)-(i.ozonAllocatedQty||0)}` : ''}${i.safetyBuffer?` · резерв: ${i.safetyBuffer}`:''}
+          WB: ${i.wbAllocatedQty||0} · Ozon: ${i.ozonAllocatedQty||0}${(i.wbAllocatedQty||0)+(i.ozonAllocatedQty||0)<i.qty ? ` · <span title="Физически лежит на складе, но пока не выделено ни под одну площадку — не видно ни на WB, ни на Ozon, пока не распределите">в запасе: ${i.qty-(i.wbAllocatedQty||0)-(i.ozonAllocatedQty||0)}</span>` : ''}${i.safetyBuffer?` · <span title="Всегда придерживается про запас, не показывается ни на одной площадке — защита на случай, если синхронизация не успеет">резерв: ${i.safetyBuffer}</span>`:''}
           ${!readOnly ? `<span class="inv-act" style="cursor:pointer;color:var(--accent)" data-act="openAllocate" data-key="${escapeHtml(key)}"> · распределить</span>` : ''}
         </div>
       ` : ''}</td>

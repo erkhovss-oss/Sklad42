@@ -86,7 +86,9 @@ async function loadClients(){
     inn:c.inn||'', kpp:c.kpp||'', legalAddress:c.legal_address||'', bankDetails:c.bank_details||'', directorName:c.director_name||'',
     portalToken:c.portal_token||'',
     ozonClientId:c.ozon_client_id||'', ozonKey:c.ozon_key||'', ozonConnected:c.ozon_connected||false, ozonWarehouseId:c.ozon_warehouse_id||'', ozonAutoSync: c.ozon_auto_sync!==false,
-    stockAllocationMode: c.stock_allocation_mode || 'shared'
+    stockAllocationMode: c.stock_allocation_mode || 'shared',
+    wbLastSyncedAt: c.wb_last_synced_at||null, wbLastSyncError: c.wb_last_sync_error||null,
+    ozonLastSyncedAt: c.ozon_last_synced_at||null, ozonLastSyncError: c.ozon_last_sync_error||null
   }));
 }
 async function loadStorageHistory(){

@@ -41,7 +41,7 @@ function createWarehouse(){
     if(error){ console.error(error); toast('Не удалось сохранить склад в базе'); }
   });
 }
-function deleteWarehouse(id){
+async function deleteWarehouse(id){
   const blockers = [];
   if(inventory.some(i=>(i.warehouseId||'MAIN')===id)) blockers.push('остатки');
   if(supplies.some(s=>(s.warehouseId||'MAIN')===id)) blockers.push('плановые поставки');
@@ -55,7 +55,7 @@ function deleteWarehouse(id){
     return;
   }
   const w = warehouses.find(x=>x.id===id);
-  if(!confirm(`Удалить склад «${w?w.name:id}»?`)) return;
+  if(!await customConfirm(`Удалить склад «${w?w.name:id}»?`)) return;
   warehouses = warehouses.filter(x=>x.id!==id);
   toast('Склад удалён');
   renderWarehouses();
@@ -158,10 +158,10 @@ function openAdjustConsumableModal(id){
   const reasonInput = prompt('Комментарий (необязательно):', delta>0 ? 'Пополнение' : 'Списание') || (delta>0 ? 'Пополнение' : 'Списание');
   adjustConsumableQty(id, delta, reasonInput);
 }
-function deleteConsumable(id){
+async function deleteConsumable(id){
   const c = consumables.find(x=>x.id===id);
   if(!c) return;
-  if(!confirm(`Удалить «${c.name}» из расходников?`)) return;
+  if(!await customConfirm(`Удалить «${c.name}» из расходников?`)) return;
   consumables = consumables.filter(x=>x.id!==id);
   toast('Расходник удалён');
   renderConsumables();
@@ -169,4 +169,3 @@ function deleteConsumable(id){
     if(error){ console.error(error); toast('Не удалось удалить в базе'); }
   });
 }
-

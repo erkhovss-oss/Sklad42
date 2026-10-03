@@ -1,6 +1,7 @@
 
 
 
+
 // ---------- SUPABASE ----------
 const SUPABASE_URL = 'https://mixsvqjlrifkcoeuuydc.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1peHN2cWpscmlma2NvZXV1eWRjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MTYyNzEsImV4cCI6MjEwMzA5MjI3MX0.qIdelCgVkSDMc20f5X1parpfx2njHB5Pe3xk3ogbCr4';
@@ -144,6 +145,12 @@ function toggleSound(){
 let recentReceivingActions = [];
 let lastScanInfo = null;
 let scanHistory = [];
+let receivingToBrak = {}; // { [supplyId]: true } — пока включено, сканы идут не на обычный склад, а в БРАК
+function toggleReceivingToBrak(supplyId, checked){
+  if(checked){ ensureBrakWarehouse(); receivingToBrak[supplyId] = true; toast('⚠ Режим приёмки брака включён — отсканированное пойдёт на склад «БРАК»'); }
+  else { delete receivingToBrak[supplyId]; toast('Обычный режим приёмки'); }
+  renderSuppliesTableWrap();
+}
 let kizScans = [];
 let pendingKizItem = null;
 let itemsListCollapsed = true;
@@ -186,6 +193,7 @@ function renderScanScoreboard(){
   const colors = {
     ok:    {border:'var(--ok)',   bg:'var(--ok-bg)',   text:'var(--ok)',   label:'ПРИНЯТО'},
     over:  {border:'#A06A00',     bg:'#FBEFDD',        text:'#A06A00',     label:'БОЛЬШЕ ПЛАНА'},
+    brak:  {border:'var(--warn)', bg:'var(--warn-bg)', text:'var(--warn)', label:'ПРИНЯТО В БРАК'},
     error: {border:'var(--warn)', bg:'var(--warn-bg)', text:'var(--warn)', label:'НЕ НАЙДЕНО'},
     undone:{border:'var(--line)', bg:'var(--bg)',      text:'var(--ink-soft)', label:'ОТМЕНЕНО'}
   };
@@ -215,7 +223,7 @@ function undoLastScan(){
   const item = supply.items.find(i=>i.sku===info.sku && (i.size||'')===(info.size||''));
   if(!item){ toast('Позиция не найдена'); return; }
   item.receivedQty = Math.max(0, item.receivedQty - info.delta);
-  const inv = findInventoryItem(info.sku, supply.clientName, info.size||'');
+  const inv = findInventoryItem(info.sku, supply.clientName, info.size||'', info.warehouseId || supply.warehouseId || 'MAIN');
   if(inv) inv.qty = Math.max(0, inv.qty - info.delta);
   logMovement(info.sku, info.name, -info.delta, 'Отмена скана', supply.clientName, info.size);
   (info.size ? sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', info.sku).eq('size', info.size) : sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', info.sku).is('size', null)).then(({error})=>{
