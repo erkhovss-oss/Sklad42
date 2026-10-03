@@ -356,8 +356,8 @@ function renderInventory(){
   }
 }
 function adjustQty(key, delta){
-  const {sku, client, size} = parseItemKey(key);
-  const item = findInventoryItem(sku, client, size);
+  const {sku, client, size, warehouseId} = parseItemKey(key);
+  const item = findInventoryItem(sku, client, size, warehouseId);
   if(!item) return;
   const actualDelta = Math.max(0, item.qty + delta) - item.qty;
   item.qty = Math.max(0, item.qty + delta);
@@ -434,8 +434,8 @@ function openWriteOff(key){ writeOffSku = key; editingSku = null; deletingSku = 
 function openAllocate(key){ allocatingSku = key; editingSku=null; writeOffSku=null; deletingSku=null; renderInventory(); }
 function cancelAllocate(){ allocatingSku = null; renderInventory(); }
 function saveAllocate(key){
-  const {sku, client, size} = parseItemKey(key);
-  const item = findInventoryItem(sku, client, size);
+  const {sku, client, size, warehouseId} = parseItemKey(key);
+  const item = findInventoryItem(sku, client, size, warehouseId);
   if(!item) return;
   const wb = Math.max(0, parseInt(document.getElementById('allocWb-'+key).value) || 0);
   const ozon = Math.max(0, parseInt(document.getElementById('allocOzon-'+key).value) || 0);
@@ -461,8 +461,8 @@ function saveAllocate(key){
 }
 function cancelWriteOff(){ writeOffSku = null; renderInventory(); }
 function confirmWriteOff(key){
-  const {sku, client, size} = parseItemKey(key);
-  const item = findInventoryItem(sku, client, size);
+  const {sku, client, size, warehouseId} = parseItemKey(key);
+  const item = findInventoryItem(sku, client, size, warehouseId);
   const qty = Math.max(1, parseInt(document.getElementById('woQty-'+key).value) || 1);
   const reason = document.getElementById('woReason-'+key).value;
   if(qty > item.qty){ toast('Нельзя списать больше, чем есть на складе'); return; }
@@ -486,8 +486,8 @@ function logWriteOff(sku, name, qty, reason, client, size){
 function openDelete(key){ deletingSku = key; editingSku = null; writeOffSku = null; historySku = null; renderInventory(); }
 function cancelDelete(){ deletingSku = null; renderInventory(); }
 function confirmDelete(key){
-  const {sku, client, size} = parseItemKey(key);
-  const item = findInventoryItem(sku, client, size);
+  const {sku, client, size, warehouseId} = parseItemKey(key);
+  const item = findInventoryItem(sku, client, size, warehouseId);
   inventory = inventory.filter(i=>itemKey(i)!==key);
   deletingSku = null;
   if(item){

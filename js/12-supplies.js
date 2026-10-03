@@ -982,7 +982,7 @@ function removeKizScan(supplyId, kizCode, silent){
   const item = supply.items.find(i=>i.sku===scan.sku);
   if(item){
     item.receivedQty = Math.max(0, item.receivedQty-1);
-    const inv = findInventoryItem(scan.sku, supply.clientName, item.size);
+    const inv = findInventoryItem(scan.sku, supply.clientName, item.size, supply.warehouseId || 'MAIN');
     if(inv) inv.qty = Math.max(0, inv.qty-1);
     logMovement(scan.sku, scan.name, -1, 'Удаление КИЗ', supply.clientName, item.size);
     (item.size ? sb.from('supply_items').update({received_qty:item.receivedQty}).eq('supply_id', supplyId).eq('sku', scan.sku).eq('size', item.size) : sb.from('supply_items').update({received_qty:item.receivedQty}).eq('supply_id', supplyId).eq('sku', scan.sku).is('size', null)).then(({error})=>{

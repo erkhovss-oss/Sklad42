@@ -126,8 +126,8 @@ function addDraftOutboundItem(){
   const key = select.value;
   if(!key) return;
   const qty = Math.max(1, parseInt(document.getElementById('outboundItemQty').value) || 1);
-  const {sku, client, size} = parseItemKey(key);
-  const item = findInventoryItem(sku, client, size);
+  const {sku, client, size, warehouseId} = parseItemKey(key);
+  const item = findInventoryItem(sku, client, size, warehouseId);
   if(!item) return;
   const already = draftOutboundItems.find(d=>d.sku===sku && (d.size||'')===(size||'') && (d.barcode||'')===(item.barcode||''));
   const usedQty = already ? already.qty : 0;
