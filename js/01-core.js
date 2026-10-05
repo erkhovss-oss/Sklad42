@@ -1,7 +1,3 @@
-
-
-
-
 // ---------- SUPABASE ----------
 const SUPABASE_URL = 'https://mixsvqjlrifkcoeuuydc.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1peHN2cWpscmlma2NvZXV1eWRjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MTYyNzEsImV4cCI6MjEwMzA5MjI3MX0.qIdelCgVkSDMc20f5X1parpfx2njHB5Pe3xk3ogbCr4';
@@ -276,32 +272,79 @@ function forceEnglishInput(input){
   });
 }
 
+// ---------- ЗВУК ----------
+// Один общий AudioContext на всё приложение. Раньше каждый сигнал создавал новый контекст
+// (и закрывал его): запуск аудиоустройства занимает заметное время — отсюда задержка звука при скане.
+let audioCtx = null;
+let lastBeepAt = 0, lastBeepType = '';
+function getAudioCtx(){
+  try{
+    if(audioCtx && audioCtx.state!=='closed') return audioCtx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return null;
+    audioCtx = new AC({latencyHint:'interactive'});
+  }catch(e){ audioCtx = null; }
+  return audioCtx;
+}
+// Браузер не даёт играть звук без действия пользователя, поэтому «будим» звук при первом
+// касании страницы (клик, клавиша) — первый сигнал после входа не запаздывает.
+function primeAudio(){
+  try{
+    const ctx = getAudioCtx();
+    if(ctx && ctx.state==='suspended') ctx.resume();
+    if(window.speechSynthesis && window.speechSynthesis.getVoices) window.speechSynthesis.getVoices();
+    if(ctx && ctx.state==='running'){
+      ['pointerdown','keydown','touchstart'].forEach(ev=>document.removeEventListener(ev, primeAudio, true));
+    }
+  }catch(e){}
+}
+['pointerdown','keydown','touchstart'].forEach(ev=>document.addEventListener(ev, primeAudio, {capture:true, passive:true}));
+
 function playBeep(type){
   if(!soundEnabled) return;
+  // два одинаковых сигнала подряд (например, из разных мест кода за один скан) не нужны
+  const now = Date.now();
+  if(type===lastBeepType && now-lastBeepAt < 80) return;
+  lastBeepType = type; lastBeepAt = now;
   try{
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = getAudioCtx();
+    if(!ctx) return;
+    if(ctx.state==='suspended') ctx.resume();
+    const [freq, dur, vol] = type==='error' ? [220, 0.22, 0.16] : type==='warn' ? [440, 0.14, 0.16] : [900, 0.09, 0.14];
+    const t0 = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    // короткие нарастание и спад громкости — без щелчков в начале и конце сигнала
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(vol, t0+0.004);
+    gain.gain.setValueAtTime(vol, t0+dur-0.012);
+    gain.gain.linearRampToValueAtTime(0, t0+dur);
     osc.connect(gain);
     gain.connect(ctx.destination);
-    osc.type = 'sine';
-    if(type === 'error'){
-      osc.frequency.value = 220;
-      gain.gain.value = 0.16;
-      osc.start();
-      setTimeout(()=>{ try{osc.stop(); ctx.close();}catch(e){} }, 220);
-    } else if(type === 'warn'){
-      osc.frequency.value = 440;
-      gain.gain.value = 0.16;
-      osc.start();
-      setTimeout(()=>{ try{osc.stop(); ctx.close();}catch(e){} }, 140);
-    } else {
-      osc.frequency.value = 900;
-      gain.gain.value = 0.14;
-      osc.start();
-      setTimeout(()=>{ try{osc.stop(); ctx.close();}catch(e){} }, 90);
-    }
+    osc.start(t0);
+    osc.stop(t0+dur+0.01);
   }catch(e){ /* звук недоступен в этом браузере — не критично */ }
+}
+
+// Голос: выбираем русский ЛОКАЛЬНЫЙ голос — он стартует заметно быстрее сетевого
+// (например, «Google русский» в Chrome ходит в интернет за каждой фразой).
+// Скорость произношения: 1 — обычная, 2 — вдвое быстрее. Одно число для всех голосовых фраз
+// («Товар собран», номер ячейки и т.д.). Если на каком-то голосе звучит слишком быстро — уменьшите.
+const VOICE_RATE = 2;
+let ruVoice = null;
+let lastUtterance = null; // ссылка нужна, чтобы Chrome не «потерял» фразу сборщиком мусора до конца
+function pickRuVoice(){
+  try{
+    const list = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+    const ru = list.filter(v=>/^ru/i.test(v.lang));
+    return ru.find(v=>v.localService) || ru[0] || null;
+  }catch(e){ return null; }
+}
+if('speechSynthesis' in window){
+  ruVoice = pickRuVoice();
+  try{ window.speechSynthesis.addEventListener('voiceschanged', ()=>{ ruVoice = pickRuVoice(); }); }catch(e){}
 }
 
 async function ensureCellAssigned(item){
@@ -325,7 +368,10 @@ function announceCell(cellNumber){
     }
     const utter = new SpeechSynthesisUtterance(String(cellNumber));
     utter.lang = 'ru-RU';
-    utter.rate = 1;
+    utter.rate = VOICE_RATE;
+    const voice = ruVoice || pickRuVoice();
+    if(voice) utter.voice = voice;
+    lastUtterance = utter;
     window.speechSynthesis.speak(utter);
   }catch(e){ /* синтез речи недоступен в этом браузере — не критично */ }
 }
@@ -340,10 +386,11 @@ function speakRu(text){
     if(synth.speaking || synth.pending) synth.cancel();
     const utter = new SpeechSynthesisUtterance(String(text));
     utter.lang = 'ru-RU';
-    utter.rate = 1;
+    utter.rate = VOICE_RATE;
     utter.volume = 1;
-    const voice = (synth.getVoices ? synth.getVoices() : []).find(v=>/^ru/i.test(v.lang));
+    const voice = ruVoice || pickRuVoice();
     if(voice) utter.voice = voice;
+    lastUtterance = utter;
     synth.speak(utter);
     return true;
   }catch(e){ return false; /* синтез речи недоступен — не критично, остаётся окно и звуковой сигнал */ }
