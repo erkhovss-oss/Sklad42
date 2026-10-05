@@ -72,47 +72,235 @@ function onSupplyManualProductChange(value){
   const box = document.getElementById('supplyManualNewFields');
   if(box) box.style.display = value==='__new__' ? 'flex' : 'none';
 }
-// Сканер: находит товар клиента по штрихкоду (или по артикулу) и выбирает его в списке.
+// ---------- живой поиск товара клиента: по любой части названия, артикула или штрихкода ----------
+const SUPPLY_MANUAL_LIMIT = 60;
+let supplyManualShown = [];   // строки, показанные сейчас в выпадающем списке: [{p, barcodes, score}]
+let supplyManualActive = -1;  // подсвеченная стрелками строка (последняя = «Новый товар»)
+let supplyManualCloseTimer = null;
+
+// Основной штрихкод + дополнительные штрихкоды этой позиции
+function supplyProductBarcodes(p, clientName){
+  const list = [];
+  if(p.barcode) list.push(p.barcode);
+  inventoryBarcodes.forEach(b=>{
+    if(b.sku===p.sku && (b.clientName||'')===(clientName||'') && (b.size||'')===(p.size||'') && !list.includes(b.barcode)) list.push(b.barcode);
+  });
+  return list;
+}
+function supplySearchTokens(query){
+  return String(query||'').toLowerCase().split(/\s+/).filter(Boolean);
+}
+// Каждое слово запроса должно встретиться где-нибудь в артикуле, названии, размере или штрихкоде.
+// Выше всего — точное совпадение ШК/артикула, затем совпадение по началу или концу ШК
+// (по последним цифрам ищут чаще всего), затем совпадения в названии/артикуле,
+// и в самом конце — случайные совпадения только с цифрами штрихкода.
+function supplyProductMatches(products, clientName, query){
+  const tokens = supplySearchTokens(query);
+  const q = String(query||'').trim().toLowerCase();
+  const out = [];
+  products.forEach((p, idx)=>{
+    const barcodes = supplyProductBarcodes(p, clientName);
+    const textHay = (p.sku+' '+p.name+' '+p.size).toLowerCase();
+    const hay = textHay+' '+barcodes.join(' ').toLowerCase();
+    if(!tokens.every(t=>hay.includes(t))) return;
+    // совпало только за счёт цифр штрихкода (например, «34» из размера в названии
+    // нашлось внутри ШК другого товара) — такие показываем ниже
+    let score = tokens.every(t=>textHay.includes(t)) ? 2 : 3;
+    if(q){
+      const sku = p.sku.toLowerCase();
+      if(sku===q || barcodes.some(b=>b===q)) score = 0;
+      else if(sku.startsWith(q) || barcodes.some(b=>b.startsWith(q) || b.endsWith(q))) score = 1;
+    }
+    out.push({p, barcodes, score, idx});
+  });
+  out.sort((a,b)=>a.score-b.score || a.idx-b.idx);
+  return out;
+}
+// Подсветка найденных фрагментов (с экранированием — названия бывают с кавычками и скобками)
+function supplyHighlight(text, tokens){
+  const src = String(text||'');
+  const low = src.toLowerCase();
+  if(!tokens.length || low.length!==src.length) return escapeHtml(src);
+  const mask = new Array(src.length).fill(false);
+  tokens.forEach(t=>{
+    let from = 0;
+    while(true){
+      const i = low.indexOf(t, from);
+      if(i<0) break;
+      for(let k=i;k<i+t.length;k++) mask[k] = true;
+      from = i + t.length;
+    }
+  });
+  const mark = s=>`<mark style="background:#FFE7A8;color:inherit;padding:0 1px;border-radius:2px">${escapeHtml(s)}</mark>`;
+  let out = '', buf = '', open = false;
+  for(let i=0;i<src.length;i++){
+    if(mask[i]!==open){ out += open ? mark(buf) : escapeHtml(buf); buf = ''; open = mask[i]; }
+    buf += src[i];
+  }
+  return out + (open ? mark(buf) : escapeHtml(buf));
+}
+function renderSupplyManualList(){
+  const box = document.getElementById('supplyManualList');
+  const search = document.getElementById('supplyManualSearch');
+  const client = clients.find(c=>c.id===draftSupplyClientId);
+  if(!box || !search || !client) return;
+  // Когда товар уже выбран, в поле стоит его название — показываем весь список, а не фильтр по нему
+  const hasSelection = !!document.getElementById('supplyManualProduct').value;
+  const query = hasSelection ? '' : search.value.trim();
+  const products = supplyClientProducts(client.name);
+  const matches = supplyProductMatches(products, client.name, query);
+  const tokens = supplySearchTokens(query);
+  supplyManualShown = matches.slice(0, SUPPLY_MANUAL_LIMIT);
+  const newIdx = supplyManualShown.length;
+  if(supplyManualActive > newIdx) supplyManualActive = -1;
+
+  const rows = supplyManualShown.map((m,i)=>`
+    <div ${i===supplyManualActive?'data-active="1"':''} style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line);${i===supplyManualActive?'background:var(--bg)':''}"
+         onmousedown="event.preventDefault();pickSupplyManualProduct(${i})">
+      <div style="font-size:13px"><b>${supplyHighlight(m.p.sku, tokens)}</b>${m.p.size?` · ${supplyHighlight(m.p.size, tokens)}`:''} — ${supplyHighlight(m.p.name||'без названия', tokens)}</div>
+      <div class="mono" style="font-size:11px;color:var(--ink-faint)">${m.barcodes.length ? m.barcodes.map(b=>supplyHighlight(b, tokens)).join(' · ') : 'нет штрихкода'}</div>
+    </div>`).join('');
+  const info = query
+    ? `Найдено: ${matches.length}`
+    : `Всего товаров у клиента: ${products.length}`;
+  const more = matches.length>SUPPLY_MANUAL_LIMIT
+    ? `<div style="padding:6px 12px;font-size:11px;color:var(--ink-faint)">Показаны первые ${SUPPLY_MANUAL_LIMIT} — введите ещё несколько символов, чтобы сузить список</div>` : '';
+  const empty = (query && !matches.length)
+    ? `<div style="padding:10px 12px;font-size:13px;color:var(--ink-soft)">Ничего не найдено по «${escapeHtml(query)}»</div>` : '';
+  box.innerHTML = `
+    <div style="padding:6px 12px;font-size:11px;color:var(--ink-faint);border-bottom:1px solid var(--line);position:sticky;top:0;background:#fff">${info} · ↑↓ и Enter — выбрать, Esc — закрыть</div>
+    ${rows}${more}${empty}
+    <div ${newIdx===supplyManualActive?'data-active="1"':''} style="padding:9px 12px;cursor:pointer;font-size:13px;color:var(--accent);${newIdx===supplyManualActive?'background:var(--bg)':''}"
+         onmousedown="event.preventDefault();pickSupplyManualProduct(${newIdx})">➕ Новый товар (нет в остатках)</div>`;
+  box.style.display = 'block';
+  const act = box.querySelector && box.querySelector('[data-active="1"]');
+  if(act && act.scrollIntoView) act.scrollIntoView({block:'nearest'});
+}
+function openSupplyManualList(){
+  clearTimeout(supplyManualCloseTimer);
+  supplyManualActive = -1;
+  renderSupplyManualList();
+}
+function closeSupplyManualList(){
+  const box = document.getElementById('supplyManualList');
+  if(box) box.style.display = 'none';
+  supplyManualActive = -1;
+}
+function onSupplyManualSearchBlur(){
+  supplyManualCloseTimer = setTimeout(closeSupplyManualList, 150);
+}
+// Человек печатает — прежний выбор недействителен, фильтруем заново
+function onSupplyManualSearchInput(){
+  document.getElementById('supplyManualProduct').value = '';
+  onSupplyManualProductChange('');
+  supplyManualActive = -1;
+  renderSupplyManualList();
+}
+function setSupplyManualProduct(key){
+  const client = clients.find(c=>c.id===draftSupplyClientId);
+  const search = document.getElementById('supplyManualSearch');
+  document.getElementById('supplyManualProduct').value = key;
+  if(key==='__new__') search.value = '➕ Новый товар';
+  else {
+    const p = client ? supplyClientProducts(client.name).find(x=>supplyProductKey(x)===key) : null;
+    search.value = p ? `${p.sku}${p.size?` · ${p.size}`:''} — ${p.name||'без названия'}` : '';
+  }
+  onSupplyManualProductChange(key);
+  closeSupplyManualList();
+  if(key!=='__new__') document.getElementById('supplyManualQty').focus();
+}
+// Товара нет в остатках — открываем форму нового товара, подставив то, что человек ввёл или отсканировал
+function startNewSupplyProduct(rawQuery){
+  setSupplyManualProduct('__new__');
+  const q = String(rawQuery||'').trim();
+  const bc = document.getElementById('supplyManualBarcode');
+  const sku = document.getElementById('supplyManualSkuNew');
+  const name = document.getElementById('supplyManualName');
+  let focusEl = sku;
+  if(/^\d{8,}$/.test(q)) bc.value = q;
+  else if(/^[A-Za-z0-9._\-\/]+$/.test(q)){ sku.value = q.toUpperCase(); focusEl = name; }
+  else if(q){ name.value = q; focusEl = sku; }
+  focusEl.focus();
+}
+function pickSupplyManualProduct(i){
+  if(i >= supplyManualShown.length){
+    startNewSupplyProduct(document.getElementById('supplyManualProduct').value ? '' : document.getElementById('supplyManualSearch').value);
+    return;
+  }
+  setSupplyManualProduct(supplyProductKey(supplyManualShown[i].p));
+}
+function onSupplyManualSearchKey(e){
+  const total = supplyManualShown.length + 1; // + строка «Новый товар»
+  const box = document.getElementById('supplyManualList');
+  const isOpen = box && box.style.display!=='none';
+  if(e.key==='ArrowDown'){
+    e.preventDefault();
+    if(!isOpen){ openSupplyManualList(); return; }
+    supplyManualActive = (supplyManualActive+1) % total;
+    renderSupplyManualList();
+  } else if(e.key==='ArrowUp'){
+    e.preventDefault();
+    supplyManualActive = supplyManualActive<=0 ? total-1 : supplyManualActive-1;
+    renderSupplyManualList();
+  } else if(e.key==='Escape'){
+    closeSupplyManualList();
+  } else if(e.key==='Enter'){
+    e.preventDefault();
+    if(isOpen && supplyManualActive>=0){ pickSupplyManualProduct(supplyManualActive); return; }
+    const q = String(e.target.value||'').trim();
+    if(!q || document.getElementById('supplyManualProduct').value) return;
+    handleSupplyManualScan(q);
+  }
+}
+// Enter в поле поиска (в том числе от сканера штрихкодов): выбираем товар, если он определился
+// однозначно; если нашлось несколько — оставляем список; если нет — предлагаем завести новый товар.
 function handleSupplyManualScan(rawCode){
   const client = clients.find(c=>c.id===draftSupplyClientId);
   if(!client){ toast('Сначала выберите клиента'); return; }
   const code = String(rawCode||'').trim();
   if(!code) return;
   const products = supplyClientProducts(client.name);
-  const select = document.getElementById('supplyManualProduct');
-  let picked = null;
+  // 1) точный штрихкод (основной или дополнительный)
   const inv = findInventoryItemByBarcode(code, client.name);
-  if(inv) picked = products.find(p=>p.sku===inv.sku && (p.size||'')===(inv.size||'')) || null;
+  let picked = inv ? products.find(p=>p.sku===inv.sku && (p.size||'')===(inv.size||'')) : null;
+  const matches = supplyProductMatches(products, client.name, code);
+  // 2) точный артикул (если размер один) или единственное совпадение по части текста
   if(!picked){
-    const bySku = products.filter(p=>p.sku===code.toUpperCase());
-    if(bySku.length===1) picked = bySku[0];
-    else if(bySku.length>1){ toast(`У артикула ${code.toUpperCase()} несколько размеров — выберите нужный в списке`); return; }
+    const exact = matches.filter(m=>m.score===0);
+    if(exact.length===1) picked = exact[0].p;
+    else if(!exact.length && matches.length===1) picked = matches[0].p;
   }
   if(picked){
-    select.value = supplyProductKey(picked);
-    onSupplyManualProductChange(select.value);
     playBeep('ok');
+    setSupplyManualProduct(supplyProductKey(picked));
     toast(`«${picked.name||picked.sku}»${picked.size?` (${picked.size})`:''} — укажите количество`);
-    document.getElementById('supplyManualQty').focus();
     return;
   }
-  // не нашли — предлагаем завести как новый товар, подставив отсканированное
-  select.value = '__new__';
-  onSupplyManualProductChange('__new__');
-  const looksLikeBarcode = /^\d{8,}$/.test(code);
-  document.getElementById(looksLikeBarcode ? 'supplyManualBarcode' : 'supplyManualSkuNew').value = looksLikeBarcode ? code : code.toUpperCase();
+  if(matches.length>1){
+    toast(`Найдено ${matches.length} — выберите нужный в списке или уточните запрос`);
+    renderSupplyManualList();
+    return;
+  }
   playBeep('warn');
   toast(`«${code}» нет среди товаров клиента — заполните данные нового товара`);
-  document.getElementById(looksLikeBarcode ? 'supplyManualSkuNew' : 'supplyManualName').focus();
+  startNewSupplyProduct(code);
 }
 function addSupplyDraftItem(){
   const client = clients.find(c=>c.id===draftSupplyClientId);
   if(!client){ toast('Сначала выберите клиента'); return; }
-  const selected = document.getElementById('supplyManualProduct').value;
-  const qty = parseInt(document.getElementById('supplyManualQty').value, 10);
-  if(!selected){ toast('Выберите товар из списка или «Новый товар»'); return; }
-  if(!(qty>0)){ toast('Укажите количество больше нуля'); return; }
   const products = supplyClientProducts(client.name);
+  let selected = document.getElementById('supplyManualProduct').value;
+  if(!selected){
+    // набрал запрос, но не выбрал строку: если подходит ровно один товар — берём его
+    const q = String(document.getElementById('supplyManualSearch').value||'').trim();
+    if(q){
+      const m = supplyProductMatches(products, client.name, q);
+      if(m.length===1) selected = supplyProductKey(m[0].p);
+    }
+  }
+  const qty = parseInt(document.getElementById('supplyManualQty').value, 10);
+  if(!selected){ toast('Найдите товар в поиске или выберите «Новый товар»'); return; }
+  if(!(qty>0)){ toast('Укажите количество больше нуля'); return; }
   let sku, size, name, barcode;
   if(selected==='__new__'){
     sku = document.getElementById('supplyManualSkuNew').value.trim().toUpperCase();
@@ -140,8 +328,8 @@ function addSupplyDraftItem(){
   else draftSupplyItems.push({sku, size, name, qty, barcode});
   toast(`Добавлено: ${name}${size?` (${size})`:''} — ${qty} шт${existing?` (теперь ${existing.qty})`:''}`);
   renderSuppliesCreatePanel();
-  const scan = document.getElementById('supplyManualScan');
-  if(scan) scan.focus();
+  const search = document.getElementById('supplyManualSearch');
+  if(search) search.focus();
 }
 function setSupplyDraftQty(idx, value){
   const q = parseInt(value, 10);
@@ -907,18 +1095,11 @@ function renderSuppliesCreatePanel(){
     <div style="border-top:1px solid var(--line);padding-top:14px;margin-top:16px">
       <div class="eyebrow" style="margin-bottom:8px">Добавить товар вручную — без Excel</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-        <div>
-          <div class="eyebrow" style="margin-bottom:6px">Сканер / штрихкод или артикул</div>
-          <input class="search mono" id="supplyManualScan" placeholder="Отсканируйте ШК…" style="width:210px;max-width:100%" autocomplete="off"
-            onkeydown="if(event.key==='Enter'){event.preventDefault();handleSupplyManualScan(this.value);this.value='';}">
-        </div>
-        <div>
-          <div class="eyebrow" style="margin-bottom:6px">Товар клиента (${products.length})</div>
-          <select class="search" id="supplyManualProduct" style="width:340px;max-width:100%" onchange="onSupplyManualProductChange(this.value)">
-            <option value="">— выберите —</option>
-            ${products.map(p=>`<option value="${escapeHtml(supplyProductKey(p))}">${escapeHtml(p.sku)}${p.size?` · ${escapeHtml(p.size)}`:''} — ${escapeHtml(p.name||'без названия')}${p.barcode?'':' (нет ШК)'}</option>`).join('')}
-            <option value="__new__">➕ Новый товар (нет в остатках)</option>
-          </select>
+        <div style="flex:1 1 340px;min-width:240px;max-width:520px">
+          <div class="eyebrow" style="margin-bottom:6px">Товар клиента (${products.length}) — поиск по названию, артикулу или ШК</div>
+          <input type="hidden" id="supplyManualProduct" value="">
+          <input class="search" id="supplyManualSearch" placeholder="Начните вводить или отсканируйте ШК…" style="width:100%" autocomplete="off"
+            onfocus="this.select();openSupplyManualList()" oninput="onSupplyManualSearchInput()" onblur="onSupplyManualSearchBlur()" onkeydown="onSupplyManualSearchKey(event)">
         </div>
         <div>
           <div class="eyebrow" style="margin-bottom:6px">Кол-во</div>
@@ -927,6 +1108,7 @@ function renderSuppliesCreatePanel(){
         </div>
         <button class="btn btn-accent" onclick="addSupplyDraftItem()">＋ Добавить в поставку</button>
       </div>
+      <div id="supplyManualList" style="display:none;margin-top:8px;max-width:640px;max-height:300px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;background:#fff"></div>
       <div id="supplyManualNewFields" style="display:none;gap:10px;flex-wrap:wrap;margin-top:10px">
         <input class="search mono" id="supplyManualSkuNew" placeholder="Артикул *" style="width:150px;max-width:100%" autocomplete="off">
         <input class="search" id="supplyManualName" placeholder="Наименование" style="width:240px;max-width:100%" autocomplete="off">
