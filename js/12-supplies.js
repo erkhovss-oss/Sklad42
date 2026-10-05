@@ -24,7 +24,159 @@ function downloadSupplyTemplate(){
   XLSX.utils.book_append_sheet(wb, ws, 'Поставка');
   XLSX.writeFile(wb, 'shablon_postavka.xlsx');
 }
-function setDraftSupplyClient(id){
+// Товары клиента для плановой поставки: уникальные по артикулу+размеру,
+// без склада «БРАК» и без виртуальных наборов (их физически не привозят).
+function supplyClientProducts(clientName){
+  const map = new Map();
+  inventory.forEach(i=>{
+    if((i.client||'')!==(clientName||'')) return;
+    if((i.warehouseId||'MAIN')==='BRAK') return;
+    if(i.isKit && i.kitMode!=='assembled') return;
+    const key = i.sku+'~~'+(i.size||'');
+    const prev = map.get(key);
+    if(!prev) map.set(key, {sku:i.sku, size:i.size||'', name:i.name||'', barcode:i.barcode||''});
+    else {
+      if(!prev.barcode && i.barcode) prev.barcode = i.barcode;
+      if(!prev.name && i.name) prev.name = i.name;
+    }
+  });
+  return [...map.values()].sort((a,b)=>
+    a.sku.localeCompare(b.sku,'ru',{numeric:true}) || (a.size||'').localeCompare(b.size||'','ru',{numeric:true}));
+}
+function supplyProductKey(p){ return p.sku+'~~'+(p.size||''); }
+
+// Шаблон Excel, уже заполненный товарами выбранного клиента: остаётся проставить количество.
+// Строки с пустым количеством при загрузке пропускаются, так что лишние товары удалять не нужно.
+function downloadClientSupplyTemplate(){
+  const client = clients.find(c=>c.id===draftSupplyClientId);
+  if(!client){ toast('Сначала выберите клиента — шаблон собирается из его товаров'); return; }
+  const products = supplyClientProducts(client.name);
+  if(!products.length){
+    toast('У клиента пока нет товаров в остатках — скачан обычный шаблон с примерами');
+    downloadSupplyTemplate();
+    return;
+  }
+  const data = [['Артикул','Наименование','Размер','ШК','Кол-во']];
+  products.forEach(p=>data.push([p.sku, p.name, p.size, p.barcode, '']));
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:14},{wch:34},{wch:10},{wch:16},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Поставка');
+  const safeName = client.name.replace(/[^\p{L}\p{N}]+/gu,'_').replace(/^_+|_+$/g,'') || 'klient';
+  XLSX.writeFile(wb, `shablon_postavka_${safeName}.xlsx`);
+  toast(`Шаблон скачан: ${products.length} товаров клиента — заполните столбец «Кол-во»`);
+}
+
+// ---------- ручное добавление позиций в плановую поставку ----------
+function onSupplyManualProductChange(value){
+  const box = document.getElementById('supplyManualNewFields');
+  if(box) box.style.display = value==='__new__' ? 'flex' : 'none';
+}
+// Сканер: находит товар клиента по штрихкоду (или по артикулу) и выбирает его в списке.
+function handleSupplyManualScan(rawCode){
+  const client = clients.find(c=>c.id===draftSupplyClientId);
+  if(!client){ toast('Сначала выберите клиента'); return; }
+  const code = String(rawCode||'').trim();
+  if(!code) return;
+  const products = supplyClientProducts(client.name);
+  const select = document.getElementById('supplyManualProduct');
+  let picked = null;
+  const inv = findInventoryItemByBarcode(code, client.name);
+  if(inv) picked = products.find(p=>p.sku===inv.sku && (p.size||'')===(inv.size||'')) || null;
+  if(!picked){
+    const bySku = products.filter(p=>p.sku===code.toUpperCase());
+    if(bySku.length===1) picked = bySku[0];
+    else if(bySku.length>1){ toast(`У артикула ${code.toUpperCase()} несколько размеров — выберите нужный в списке`); return; }
+  }
+  if(picked){
+    select.value = supplyProductKey(picked);
+    onSupplyManualProductChange(select.value);
+    playBeep('ok');
+    toast(`«${picked.name||picked.sku}»${picked.size?` (${picked.size})`:''} — укажите количество`);
+    document.getElementById('supplyManualQty').focus();
+    return;
+  }
+  // не нашли — предлагаем завести как новый товар, подставив отсканированное
+  select.value = '__new__';
+  onSupplyManualProductChange('__new__');
+  const looksLikeBarcode = /^\d{8,}$/.test(code);
+  document.getElementById(looksLikeBarcode ? 'supplyManualBarcode' : 'supplyManualSkuNew').value = looksLikeBarcode ? code : code.toUpperCase();
+  playBeep('warn');
+  toast(`«${code}» нет среди товаров клиента — заполните данные нового товара`);
+  document.getElementById(looksLikeBarcode ? 'supplyManualSkuNew' : 'supplyManualName').focus();
+}
+function addSupplyDraftItem(){
+  const client = clients.find(c=>c.id===draftSupplyClientId);
+  if(!client){ toast('Сначала выберите клиента'); return; }
+  const selected = document.getElementById('supplyManualProduct').value;
+  const qty = parseInt(document.getElementById('supplyManualQty').value, 10);
+  if(!selected){ toast('Выберите товар из списка или «Новый товар»'); return; }
+  if(!(qty>0)){ toast('Укажите количество больше нуля'); return; }
+  const products = supplyClientProducts(client.name);
+  let sku, size, name, barcode;
+  if(selected==='__new__'){
+    sku = document.getElementById('supplyManualSkuNew').value.trim().toUpperCase();
+    size = document.getElementById('supplyManualSize').value.trim();
+    name = document.getElementById('supplyManualName').value.trim();
+    barcode = document.getElementById('supplyManualBarcode').value.trim();
+    if(!sku){ toast('Укажите артикул нового товара'); return; }
+    const known = products.find(p=>p.sku===sku && (p.size||'')===size);
+    if(known){ name = name || known.name; barcode = barcode || known.barcode; }
+    if(barcode){
+      const owner = findInventoryItemByBarcode(barcode, client.name);
+      if(owner && !(owner.sku===sku && (owner.size||'')===size)){
+        toast(`Штрихкод ${barcode} уже принадлежит товару «${owner.name}» (${owner.sku}) — проверьте артикул`);
+        return;
+      }
+    }
+    name = name || sku;
+  } else {
+    const p = products.find(x=>supplyProductKey(x)===selected);
+    if(!p){ toast('Этого товара уже нет в остатках клиента — выберите другой'); return; }
+    sku = p.sku; size = p.size||''; name = p.name||p.sku; barcode = p.barcode||'';
+  }
+  const existing = draftSupplyItems.find(d=>d.sku===sku && (d.size||'')===size);
+  if(existing) existing.qty += qty;
+  else draftSupplyItems.push({sku, size, name, qty, barcode});
+  toast(`Добавлено: ${name}${size?` (${size})`:''} — ${qty} шт${existing?` (теперь ${existing.qty})`:''}`);
+  renderSuppliesCreatePanel();
+  const scan = document.getElementById('supplyManualScan');
+  if(scan) scan.focus();
+}
+function setSupplyDraftQty(idx, value){
+  const q = parseInt(value, 10);
+  const item = draftSupplyItems[idx];
+  if(!item) return;
+  if(!(q>0)){ toast('Количество должно быть больше нуля — чтобы убрать позицию, нажмите ✕'); renderSuppliesCreatePanel(); return; }
+  item.qty = q;
+  const el = document.getElementById('supplyDraftSummary');
+  if(el) el.textContent = supplyDraftSummaryText();
+}
+function removeSupplyDraftItem(idx){
+  draftSupplyItems.splice(idx, 1);
+  if(!draftSupplyItems.length) draftSupplyFileName = '';
+  renderSuppliesCreatePanel();
+}
+async function clearSupplyDraft(){
+  if(!draftSupplyItems.length) return;
+  if(!await customConfirm(`Очистить весь список (${draftSupplyItems.length} поз.)?`, {okText:'Очистить'})) return;
+  draftSupplyItems = [];
+  draftSupplyFileName = '';
+  renderSuppliesCreatePanel();
+}
+function supplyDraftSummaryText(){
+  if(!draftSupplyItems.length) return 'Список пуст — загрузите Excel или добавьте товары вручную';
+  const total = draftSupplyItems.reduce((s,d)=>s+d.qty,0);
+  return `${draftSupplyFileName ? `Файл: ${draftSupplyFileName} · ` : ''}${draftSupplyItems.length} SKU · ${total} шт`;
+}
+// Список позиций привязан к каталогу конкретного клиента — при смене клиента не оставляем чужие товары.
+async function setDraftSupplyClient(id){
+  if(id !== draftSupplyClientId && draftSupplyItems.length){
+    const ok = await customConfirm(`В списке уже ${draftSupplyItems.length} поз. другого клиента. При смене клиента список будет очищен. Продолжить?`, {okText:'Сменить и очистить'});
+    if(!ok){ renderSuppliesCreatePanel(); return; }
+    draftSupplyItems = [];
+    draftSupplyFileName = '';
+  }
   draftSupplyClientId = id;
   renderSuppliesCreatePanel();
 }
@@ -32,11 +184,12 @@ function handleSupplyExcelUpload(inputEl){
   const file = inputEl.files[0];
   if(!file) return;
   const reader = new FileReader();
-  reader.onload = function(e){
+  reader.onload = async function(e){
     try{
       const workbook = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+      const client = clients.find(c=>c.id===draftSupplyClientId);
       const items = [];
       let unmatched = 0;
       for(let i=1;i<rows.length;i++){ // строка 0 — заголовок
@@ -48,7 +201,8 @@ function handleSupplyExcelUpload(inputEl){
         const barcode = String(row[3]||'').trim();
         const qty = parseInt(row[4]) || 0;
         if(!sku || qty<=0) continue;
-        const invItem = inventory.find(x=>x.sku===sku && (x.size||'')===size);
+        // если клиент уже выбран — ищем товар только среди его товаров, чтобы не подтянуть чужой штрихкод
+        const invItem = inventory.find(x=>x.sku===sku && (x.size||'')===size && (!client || (x.client||'')===client.name));
         const name = nameFromFile || (invItem ? invItem.name : sku);
         const finalBarcode = barcode || (invItem ? invItem.barcode||'' : '');
         if(!invItem) unmatched++;
@@ -57,15 +211,20 @@ function handleSupplyExcelUpload(inputEl){
         else items.push({sku, size, name, qty, barcode: finalBarcode});
       }
       if(items.length===0){
-        toast('В файле не найдено строк с артикулом и количеством');
+        toast('В файле не найдено строк с артикулом и количеством — заполните столбец «Кол-во»');
         inputEl.value = '';
         return;
+      }
+      if(draftSupplyItems.length){
+        const ok = await customConfirm(`В списке уже ${draftSupplyItems.length} поз. Заменить их содержимым файла (${items.length} SKU)?`, {okText:'Заменить'});
+        if(!ok){ inputEl.value = ''; return; }
       }
       draftSupplyItems = items;
       draftSupplyFileName = file.name;
       toast(`Файл прочитан: ${items.length} SKU${unmatched?`, ${unmatched} не найдены в остатках`:''}`);
       renderSuppliesCreatePanel();
     }catch(err){
+      console.error(err);
       toast('Не удалось прочитать файл — проверьте формат Excel');
     }
     inputEl.value = '';
@@ -75,7 +234,7 @@ function handleSupplyExcelUpload(inputEl){
 function createSupply(){
   const client = clients.find(c=>c.id===draftSupplyClientId);
   if(!client){ toast('Выберите клиента склада / ИП'); return; }
-  if(draftSupplyItems.length===0){ toast('Загрузите Excel-файл с позициями поставки'); return; }
+  if(draftSupplyItems.length===0){ toast('Добавьте позиции: загрузите Excel или добавьте товары вручную'); return; }
   const requiresKiz = document.getElementById('draftSupplyRequiresKiz').checked;
   const warehouseId = document.getElementById('supplyWarehouseSelect').value || 'MAIN';
   const id = 'ПС-' + Date.now();
@@ -88,6 +247,8 @@ function createSupply(){
   draftSupplyItems = [];
   draftSupplyClientId = '';
   draftSupplyFileName = '';
+  draftSupplyRequiresKiz = false;
+  draftSupplyWarehouseId = 'MAIN';
   toast(`Поставка создана — статус «Едет» (склад: ${warehouseName(warehouseId)})`);
   renderSupplies();
   sb.from('supplies').insert({id, client_id: client.id, client_name: client.name, status:'planned', created_at: createdAt.toISOString(), requires_kiz: requiresKiz, warehouse_id: warehouseId}).then(({error})=>{
@@ -727,15 +888,62 @@ function renderSupplies(){
 }
 function renderSuppliesCreatePanel(){
   const panel = document.getElementById('supplyCreatePanel');
-  const canCreate = draftSupplyClientId && draftSupplyItems.length>0;
-  const fileLabel = draftSupplyFileName
-    ? `${draftSupplyFileName} — ${draftSupplyItems.length} SKU · ${draftSupplyItems.reduce((s,d)=>s+d.qty,0)} шт`
-    : 'Файл не выбран';
+  const client = clients.find(c=>c.id===draftSupplyClientId);
+  const canCreate = !!client && draftSupplyItems.length>0;
+  const products = client ? supplyClientProducts(client.name) : [];
+  const knownKeys = new Set(products.map(supplyProductKey));
+
+  const draftRows = draftSupplyItems.map((d,idx)=>`
+    <tr>
+      <td data-label="Артикул" class="mono">${escapeHtml(d.sku)}${client && !knownKeys.has(d.sku+'~~'+(d.size||'')) ? ' <span style="font-size:10px;color:var(--accent);font-family:Inter,sans-serif" title="Такого товара у клиента ещё нет в остатках — он появится после приёмки">новый</span>' : ''}</td>
+      <td data-label="Наименование">${escapeHtml(d.name)}</td>
+      <td data-label="Размер">${escapeHtml(d.size||'—')}</td>
+      <td data-label="ШК" class="mono">${escapeHtml(d.barcode||'—')}</td>
+      <td data-label="Кол-во"><input class="search mono" type="number" min="1" value="${d.qty}" style="width:84px;padding:6px 10px" onchange="setSupplyDraftQty(${idx}, this.value)"></td>
+      <td style="text-align:right"><button class="btn btn-ghost" style="padding:4px 10px;color:var(--warn)" title="Убрать из списка" onclick="removeSupplyDraftItem(${idx})">✕</button></td>
+    </tr>`).join('');
+
+  const manualBlock = client ? `
+    <div style="border-top:1px solid var(--line);padding-top:14px;margin-top:16px">
+      <div class="eyebrow" style="margin-bottom:8px">Добавить товар вручную — без Excel</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Сканер / штрихкод или артикул</div>
+          <input class="search mono" id="supplyManualScan" placeholder="Отсканируйте ШК…" style="width:210px;max-width:100%" autocomplete="off"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();handleSupplyManualScan(this.value);this.value='';}">
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Товар клиента (${products.length})</div>
+          <select class="search" id="supplyManualProduct" style="width:340px;max-width:100%" onchange="onSupplyManualProductChange(this.value)">
+            <option value="">— выберите —</option>
+            ${products.map(p=>`<option value="${escapeHtml(supplyProductKey(p))}">${escapeHtml(p.sku)}${p.size?` · ${escapeHtml(p.size)}`:''} — ${escapeHtml(p.name||'без названия')}${p.barcode?'':' (нет ШК)'}</option>`).join('')}
+            <option value="__new__">➕ Новый товар (нет в остатках)</option>
+          </select>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Кол-во</div>
+          <input class="search mono" id="supplyManualQty" type="number" min="1" placeholder="шт" style="width:90px"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();addSupplyDraftItem();}">
+        </div>
+        <button class="btn btn-accent" onclick="addSupplyDraftItem()">＋ Добавить в поставку</button>
+      </div>
+      <div id="supplyManualNewFields" style="display:none;gap:10px;flex-wrap:wrap;margin-top:10px">
+        <input class="search mono" id="supplyManualSkuNew" placeholder="Артикул *" style="width:150px;max-width:100%" autocomplete="off">
+        <input class="search" id="supplyManualName" placeholder="Наименование" style="width:240px;max-width:100%" autocomplete="off">
+        <input class="search" id="supplyManualSize" placeholder="Размер" style="width:100px;max-width:100%" autocomplete="off">
+        <input class="search mono" id="supplyManualBarcode" placeholder="ШК" style="width:170px;max-width:100%" autocomplete="off">
+      </div>
+    </div>
+  ` : `
+    <div style="border-top:1px solid var(--line);padding-top:14px;margin-top:16px;font-size:13px;color:var(--ink-faint)">
+      Выберите клиента — здесь появится список его товаров, чтобы добавлять позиции без Excel.
+    </div>
+  `;
 
   panel.innerHTML = `
     <div class="panel" style="padding:20px;margin-bottom:16px">
       <h3 style="font-size:18px;margin-bottom:4px">Создать плановую поставку</h3>
-      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px 0">Скачайте шаблон Excel (артикул, наименование, размер, ШК, количество), выберите клиента и загрузите — поставка появится в приёмке со статусом «Едет». Разные размеры одного артикула — отдельные строки в файле, у каждой свой ШК.</p>
+      <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px 0">Позиции можно добавить двумя способами: загрузить Excel (артикул, наименование, размер, ШК, количество) или собрать список вручную из товаров клиента. «Шаблон с товарами клиента» уже содержит все его товары — остаётся проставить количество. Разные размеры одного артикула — отдельные строки.</p>
 
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
         <div>
@@ -747,7 +955,7 @@ function renderSuppliesCreatePanel(){
         </div>
         <div>
           <div class="eyebrow" style="margin-bottom:6px">На какой склад принимаем</div>
-          <select class="search" id="supplyWarehouseSelect" style="width:220px;max-width:100%" ${hasFullWarehouseAccess()?'':'disabled'}>
+          <select class="search" id="supplyWarehouseSelect" style="width:220px;max-width:100%" ${hasFullWarehouseAccess()?'':'disabled'} onchange="draftSupplyWarehouseId=this.value">
             ${hasFullWarehouseAccess()
               ? warehouses.map(w=>`<option value="${w.id}" ${(draftSupplyWarehouseId||'MAIN')===w.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')
               : `<option value="${myWarehouseId()}" selected>${escapeHtml(warehouseName(myWarehouseId()))}</option>`}
@@ -756,18 +964,34 @@ function renderSuppliesCreatePanel(){
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <button class="btn btn-ghost" onclick="downloadSupplyTemplate()">Скачать шаблон</button>
+        <button class="btn btn-ghost" onclick="downloadClientSupplyTemplate()" title="Excel, заполненный товарами выбранного клиента">Шаблон с товарами клиента</button>
+        <button class="btn btn-ghost" onclick="downloadSupplyTemplate()" title="Пустой шаблон с примерами строк">Пустой шаблон</button>
         <label class="btn btn-ghost" style="cursor:pointer;margin:0">
           Выбрать Excel
           <input type="file" accept=".xlsx,.xls" style="display:none" onchange="handleSupplyExcelUpload(this)">
         </label>
-        <button class="btn ${canCreate?'btn-accent':'btn-ghost'}" ${canCreate?'':'disabled'} onclick="createSupply()">Создать поставку</button>
       </div>
-      <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--ink-soft);cursor:pointer;flex-wrap:wrap">
-        <input type="checkbox" id="draftSupplyRequiresKiz">
+      ${manualBlock}
+
+      ${draftSupplyItems.length ? `
+        <div style="margin-top:16px">
+          <div class="eyebrow" style="margin-bottom:8px">Состав поставки</div>
+          <table class="card-table">
+            <thead><tr><th>Артикул</th><th>Наименование</th><th>Размер</th><th>ШК</th><th>Кол-во</th><th></th></tr></thead>
+            <tbody>${draftRows}</tbody>
+          </table>
+        </div>
+      ` : ''}
+
+      <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:13px;color:var(--ink-soft);cursor:pointer;flex-wrap:wrap">
+        <input type="checkbox" id="draftSupplyRequiresKiz" ${draftSupplyRequiresKiz?'checked':''} onchange="draftSupplyRequiresKiz=this.checked">
         Требует приёмку по КИЗ (Честный Знак) — при сканировании штрихкода дополнительно попросит код каждой единицы
       </label>
-      <div style="font-size:12px;color:var(--ink-faint);margin-top:10px">${fileLabel}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px">
+        <button class="btn ${canCreate?'btn-accent':'btn-ghost'}" ${canCreate?'':'disabled'} onclick="createSupply()">Создать поставку</button>
+        ${draftSupplyItems.length ? `<button class="btn btn-ghost" style="color:var(--warn)" onclick="clearSupplyDraft()">Очистить список</button>` : ''}
+        <span id="supplyDraftSummary" style="font-size:12px;color:var(--ink-faint)">${supplyDraftSummaryText()}</span>
+      </div>
     </div>
   `;
 }

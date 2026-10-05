@@ -11,6 +11,7 @@ try{
   sb.auth.onAuthStateChange((event)=>{
     if(event === 'SIGNED_OUT'){
       currentUser = null;
+      try{ stopRealtime(); }catch(e){}
       const appRoot = document.getElementById('appRoot');
       const loginScreen = document.getElementById('loginScreen');
       if(appRoot) appRoot.style.display = 'none';
@@ -82,6 +83,7 @@ let draftSupplyItems = [];
 let draftSupplyClientId = '';
 let draftSupplyWarehouseId = 'MAIN';
 let draftSupplyFileName = '';
+let draftSupplyRequiresKiz = false;
 let currentSuppliesView = 'planned';
 let activeSupplyId = null;
 let deletingSupplyId = null;
