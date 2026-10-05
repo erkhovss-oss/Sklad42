@@ -158,7 +158,8 @@ function toggleBoxExpand(boxId){
   expandedBoxId = expandedBoxId===boxId ? null : boxId;
   renderOutboundTableWrap();
 }
-function addItemToBox(supply, boxId, sku, size, qty){
+function addItemToBox(supply, boxId, sku, size, qty, opts){
+  opts = opts || {};
   const box = outboundBoxes.find(b=>b.id===boxId);
   if(!box) return false;
   const planItem = supply.items.find(i=>i.sku===sku && (i.size||'')===(size||''));
@@ -182,6 +183,8 @@ function addItemToBox(supply, boxId, sku, size, qty){
   });
   if(remaining - qty <= 0){
     playBeep('ok');
+    // при массовом «добавить всё нераспределённое» голос не включаем — иначе он повторялся бы на каждой позиции
+    if(!opts.silent) speakRu('Товар собран');
     toast(`✅ Всё добавлено: «${planItem.name}»${size?` (${size})`:''}`);
   }
   return true;
@@ -240,17 +243,35 @@ function addAllRemainingToBox(supplyId, boxId){
   let addedCount = 0;
   supply.items.forEach(i=>{
     const remaining = getRemainingForItem(supply, i.sku, i.size||'');
-    if(remaining > 0 && addItemToBox(supply, boxId, i.sku, i.size||'', remaining)) addedCount++;
+    if(remaining > 0 && addItemToBox(supply, boxId, i.sku, i.size||'', remaining, {silent:true})) addedCount++;
   });
   if(addedCount===0){ toast('Нечего добавлять — весь товар уже распределён по коробам'); return; }
   toast(`Добавлено в короб: ${addedCount} поз. (всё нераспределённое)`);
   renderOutboundTableWrap();
+}
+// Товар отсканировали ещё раз, хотя нужное количество уже собрано: сигнал + голос + окно,
+// которое нельзя не заметить (одной подсказки-тоста и звука на шумном складе бывает недостаточно).
+function reportItemAlreadyComplete(supply, planItem, boxId){
+  const size = planItem.size || '';
+  const planned = supply.items.filter(i=>i.sku===planItem.sku && (i.size||'')===size).reduce((a,i)=>a+i.qty,0);
+  const packed = planned - getRemainingForItem(supply, planItem.sku, size);
+  playBeep('error');
+  speakRu('Товар уже собран');
+  showScanAlert({
+    icon: '✋',
+    title: 'Товар уже собран',
+    subject: `${planItem.name}${size?` (${size})`:''}`,
+    message: `По плану ${planned} шт — в коробах уже ${packed} шт.\nБольше добавлять не нужно: отложите этот товар.`,
+    tone: 'warn',
+    onClose: ()=>{ const el = document.getElementById('boxScanInput-'+boxId); if(el) el.focus(); }
+  });
 }
 function renderBoxScanHandler(supplyId, boxId){
   const input = document.getElementById('boxScanInput-'+boxId);
   if(!input) return;
   input.addEventListener('keydown', (e)=>{
     if(e.key!=='Enter') return;
+    e.preventDefault(); // иначе Enter сканера «нажмёт» кнопку окна-уведомления, куда уйдёт фокус
     const code = input.value.trim();
     input.value = '';
     if(!code) return;
@@ -259,6 +280,10 @@ function renderBoxScanHandler(supplyId, boxId){
     if(!planItem){
       playBeep('error');
       alert(`⚠ Штрихкод ${code} не найден среди товаров этой поставки.\n\nПроверьте, туда ли отсканирован товар.`);
+      return;
+    }
+    if(getRemainingForItem(supply, planItem.sku, planItem.size||'') <= 0){
+      reportItemAlreadyComplete(supply, planItem, boxId);
       return;
     }
     if(addItemToBox(supply, boxId, planItem.sku, planItem.size||'', 1)){

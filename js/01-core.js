@@ -329,6 +329,25 @@ function announceCell(cellNumber){
     window.speechSynthesis.speak(utter);
   }catch(e){ /* синтез речи недоступен в этом браузере — не критично */ }
 }
+// Произносит короткую фразу голосом (например, «Товар собран»). Уважает общий переключатель
+// звука. Новая фраза прерывает ещё не договорённую предыдущую — при быстром сканировании
+// важна последняя. Возвращает true, если речь запущена.
+function speakRu(text){
+  if(!soundEnabled || !text) return false;
+  try{
+    const synth = window.speechSynthesis;
+    if(!synth) return false;
+    if(synth.speaking || synth.pending) synth.cancel();
+    const utter = new SpeechSynthesisUtterance(String(text));
+    utter.lang = 'ru-RU';
+    utter.rate = 1;
+    utter.volume = 1;
+    const voice = (synth.getVoices ? synth.getVoices() : []).find(v=>/^ru/i.test(v.lang));
+    if(voice) utter.voice = voice;
+    synth.speak(utter);
+    return true;
+  }catch(e){ return false; /* синтез речи недоступен — не критично, остаётся окно и звуковой сигнал */ }
+}
 // Профилактика известного зависания speechSynthesis в Chrome при долгой работе:
 // если движок простаивает, периодически сбрасываем его внутреннюю очередь.
 if('speechSynthesis' in window){

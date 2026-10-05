@@ -1495,6 +1495,37 @@ function customConfirm(message, options={}){
     });
   });
 }
+// Заметное окно для сообщений, которые нельзя пропустить (звук в шумном складе слышно не всегда).
+// Закрывается только кнопкой «Понятно» или Esc — не по клику мимо окна, чтобы не закрыть случайно.
+function showScanAlert(opts){
+  const prev = document.getElementById('scanAlertOverlay');
+  if(prev) prev.remove(); // повторные сканы не копят окна друг на друге
+  const overlay = document.createElement('div');
+  overlay.id = 'scanAlertOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
+  const color = opts.tone==='ok' ? 'var(--ok)' : 'var(--warn)';
+  overlay.innerHTML = `
+    <div role="alertdialog" aria-modal="true" style="background:#fff;border-radius:14px;padding:26px 24px;max-width:460px;width:100%;box-shadow:0 12px 48px rgba(0,0,0,0.3);border-top:8px solid ${color};text-align:center">
+      <div style="font-size:44px;line-height:1">${opts.icon||'⚠️'}</div>
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:32px;font-weight:700;text-transform:uppercase;margin:10px 0 8px;color:${color}">${escapeHtml(opts.title||'')}</div>
+      ${opts.subject ? `<div style="font-size:17px;font-weight:600;margin-bottom:8px">${escapeHtml(opts.subject)}</div>` : ''}
+      ${opts.message ? `<div style="font-size:14px;color:var(--ink-soft);line-height:1.6;margin-bottom:20px;white-space:pre-line">${escapeHtml(opts.message)}</div>` : ''}
+      <button class="btn btn-accent" id="scanAlertOk" style="width:100%;justify-content:center;padding:14px;font-size:16px">Понятно</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const openedAt = Date.now();
+  const onKey = (e)=>{ if(e.key==='Escape'){ e.preventDefault(); close(); } };
+  const close = ()=>{
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+    if(opts.onClose) opts.onClose();
+  };
+  document.addEventListener('keydown', onKey, true);
+  const ok = overlay.querySelector('#scanAlertOk');
+  // Enter от сканера, который только что вызвал это окно, не должен сразу его «нажать»
+  ok.onclick = ()=>{ if(Date.now()-openedAt < 400) return; close(); };
+  setTimeout(()=>ok.focus(), 0);
+}
 async function getQzPrinterName(){
   let stored = null;
   try{ stored = localStorage.getItem('teleshop_qz_printer_name'); }catch(e){}
