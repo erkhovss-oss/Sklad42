@@ -969,7 +969,10 @@ function renderSupplyReceivingPanel(s){
   return `
     <div style="border-top:1px solid var(--line);padding:16px 18px;background:var(--panel)" onclick="event.stopPropagation()">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <button class="btn btn-ghost sound-toggle" style="padding:5px 10px" onclick="toggleSound()">${soundEnabled?'🔊 Звук':'🔇 Звук'}</button>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-ghost sound-toggle" style="padding:5px 10px" onclick="toggleSound()">${soundEnabled?'🔊 Звук':'🔇 Звук'}</button>
+          ${voiceRateSelectHtml(false)}
+        </div>
         ${renderSupplyDeleteControl(s)}
       </div>
 

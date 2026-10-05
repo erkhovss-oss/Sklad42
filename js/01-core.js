@@ -1,3 +1,7 @@
+
+
+
+
 // ---------- SUPABASE ----------
 const SUPABASE_URL = 'https://mixsvqjlrifkcoeuuydc.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1peHN2cWpscmlma2NvZXV1eWRjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MTYyNzEsImV4cCI6MjEwMzA5MjI3MX0.qIdelCgVkSDMc20f5X1parpfx2njHB5Pe3xk3ogbCr4';
@@ -139,6 +143,30 @@ function toggleSound(){
   try{ localStorage.setItem('sklad42_sound', soundEnabled?'1':'0'); }catch(e){}
   document.querySelectorAll('.sound-toggle').forEach(btn=>{ btn.textContent = soundEnabled ? '🔊 Звук' : '🔇 Звук'; });
   if(soundEnabled) playBeep('ok');
+}
+// Скорость голоса: 1 — обычная, 2 — вдвое быстрее. Короткие фразы («Товар собран») понятны и на ×2,
+// а название числа из нескольких слов («двести пятьдесят») на таком темпе у многих голосов
+// «съедается» (звучит как «двет») — поэтому номер ячейки читается не быстрее CELL_RATE_MAX.
+const CELL_RATE_MAX = 1.2;
+let voiceRate = 2;
+try{ const r = parseFloat(localStorage.getItem('sklad42_voice_rate')); if([1,1.5,2].includes(r)) voiceRate = r; }catch(e){}
+function cellVoiceRate(){ return Math.min(voiceRate, CELL_RATE_MAX); }
+function voiceRateSelectHtml(dark){
+  const style = dark
+    ? 'background:transparent;color:#fff;border:1px solid #3A362D;border-radius:8px;padding:8px 6px;font-size:12px;cursor:pointer'
+    : 'background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:5px 6px;font-size:12px;cursor:pointer';
+  return `<select class="voice-rate-select" title="Скорость голоса" style="${style}" onchange="setVoiceRate(this.value)">
+    ${[[1,'Голос ×1'],[1.5,'Голос ×1,5'],[2,'Голос ×2']].map(([v,l])=>`<option style="color:#000" value="${v}" ${voiceRate===v?'selected':''}>${l}</option>`).join('')}
+  </select>`;
+}
+function setVoiceRate(v){
+  const r = parseFloat(v);
+  if(![1,1.5,2].includes(r)) return;
+  voiceRate = r;
+  try{ localStorage.setItem('sklad42_voice_rate', String(r)); }catch(e){}
+  document.querySelectorAll('.voice-rate-select').forEach(s=>{ s.value = String(r); });
+  // сразу даём послушать новую скорость: фраза и номер ячейки (у него темп ограничен отдельно)
+  if(speakRu('Товар собран')) setTimeout(()=>announceCell(250), 1300);
 }
 let recentReceivingActions = [];
 let lastScanInfo = null;
@@ -330,9 +358,6 @@ function playBeep(type){
 
 // Голос: выбираем русский ЛОКАЛЬНЫЙ голос — он стартует заметно быстрее сетевого
 // (например, «Google русский» в Chrome ходит в интернет за каждой фразой).
-// Скорость произношения: 1 — обычная, 2 — вдвое быстрее. Одно число для всех голосовых фраз
-// («Товар собран», номер ячейки и т.д.). Если на каком-то голосе звучит слишком быстро — уменьшите.
-const VOICE_RATE = 2;
 let ruVoice = null;
 let lastUtterance = null; // ссылка нужна, чтобы Chrome не «потерял» фразу сборщиком мусора до конца
 function pickRuVoice(){
@@ -368,7 +393,7 @@ function announceCell(cellNumber){
     }
     const utter = new SpeechSynthesisUtterance(String(cellNumber));
     utter.lang = 'ru-RU';
-    utter.rate = VOICE_RATE;
+    utter.rate = cellVoiceRate();
     const voice = ruVoice || pickRuVoice();
     if(voice) utter.voice = voice;
     lastUtterance = utter;
@@ -386,7 +411,7 @@ function speakRu(text){
     if(synth.speaking || synth.pending) synth.cancel();
     const utter = new SpeechSynthesisUtterance(String(text));
     utter.lang = 'ru-RU';
-    utter.rate = VOICE_RATE;
+    utter.rate = voiceRate;
     utter.volume = 1;
     const voice = ruVoice || pickRuVoice();
     if(voice) utter.voice = voice;

@@ -629,6 +629,7 @@ function renderReceiving(mode){
           <button class="btn ${currentReceivingMode==='scan'?'btn-accent':'btn-ghost'}" style="flex:1;justify-content:center;${currentReceivingMode!=='scan'?'color:#fff;border-color:#3A362D':''}" onclick="renderReceiving('scan')">Сканером</button>
           <button class="btn ${currentReceivingMode==='manual'?'btn-accent':'btn-ghost'}" style="flex:1;justify-content:center;${currentReceivingMode!=='manual'?'color:#fff;border-color:#3A362D':''}" onclick="renderReceiving('manual')">Вручную</button>
           <button class="btn btn-ghost sound-toggle" style="color:#fff;border-color:#3A362D;white-space:nowrap" onclick="toggleSound()">${soundEnabled?'🔊 Звук':'🔇 Звук'}</button>
+          ${voiceRateSelectHtml(true)}
         </div>
 
         ${currentReceivingMode==='scan' ? `
