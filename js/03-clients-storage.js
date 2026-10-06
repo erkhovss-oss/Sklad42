@@ -398,17 +398,177 @@ async function loadWbProducts(clientId){
           vendorCode: c.vendorCode,
           size: s.techSize || '',
           barcode: (s.skus && s.skus[0]) || '',
+          barcodes: (s.skus || []).filter(Boolean).map(String), // у размера в WB может быть несколько штрихкодов
           color,
           dims
         });
       });
     });
     client.wbProducts = products;
-    toast(`Получено карточек: ${cards.length} (позиций с учётом размеров: ${products.length})`);
+    const pending = planWbBarcodeSync(client);
+    const newCodes = pending.setMain.length + pending.addExtras.length;
+    toast(`Получено карточек: ${cards.length} (позиций с учётом размеров: ${products.length})${newCodes ? ` · новых штрихкодов у существующих товаров: ${newCodes} — нажмите «Обновить штрихкоды»` : ''}`);
     renderClients();
+    return true;
   }catch(e){
     toast('Не удалось вызвать серверную функцию — она развёрнута в Supabase?');
+    return false;
   }
+}
+
+// ---------- штрихкоды из карточек WB: добавление недостающих к существующим товарам ----------
+// Раньше из карточки брался только первый штрихкод, а уже существующие товары не обновлялись вовсе —
+// поэтому новые штрихкода, добавленные клиентом в личном кабинете WB, в системе не появлялись.
+function wbSizeKey(s){ const v = String(s||''); return v==='0' ? '' : v; } // у товаров без размера WB подставляет «0»
+// Ищет наш товар по артикулу и размеру, терпимо к регистру и к «0»/пусто у товаров без размера
+function findInventoryItemForWb(sku, clientName, size){
+  const exact = findInventoryItem(sku, clientName, size);
+  if(exact) return exact;
+  const up = String(sku||'').toUpperCase(), sz = wbSizeKey(size);
+  return inventory.find(i=>(i.client||'')===(clientName||'') && String(i.sku||'').toUpperCase()===up && wbSizeKey(i.size)===sz) || null;
+}
+// Все штрихкоды товара у нас: основной + дополнительные
+function itemAllBarcodes(item){
+  const set = new Set();
+  if(item.barcode) set.add(String(item.barcode));
+  inventoryBarcodes.forEach(b=>{
+    if(b.sku===item.sku && (b.clientName||'')===(item.client||'') && (b.size||'')===(item.size||'')) set.add(String(b.barcode));
+  });
+  return set;
+}
+// Что нужно изменить, чтобы штрихкоды у нас совпали с карточками WB (ничего не меняет, только считает):
+//  setMain   — у товара не было штрихкода вообще: проставить основной
+//  addExtras — у товара есть штрихкод, а в WB добавили ещё: добавить как дополнительные
+//  conflicts — штрихкод из WB уже числится у ДРУГОГО товара этого клиента: не трогаем, показываем
+function planWbBarcodeSync(client){
+  const plan = {setMain:[], addExtras:[], conflicts:[], unmatched:0};
+  const seen = new Set();
+  (client.wbProducts||[]).forEach(p=>{
+    const codes = (p.barcodes && p.barcodes.length ? p.barcodes : (p.barcode ? [p.barcode] : [])).map(String);
+    if(!codes.length) return;
+    const item = findInventoryItemForWb(p.vendorCode || ('WB-'+p.nmId), client.name, p.size||'');
+    if(!item){ plan.unmatched++; return; }
+    const have = itemAllBarcodes(item);
+    let hasMain = !!item.barcode;
+    codes.forEach(b=>{
+      if(have.has(b) || seen.has(b)) return;
+      const owner = findInventoryItemByBarcode(b, client.name);
+      if(owner){
+        if(!(owner.sku===item.sku && (owner.size||'')===(item.size||''))) plan.conflicts.push({barcode:b, product:p, owner});
+        return;
+      }
+      seen.add(b);
+      if(!hasMain){ plan.setMain.push({item, barcode:b, product:p}); hasMain = true; }
+      else plan.addExtras.push({item, barcode:b, product:p});
+    });
+  });
+  return plan;
+}
+function closeWbBarcodePreview(){ const o = document.getElementById('wbBarcodeOverlay'); if(o) o.remove(); }
+// Кнопка «Обновить штрихкоды»: при необходимости сама подгружает карточки, затем показывает, что изменится
+async function syncWbBarcodes(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  if(!client) return;
+  const btn = typeof event!=='undefined' && event && event.target ? event.target.closest('button') : null;
+  await withButtonLoading(btn, '⏳ Запрашиваю WB…', async ()=>{
+    const ok = await loadWbProducts(clientId);
+    if(ok===false) return;
+    openWbBarcodePreview(clientId);
+  });
+}
+function openWbBarcodePreview(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  if(!client) return;
+  const plan = planWbBarcodeSync(client);
+  const total = plan.setMain.length + plan.addExtras.length;
+  if(!total && !plan.conflicts.length){
+    toast(`Все штрихкоды из WB уже есть в системе${plan.unmatched ? ` (карточек WB без товара в остатках: ${plan.unmatched} — они добавляются кнопкой «Добавить в остатки»)` : ''}`);
+    return;
+  }
+  closeWbBarcodePreview();
+  const byItem = new Map();
+  [...plan.setMain, ...plan.addExtras].forEach(x=>{
+    const k = x.item.sku+'~~'+(x.item.size||'');
+    if(!byItem.has(k)) byItem.set(k, {item:x.item, codes:[], main:false});
+    const g = byItem.get(k); g.codes.push(x.barcode); if(plan.setMain.includes(x)) g.main = true;
+  });
+  const groups = [...byItem.values()];
+  const shown = groups.slice(0, 40);
+  const overlay = document.createElement('div');
+  overlay.id = 'wbBarcodeOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;padding:22px;max-width:680px;width:100%;max-height:90vh;display:flex;flex-direction:column">
+      <h3 style="margin:0 0 6px 0;font-size:18px">Обновление штрихкодов из WB</h3>
+      <p style="font-size:13px;color:var(--ink-soft);line-height:1.6;margin:0 0 12px 0">
+        ${client.name}: ${total ? `будет добавлено штрихкодов — <b>${total}</b> (у товаров: <b>${groups.length}</b>)${plan.setMain.length ? `, из них основным у ${plan.setMain.length} товаров, где штрихкода не было` : ''}.` : 'добавлять нечего.'}
+        Названия, габариты и остатки не меняются. Существующие штрихкоды не удаляются.
+      </p>
+      <div style="overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:4px 12px;margin-bottom:12px;flex:1;min-height:60px">
+        ${shown.map(g=>`
+          <div style="padding:8px 0;border-bottom:1px solid var(--line)">
+            <div style="font-size:13px;font-weight:600">${escapeHtml(g.item.name||g.item.sku)}${g.item.size?` · ${escapeHtml(g.item.size)}`:''} <span class="mono" style="font-weight:400;font-size:11px;color:var(--ink-faint)">${escapeHtml(g.item.sku)}</span></div>
+            <div class="mono" style="font-size:11px;color:var(--ok)">＋ ${g.codes.map(escapeHtml).join(' · ')}${g.main ? ' (основной)' : ''}</div>
+          </div>`).join('')}
+        ${groups.length>shown.length ? `<div style="padding:8px 0;font-size:12px;color:var(--ink-faint)">…и ещё ${groups.length-shown.length} товаров</div>` : ''}
+        ${plan.conflicts.length ? `
+          <div style="padding:10px 0 6px 0;font-size:12px;font-weight:700;color:var(--warn)">Не будут добавлены (штрихкод уже числится за другим товаром): ${plan.conflicts.length}</div>
+          ${plan.conflicts.slice(0,15).map(x=>`<div style="padding:4px 0;font-size:12px;color:var(--ink-soft)"><span class="mono">${escapeHtml(x.barcode)}</span> — карточка «${escapeHtml(x.product.name||x.product.vendorCode)}», в системе занят товаром «${escapeHtml(x.owner.name||x.owner.sku)}»</div>`).join('')}` : ''}
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="btn btn-ghost" onclick="closeWbBarcodePreview()">${total?'Отмена':'Закрыть'}</button>
+        ${total ? `<button class="btn btn-accent" id="wbBarcodeApplyBtn" onclick="applyWbBarcodeSync('${client.id}')">Применить (${total})</button>` : ''}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', e=>{ if(e.target===overlay) closeWbBarcodePreview(); });
+  document.body.appendChild(overlay);
+}
+async function applyWbBarcodeSync(clientId){
+  const client = clients.find(c=>c.id===clientId);
+  if(!client) return;
+  const plan = planWbBarcodeSync(client); // пересчитываем заново — пока окно было открыто, данные могли измениться
+  const total = plan.setMain.length + plan.addExtras.length;
+  const applyBtn = document.getElementById('wbBarcodeApplyBtn');
+  if(applyBtn){ applyBtn.disabled = true; applyBtn.textContent = '⏳ Сохраняю…'; }
+  if(!total){ closeWbBarcodePreview(); toast('Менять нечего — всё уже обновлено'); return; }
+  let mainSet = 0, extrasAdded = 0, failed = 0;
+  for(const m of plan.setMain){
+    const rows = inventory.filter(i=>(i.client||'')===(m.item.client||'') && i.sku===m.item.sku && (i.size||'')===(m.item.size||''));
+    rows.forEach(r=>{ r.barcode = m.barcode; });
+    for(const r of rows) await syncInventoryRow(r.sku, r.client, r.size, r.warehouseId);
+    mainSet++;
+  }
+  const toInsert = plan.addExtras.map(e=>({barcode:e.barcode, sku:e.item.sku, client_name:e.item.client||'', size:e.item.size||''}));
+  for(let i=0;i<toInsert.length;i+=200){
+    const chunk = toInsert.slice(i,i+200);
+    const { error } = await sb.from('inventory_barcodes').upsert(chunk, {onConflict:'barcode,client_name', ignoreDuplicates:true});
+    if(error){ console.error(error); failed += chunk.length; continue; }
+    chunk.forEach(r=>{
+      if(!inventoryBarcodes.some(b=>b.barcode===r.barcode && (b.clientName||'')===r.client_name)){
+        inventoryBarcodes.push({barcode:r.barcode, sku:r.sku, clientName:r.client_name, size:r.size});
+      }
+    });
+    extrasAdded += chunk.length;
+  }
+  closeWbBarcodePreview();
+  toast(`Штрихкоды обновлены: проставлено основных ${mainSet}, добавлено дополнительных ${extrasAdded}${failed ? ` · не сохранилось: ${failed} — повторите` : ''}`);
+  renderClients();
+  renderInventory();
+}
+// Для только что добавленного из WB товара — сразу записываем и все его дополнительные штрихкоды
+async function registerExtraBarcodesForNew(item, barcodes){
+  const extras = (barcodes||[]).map(String).filter(b=>b && b!==String(item.barcode||''));
+  const rows = [];
+  extras.forEach(b=>{
+    const owner = findInventoryItemByBarcode(b, item.client);
+    if(owner && !(owner.sku===item.sku && (owner.size||'')===(item.size||''))) return; // занят другим товаром
+    if(inventoryBarcodes.some(x=>x.barcode===b && (x.clientName||'')===(item.client||''))) return;
+    rows.push({barcode:b, sku:item.sku, client_name:item.client||'', size:item.size||''});
+  });
+  if(!rows.length) return;
+  const { error } = await sb.from('inventory_barcodes').upsert(rows, {onConflict:'barcode,client_name', ignoreDuplicates:true});
+  if(error){ console.error(error); return; }
+  rows.forEach(r=>inventoryBarcodes.push({barcode:r.barcode, sku:r.sku, clientName:r.client_name, size:r.size}));
 }
 async function addWbProductToInventory(clientId, nmId, size){
   const client = clients.find(c=>c.id===clientId);
@@ -416,7 +576,7 @@ async function addWbProductToInventory(clientId, nmId, size){
   const p = client.wbProducts.find(x=>x.nmId===nmId && (x.size||'')===size);
   if(!p) return;
   const sku = p.vendorCode || ('WB-' + p.nmId);
-  if(findInventoryItem(sku, client.name, size)){ toast('Уже добавлено в остатки'); return; }
+  if(findInventoryItemForWb(sku, client.name, size)){ toast('Уже добавлено в остатки'); return; }
   const newItem = {
     sku, name:p.name, qty:0, client:client.name, size,
     vendorCode:p.vendorCode, barcode:p.barcode||'', dims:p.dims, color:p.color||''
@@ -424,6 +584,7 @@ async function addWbProductToInventory(clientId, nmId, size){
   inventory.push(newItem);
   const cell = await ensureCellAssigned(newItem);
   syncInventoryRow(newItem.sku, newItem.client, newItem.size);
+  await registerExtraBarcodesForNew(newItem, p.barcodes);
   toast(`«${p.name}»${size?` (${size})`:''} добавлен в остатки (0 шт, ячейка ${cell} — укажите количество)`);
   renderClients();
 }
@@ -434,11 +595,12 @@ async function addWbProductsBatch(clientId, products){
   for(const p of products){
     const size = p.size || '';
     const sku = p.vendorCode || ('WB-' + p.nmId);
-    if(findInventoryItem(sku, client.name, size)) continue;
+    if(findInventoryItemForWb(sku, client.name, size)) continue;
     const newItem = { sku, name:p.name, qty:0, client:client.name, size, vendorCode:p.vendorCode, barcode:p.barcode||'', dims:p.dims, color:p.color||'' };
     inventory.push(newItem);
     await ensureCellAssigned(newItem);
     syncInventoryRow(newItem.sku, newItem.client, newItem.size);
+    await registerExtraBarcodesForNew(newItem, p.barcodes);
     added++;
   }
   toast(`Добавлено в остатки: ${added} поз. (0 шт — укажите количество)`);
@@ -447,7 +609,7 @@ async function addWbProductsBatch(clientId, products){
 function addAllWbProducts(clientId){
   const client = clients.find(c=>c.id===clientId);
   if(!client) return;
-  const toAdd = client.wbProducts.filter(p=>!findInventoryItem(p.vendorCode || ('WB-'+p.nmId), client.name, p.size||''));
+  const toAdd = client.wbProducts.filter(p=>!findInventoryItemForWb(p.vendorCode || ('WB-'+p.nmId), client.name, p.size||''));
   if(!toAdd.length){ toast('Все карточки уже в остатках'); return; }
   addWbProductsBatch(clientId, toAdd);
 }
@@ -660,7 +822,10 @@ function renderClientDetail(body){
 
       ${c.wbConnected ? `
         <div class="barcode-rule"></div>
-        <button class="btn btn-accent" onclick="loadWbProducts('${c.id}')">↓ Загрузить карточки товаров</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn btn-accent" onclick="loadWbProducts('${c.id}')">↓ Загрузить карточки товаров</button>
+          <button class="btn btn-ghost" onclick="syncWbBarcodes('${c.id}')" title="Подтягивает из WB все штрихкоды карточек и добавляет те, которых у нас нет. Перед сохранением покажет, что именно изменится.">🔄 Обновить штрихкоды из WB${(()=>{ if(!c.wbProducts.length) return ''; const pl = planWbBarcodeSync(c); const n = pl.setMain.length + pl.addExtras.length; return n ? ` (новых: ${n})` : ''; })()}</button>
+        </div>
         ${c.wbProducts.length ? `
           <div style="display:flex;gap:8px;margin-top:14px;margin-bottom:4px;flex-wrap:wrap">
             <button class="btn btn-ghost" onclick="addAllWbProducts('${c.id}')">+ Добавить все в остатки</button>
@@ -669,8 +834,9 @@ function renderClientDetail(body){
         ` : ''}
         <div style="margin-top:10px">
           ${c.wbProducts.length ? c.wbProducts.map(p=>{
-            const already = findInventoryItem(p.vendorCode || ('WB-'+p.nmId), c.name, p.size||'');
+            const already = findInventoryItemForWb(p.vendorCode || ('WB-'+p.nmId), c.name, p.size||'');
             const checkKey = p.nmId+'~~'+(p.size||'');
+            const missingCodes = already ? (p.barcodes||[]).filter(b=>!itemAllBarcodes(already).has(String(b))) : [];
             return `
             <div class="pick-row" style="align-items:flex-start">
               ${!already ? `<input type="checkbox" class="wb-product-check" data-client="${c.id}" data-key="${escapeHtml(checkKey)}" style="margin-top:4px">` : `<span style="width:16px;display:inline-block"></span>`}
@@ -678,7 +844,7 @@ function renderClientDetail(body){
               <div>
                 <div class="sku-name">${p.name}${p.size?` · размер ${p.size}`:''}</div>
                 <div class="sku-code mono">Артикул: ${p.vendorCode} · nmID ${p.nmId}</div>
-                <div class="sku-code mono">ШК ${p.barcode||'—'}</div>
+                <div class="sku-code mono">ШК ${(p.barcodes && p.barcodes.length ? p.barcodes : (p.barcode?[p.barcode]:[])).map(b=>escapeHtml(b)).join(' · ') || '—'}${missingCodes.length ? ` <span style="color:var(--accent);font-weight:700;font-family:Inter,sans-serif" title="Этих штрихкодов нет в системе: ${escapeHtml(missingCodes.join(', '))}">＋${missingCodes.length} новых</span>` : ''}</div>
                 ${p.dims ? `<div class="sku-code mono">${p.dims.l}×${p.dims.w}×${p.dims.h} см · ${p.dims.weight} кг</div>` : `<div class="sku-code mono" style="color:var(--ink-faint)">габариты не заполнены в карточке WB</div>`}
               </div>
               <button class="btn ${already?'btn-ghost':'btn-primary'}" style="margin-left:12px" ${already?'disabled':''} onclick="addWbProductToInventory('${c.id}',${p.nmId},'${p.size||''}')">${already?'Уже в остатках':'+ В остатки'}</button>
