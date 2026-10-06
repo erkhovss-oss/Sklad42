@@ -561,24 +561,70 @@ async function fsRenderHistory(){
   }
 }
 
-// Кнопка «Списание по файлу» добавляется на вкладку FBS из кода — так для её появления достаточно обновить JS-файл
-function fsInjectButton(){
-  if(document.getElementById('fsOpenBtn')) return true;
-  const anchor = Array.from(document.querySelectorAll('#tab-fbs .page-head button')).find(b=>/backfillFbsSupplyIds/.test(b.getAttribute('onclick')||''))
-    || document.querySelector('#tab-fbs .page-head button');
-  if(!anchor || !anchor.parentElement) return false;
-  const btn = document.createElement('button');
-  btn.id = 'fsOpenBtn';
-  btn.className = 'btn btn-ghost';
-  btn.title = 'Списание остатков по файлу из кабинета маркетплейса — для клиентов, которые не дают доступ по API';
-  btn.textContent = '📥 Списание по файлу';
-  btn.addEventListener('click', ()=>openFileShipments());
-  anchor.parentElement.appendChild(btn);
+// Шапка вкладки FBS собирается из кода (поэтому для изменения хватает обновить этот JS-файл):
+//  • рабочая кнопка «Списание по файлу» остаётся на виду;
+//  • редкие сервисные действия (обновить, сверить статусы, найти пропущенные, донабрать номера поставок)
+//    свёрнуты в выпадающее меню «Ещё».
+const FBS_TOOLS_ACTIONS = ['fetchNewFbsOrders','syncFbsOrderStatuses','discoverMissingFbsOrders','backfillFbsSupplyIds'];
+function fbsInitHeader(){
+  const select = document.getElementById('fbsClientSelect');
+  if(!select || !select.parentElement || !document.querySelector('#tab-fbs .page-head')) return false;
+  const holder = select.parentElement;
+  if(!document.getElementById('fbsToolsMenuStyle')){
+    const st = document.createElement('style');
+    st.id = 'fbsToolsMenuStyle';
+    st.textContent = `
+      #fbsToolsMenu{display:none;position:absolute;right:0;top:calc(100% + 6px);min-width:290px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.14);padding:6px;z-index:60;flex-direction:column;gap:2px}
+      #fbsToolsMenu.open{display:flex}
+      #fbsToolsMenu button{display:block;width:100%;text-align:left;border:0;background:transparent;border-radius:8px;padding:10px 12px;font-size:13px;white-space:nowrap}
+      #fbsToolsMenu button:hover:not(:disabled){background:var(--bg,#F3F0E8)}`;
+    document.head.appendChild(st);
+  }
+  if(!document.getElementById('fsOpenBtn')){
+    const btn = document.createElement('button');
+    btn.id = 'fsOpenBtn';
+    btn.className = 'btn btn-ghost';
+    btn.title = 'Списание остатков по файлу из кабинета маркетплейса — для клиентов, которые не дают доступ по API';
+    btn.textContent = '📥 Списание по файлу';
+    btn.addEventListener('click', ()=>openFileShipments());
+    holder.appendChild(btn);
+  }
+  if(!document.getElementById('fbsToolsMenuBtn')){
+    const all = Array.from(document.querySelectorAll('#tab-fbs .page-head button'));
+    const tools = FBS_TOOLS_ACTIONS.map(fn=>all.find(b=>(b.getAttribute('onclick')||'').indexOf(fn)>-1)).filter(Boolean);
+    if(tools.length){
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'position:relative;display:inline-block';
+      const trigger = document.createElement('button');
+      trigger.id = 'fbsToolsMenuBtn';
+      trigger.className = 'btn btn-ghost';
+      trigger.setAttribute('aria-haspopup', 'true');
+      trigger.setAttribute('aria-expanded', 'false');
+      trigger.title = 'Обновить заказы, сверить статусы, найти пропущенные, донабрать номера поставок';
+      const idleLabel = '⋯ Ещё ▾';
+      trigger.textContent = idleLabel;
+      const menu = document.createElement('div');
+      menu.id = 'fbsToolsMenu';
+      tools.forEach(b=>menu.appendChild(b)); // сами кнопки переносятся как есть — все их действия и индикаторы работают как раньше
+      wrap.appendChild(trigger);
+      wrap.appendChild(menu);
+      holder.appendChild(wrap);
+      const setOpen = (open)=>{ menu.classList.toggle('open', open); trigger.setAttribute('aria-expanded', open ? 'true' : 'false'); };
+      trigger.addEventListener('click', (e)=>{ e.stopPropagation(); setOpen(!menu.classList.contains('open')); });
+      menu.addEventListener('click', (e)=>{ if(e.target.closest('button')) setTimeout(()=>setOpen(false), 0); });
+      document.addEventListener('click', (e)=>{ if(menu.classList.contains('open') && !wrap.contains(e.target)) setOpen(false); });
+      document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && menu.classList.contains('open')){ setOpen(false); trigger.focus(); } });
+      // пока выполняется любое действие из меню, на самой кнопке «Ещё» виден индикатор
+      const syncBusy = ()=>{ const busy = tools.some(b=>b.dataset.loading==='1'); trigger.textContent = busy ? '⏳ Выполняется…' : idleLabel; };
+      const obs = new MutationObserver(syncBusy);
+      tools.forEach(b=>obs.observe(b, {attributes:true, attributeFilter:['data-loading','disabled']}));
+    }
+  }
   return true;
 }
-if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fsInjectButton);
-else fsInjectButton();
-setTimeout(fsInjectButton, 800); // на случай, если вкладка достроилась позже
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fbsInitHeader);
+else fbsInitHeader();
+setTimeout(fbsInitHeader, 800); // на случай, если вкладка достроилась позже
 
 function setFbsView(view){
   fbsView = view;
