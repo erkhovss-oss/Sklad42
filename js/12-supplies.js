@@ -454,40 +454,60 @@ function toggleSupplyReceiving(id){
   activeSupplyId = activeSupplyId===id ? null : id;
   renderSuppliesTableWrap();
 }
+// Сохраняет «принято всего» и «из них брак» по строке поставки (оба числа вместе)
+function saveSupplyItemCounts(supplyId, item){
+  const q = sb.from('supply_items').update({received_qty: item.receivedQty, defect_qty: item.defectQty||0})
+    .eq('supply_id', supplyId).eq('sku', item.sku);
+  return item.size ? q.eq('size', item.size) : q.is('size', null);
+}
 function adjustSupplyItem(supplyId, sku, delta, size){
   size = size || '';
   const supply = supplies.find(s=>s.id===supplyId);
-  const warehouseId = supply.warehouseId || 'MAIN';
+  const toBrak = !!receivingToBrak[supplyId];
+  const warehouseId = toBrak ? 'BRAK' : (supply.warehouseId || 'MAIN');
   const item = supply.items.find(i=>i.sku===sku && (i.size||'')===size);
-  const newVal = Math.max(0, item.receivedQty + delta);
-  const diff = newVal - item.receivedQty;
-  if(diff===0) return;
+  const defect = Math.min(item.defectQty||0, item.receivedQty);
+  let diff;
+  if(toBrak){
+    // при включённом «Принимать как брак» кнопки +/− меняют именно количество брака
+    const newDefect = Math.max(0, defect + delta);
+    diff = newDefect - defect;
+    if(diff===0){ if(delta<0) toast('Брака по этой позиции нет — чтобы убрать годные, выключите «Принимать как брак»'); return; }
+    item.defectQty = newDefect;
+  } else {
+    const good = item.receivedQty - defect;
+    const newGood = Math.max(0, good + delta);
+    diff = newGood - good;
+    if(diff===0){ if(delta<0 && defect>0) toast('Годных по этой позиции нет — остался только брак (включите «Принимать как брак», чтобы убрать его)'); return; }
+  }
   const wasOver = item.receivedQty > item.qty;
-  item.receivedQty = newVal;
+  item.receivedQty += diff;
   let inv = item.barcode ? findInventoryItemByBarcode(item.barcode, supply.clientName, warehouseId) : findInventoryItem(sku, supply.clientName, size, warehouseId);
   if(!inv){
     inv = {sku, name: item.name, qty:0, client: supply.clientName, size, barcode: item.barcode||'', warehouseId};
     inventory.push(inv);
   }
-  inv.qty += diff;
-  if(diff>0) logReceipt(inv.sku, inv.name, diff, inv.client, inv.size);
-  else logMovement(inv.sku, inv.name, diff, 'Корректировка приёмки поставки', inv.client, inv.size);
-  pushRecentAction({name:item.name + (size?` (${size})`:''), sku, qty:diff, cell:inv.cell, note:'вручную'});
+  inv.qty = Math.max(0, inv.qty + diff);
+  if(diff>0) logReceipt(inv.sku, inv.name, diff, inv.client, inv.size, warehouseId);
+  else logMovement(inv.sku, inv.name, diff, 'Корректировка приёмки поставки', inv.client, inv.size, warehouseId);
+  pushRecentAction({name:item.name + (size?` (${size})`:''), sku, qty:diff, cell:toBrak?'БРАК':inv.cell, note: toBrak ? 'вручную · брак' : 'вручную'});
   if(diff>0 && item.receivedQty>item.qty && !wasOver) toast(`«${item.name}»${size?` (${size})`:''}: принято больше, чем заказано (${item.receivedQty} из ${item.qty})`);
   renderSuppliesTableWrap();
-  (size ? sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supplyId).eq('sku', sku).eq('size', size) : sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supplyId).eq('sku', sku).is('size', null)).then(({error})=>{
+  saveSupplyItemCounts(supplyId, item).then(({error})=>{
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — количество не сохранилось, повторите'); });
 }
 function finishSupplyReceiving(id){
   const supply = supplies.find(s=>s.id===id);
   const mismatches = supply.items.filter(i=>i.receivedQty !== i.qty);
+  const defectTotal = supply.items.reduce((a,i)=>a+Math.min(i.defectQty||0, i.receivedQty),0);
+  const defectNote = defectTotal ? `, из них брак ${defectTotal} шт` : '';
   supply.status = 'received';
   activeSupplyId = null;
   if(mismatches.length){
-    toast(`Поставка ${id} принята — расхождение по ${mismatches.length} из ${supply.items.length} поз.`);
+    toast(`Поставка ${id} принята — расхождение по ${mismatches.length} из ${supply.items.length} поз.${defectNote}`);
   } else {
-    toast(`Поставка ${id} принята полностью, без расхождений`);
+    toast(`Поставка ${id} принята полностью, без расхождений${defectNote}`);
   }
   renderSuppliesTableWrap();
   sb.from('supplies').update({status:'received'}).eq('id', id).then(({error})=>{ if(error) console.error(error); });
@@ -501,18 +521,39 @@ function saveUpdNumber(id){
     if(error){ console.error(error); toast('Не удалось сохранить номер УПД в базе'); }
   });
 }
+// «Принято» = всё, что физически пришло (годное + брак); «в т.ч. брак» — часть принятого,
+// оформленная на склад «БРАК»; «расхождение» считается по принятому количеству, как и раньше.
 function buildActRows(s){
-  return s.items.map((it, idx)=>({
-    n: idx+1, sku: it.sku, size: it.size||'—', barcode: it.barcode||'—', name: it.name,
-    plan: it.qty, fact: it.receivedQty, diff: it.receivedQty - it.qty
-  }));
+  return s.items.map((it, idx)=>{
+    const defect = Math.min(it.defectQty||0, it.receivedQty||0);
+    return {
+      n: idx+1, sku: it.sku, size: it.size||'—', barcode: it.barcode||'—', name: it.name,
+      plan: it.qty, fact: it.receivedQty, defect, good: it.receivedQty - defect, diff: it.receivedQty - it.qty
+    };
+  });
 }
 function actSummary(rows){
   return {
     totalPlan: rows.reduce((a,r)=>a+r.plan,0),
     totalFact: rows.reduce((a,r)=>a+r.fact,0),
-    mismatches: rows.filter(r=>r.diff!==0).length
+    totalDefect: rows.reduce((a,r)=>a+(r.defect||0),0),
+    totalGood: rows.reduce((a,r)=>a+(r.good!==undefined ? r.good : r.fact),0),
+    mismatches: rows.filter(r=>r.diff!==0).length,
+    withDefect: rows.filter(r=>(r.defect||0)>0).length
   };
+}
+// Плашки итога под таблицей акта: расхождения и/или брак (общий код для актов склада и портала клиента)
+function actStatusPillsHtml(summary){
+  if(summary.mismatches===0 && summary.totalDefect===0) return `<span class="status-pill ok">✅ Без расхождений</span>`;
+  return `<span style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+    ${summary.mismatches ? `<span class="status-pill bad">⚠ Расхождений: ${summary.mismatches} поз.</span>` : `<span class="status-pill ok">✅ Без расхождений по количеству</span>`}
+    ${summary.totalDefect ? `<span class="status-pill bad">⚠ Брак: ${summary.totalDefect} шт</span>` : ''}
+  </span>`;
+}
+function actDefectNoteHtml(summary){
+  return summary.totalDefect
+    ? `<p style="margin:14px 0 0 0;font-size:12px;color:var(--ink-soft);line-height:1.6">Товар, принятый как брак (${summary.totalDefect} шт), размещён на отдельном складе «БРАК» и маркетплейсам не передаётся. Количество «Принято» включает брак; годного к продаже — ${summary.totalGood} шт.</p>`
+    : '';
 }
 function saveActNumber(id){
   const s = supplies.find(x=>x.id===id);
@@ -592,17 +633,18 @@ function downloadSupplyActExcel(id){
     [`Клиент: ${s.clientName}`, '', '', 'ИНН', (client&&client.inn)||'—'],
     [`Поставка: ${s.id}`, '', '', 'Склад', warehouseName(s.warehouseId)],
     [],
-    ['№','Артикул','Размер','ШК товара','Наименование','План, шт','Факт, шт','Расхождение'],
-    ...rows.map(r=>[r.n, r.sku, r.size, r.barcode, r.name, r.plan, r.fact, r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—']),
+    ['№','Артикул','Размер','ШК товара','Наименование','План, шт','Принято, шт','в т.ч. брак, шт','Расхождение'],
+    ...rows.map(r=>[r.n, r.sku, r.size, r.barcode, r.name, r.plan, r.fact, r.defect>0 ? r.defect : '—', r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—']),
     [],
-    ['','','','','Итого:', summary.totalPlan, summary.totalFact, summary.mismatches ? `Расхождений: ${summary.mismatches} поз.` : 'Без расхождений'],
+    ['','','','','Итого:', summary.totalPlan, summary.totalFact, summary.totalDefect || '—', summary.mismatches ? `Расхождений: ${summary.mismatches} поз.` : 'Без расхождений'],
+    ...(summary.totalDefect ? [['','','','','Годного к продаже, шт:', summary.totalGood], ['Брак размещён на отдельном складе «БРАК» и маркетплейсам не передаётся.']] : []),
     [],
     ['Принял (склад)', '', '(подпись)', '', '(расшифровка подписи)'],
     [],
     ['Сдал (поставщик)', '', '(подпись)', '', client&&client.directorName ? client.directorName : '(расшифровка подписи)'],
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:18},{wch:32},{wch:10},{wch:10},{wch:18}];
+  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:18},{wch:32},{wch:10},{wch:12},{wch:15},{wch:18}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Акт приёмки');
   XLSX.writeFile(wb, `Akt_priemki_${actNumber}.xlsx`);
@@ -728,7 +770,6 @@ function generateSupplyActPdf(id){
 
   const today = new Date();
   const dateStr = today.toLocaleDateString('ru-RU', {day:'2-digit', month:'long', year:'numeric'});
-  const noMismatches = summary.mismatches === 0;
 
   const win = window.open('', '_blank');
   if(!win){ toast('Браузер заблокировал открытие окна — разрешите всплывающие окна для этого сайта и попробуйте снова'); return; }
@@ -823,12 +864,13 @@ function generateSupplyActPdf(id){
       </div>
 
       <table>
-        <thead><tr><th>№</th><th>Артикул</th><th>Размер</th><th>ШК товара</th><th>Наименование</th><th class="num">План, шт</th><th class="num">Факт, шт</th><th class="num">Расхождение</th></tr></thead>
+        <thead><tr><th>№</th><th>Артикул</th><th>Размер</th><th>ШК товара</th><th>Наименование</th><th class="num">План, шт</th><th class="num">Принято, шт</th><th class="num">в т.ч. брак, шт</th><th class="num">Расхождение</th></tr></thead>
         <tbody>
           ${rows.map(r=>`
-            <tr class="${r.diff!==0?'mismatch':''}">
+            <tr class="${(r.diff!==0 || r.defect>0)?'mismatch':''}">
               <td class="mono">${r.n}</td><td class="mono">${escapeHtml(r.sku)}</td><td>${escapeHtml(r.size)}</td><td class="mono">${escapeHtml(r.barcode)}</td><td>${escapeHtml(r.name)}</td>
               <td class="num">${r.plan}</td><td class="num">${r.fact}</td>
+              <td class="num ${r.defect>0?'diff-bad':'diff-ok'}">${r.defect>0 ? r.defect : '—'}</td>
               <td class="num ${r.diff!==0?'diff-bad':'diff-ok'}">${r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—'}</td>
             </tr>
           `).join('')}
@@ -839,11 +881,11 @@ function generateSupplyActPdf(id){
         <div class="summary-nums">
           <div class="stat"><div class="val">${summary.totalPlan}</div><div class="lbl">По плану, шт</div></div>
           <div class="stat"><div class="val">${summary.totalFact}</div><div class="lbl">Принято, шт</div></div>
+          ${summary.totalDefect ? `<div class="stat"><div class="val" style="color:var(--warn)">${summary.totalDefect}</div><div class="lbl">в т.ч. брак, шт</div></div><div class="stat"><div class="val">${summary.totalGood}</div><div class="lbl">Годных, шт</div></div>` : ''}
         </div>
-        ${noMismatches
-          ? `<span class="status-pill ok">✅ Без расхождений</span>`
-          : `<span class="status-pill bad">⚠ Расхождений: ${summary.mismatches} поз.</span>`}
+        ${actStatusPillsHtml(summary)}
       </div>
+      ${actDefectNoteHtml(summary)}
 
       <div class="sign">
         <div><div class="role">Принял (склад)</div><div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
@@ -916,7 +958,7 @@ function renderSupplyReceivingPanel(s){
             const mismatch = diff !== 0;
             return `<div class="pick-row" ${mismatch?'style="background:var(--warn-bg)"':''}>
               <div><div class="sku-name">${it.name}${it.size?` · размер ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:''}</div></div>
-              <div class="qty-need">план ${it.qty} / факт ${it.receivedQty}${mismatch ? `<span style="color:var(--warn);font-weight:700;margin-left:8px">${diff>0?'+':''}${diff}</span>` : ''}</div>
+              <div class="qty-need">план ${it.qty} / факт ${it.receivedQty}${mismatch ? `<span style="color:var(--warn);font-weight:700;margin-left:8px">${diff>0?'+':''}${diff}</span>` : ''}${(it.defectQty||0)>0 ? `<span style="color:var(--warn);font-weight:700;margin-left:8px" title="Принято как брак — на складе «БРАК»">⚠ брак ${Math.min(it.defectQty, it.receivedQty)}</span>` : ''}</div>
             </div>`;
           }).join('')}
         </div>
@@ -1018,7 +1060,7 @@ function renderSupplyReceivingPanel(s){
             <div><div class="sku-name">${it.name}${it.size?` · размер ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:' · без штрихкода'}</div></div>
             <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap">
               <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',-1,'${it.size||''}')">−</button>
-              <div class="qty-need" style="min-width:56px;text-align:center;${over?'color:var(--warn);font-weight:700':''}">${it.receivedQty}/${it.qty}</div>
+              <div class="qty-need" style="min-width:56px;text-align:center;${over?'color:var(--warn);font-weight:700':''}">${it.receivedQty}/${it.qty}${(it.defectQty||0)>0 ? `<span style="display:block;font-size:10px;color:var(--warn);font-weight:700" title="Принято как брак — на складе «БРАК»">⚠ брак ${Math.min(it.defectQty, it.receivedQty)}</span>` : ''}</div>
               <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',1,'${it.size||''}')">+</button>
             </div>
           </div>`;
@@ -1285,7 +1327,7 @@ function renderSuppliesTableWrap(){
         e.preventDefault();
         // Та же защита от потери последнего символа при быстром сканировании.
         await new Promise(r=>setTimeout(r, 0));
-        const kizCode = kizInput.value.trim();
+        const kizCode = normalizeKizInput(kizInput.value).code;
         kizInput.value='';
         if(!kizCode) return;
         if(!pendingKizItem){ toast('Сначала отсканируйте штрихкод товара'); return; }
@@ -1294,7 +1336,7 @@ function renderSuppliesTableWrap(){
           toast(`Код слишком короткий (${kizCode.length} симв.) — похоже на неполное сканирование, отсканируйте ещё раз`);
           return;
         }
-        const dup = kizScans.find(k=>k.kizCode===kizCode);
+        const dup = kizScans.find(k=>kizKey(k.kizCode)===kizKey(kizCode));
         if(dup){
           playBeep('error');
           toast(`Этот КИЗ уже был принят ранее (поставка ${dup.supplyId}, ${dup.name})`);
@@ -1308,6 +1350,15 @@ function renderSuppliesTableWrap(){
     }
   }
 }
+// Запоминает КИЗ принятой единицы. isDefect — единица принята как брак: это нужно, чтобы
+// при удалении КИЗ остаток откатывался со склада «БРАК», а не с основного.
+function recordSupplyKiz(supply, item, kizCode, isDefect){
+  const size = item.size || '';
+  kizScans.push({kizCode, supplyId:supply.id, sku:item.sku, name:item.name, size, clientName:supply.clientName, time:new Date().toISOString(), isDefect:!!isDefect});
+  sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:supply.id, sku:item.sku, name:item.name, size:size||null, client_name:supply.clientName, is_defect:!!isDefect, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
+    if(error){ console.error(error); toast('Не удалось сохранить КИЗ в базе — возможно, дубль'); }
+  });
+}
 async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   const sku = item.sku;
   const size = item.size || '';
@@ -1315,13 +1366,17 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
   const warehouseId = toBrak ? 'BRAK' : (supply.warehouseId || 'MAIN');
   const wasOver = item.receivedQty > item.qty;
   item.receivedQty++;
+  if(toBrak) item.defectQty = (item.defectQty||0) + 1;
   let inv = barcode ? findInventoryItemByBarcode(barcode, supply.clientName, warehouseId) : findInventoryItem(sku, supply.clientName, size, warehouseId);
   if(!inv){
     inv = {sku, name: item.name, qty:0, client: supply.clientName, size, barcode: barcode||'', warehouseId};
     inventory.push(inv);
   }
   inv.qty++;
-  logReceipt(inv.sku, inv.name, 1, inv.client, inv.size);
+  // склад передаём явно — иначе остаток в базе прибавился бы к первой найденной строке товара
+  // (обычно это основной склад), и брак ушёл бы в продажу
+  logReceipt(inv.sku, inv.name, 1, inv.client, inv.size, warehouseId);
+  if(kizCode) recordSupplyKiz(supply, item, kizCode, toBrak);
   if(toBrak){
     playBeep('warn');
     toast(`«${item.name}»${size?` (${size})`:''} → склад «БРАК» (не идёт на WB/Ozon). Принято ${item.receivedQty} из ${item.qty}`);
@@ -1332,7 +1387,7 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
     };
     scanHistory.push({supplyId: supply.id, sku, size, name:item.name + (size?` · ${size}`:''), barcode: barcode||'', delta:1, warehouseId});
     renderSuppliesTableWrap();
-    (size ? sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).eq('size', size) : sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).is('size', null)).then(({error})=>{
+    saveSupplyItemCounts(supply.id, item).then(({error})=>{
       if(error) console.error(error);
     }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
     return;
@@ -1349,15 +1404,8 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
     message: isOver ? `Принято больше плана: ${item.receivedQty} из ${item.qty}` : `Принято ${item.receivedQty} из ${item.qty}`
   };
   scanHistory.push({supplyId: supply.id, sku, size, name:item.name + (size?` · ${size}`:''), barcode: barcode||'', delta:1, warehouseId});
-  if(kizCode){
-    const scan = {kizCode, supplyId:supply.id, sku, name:item.name, size:size||'', clientName:supply.clientName, time:new Date().toISOString()};
-    kizScans.push(scan);
-    sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id:supply.id, sku, name:item.name, size:size||null, client_name:supply.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
-      if(error){ console.error(error); toast('Не удалось сохранить КИЗ в базе — возможно, дубль'); }
-    });
-  }
   renderSuppliesTableWrap();
-  (size ? sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).eq('size', size) : sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', sku).is('size', null)).then(({error})=>{
+  saveSupplyItemCounts(supply.id, item).then(({error})=>{
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
 }
@@ -1388,13 +1436,16 @@ function removeKizScan(supplyId, kizCode, silent){
   const scan = kizScans[idx];
   kizScans.splice(idx,1);
 
-  const item = supply.items.find(i=>i.sku===scan.sku);
+  const item = supply.items.find(i=>i.sku===scan.sku && (i.size||'')===(scan.size||'')) || supply.items.find(i=>i.sku===scan.sku);
   if(item){
+    // единица, принятая как брак, лежит на складе «БРАК» — откатываем оттуда и из учёта брака
+    const wh = scan.isDefect ? 'BRAK' : (supply.warehouseId || 'MAIN');
     item.receivedQty = Math.max(0, item.receivedQty-1);
-    const inv = findInventoryItem(scan.sku, supply.clientName, item.size, supply.warehouseId || 'MAIN');
+    if(scan.isDefect) item.defectQty = Math.max(0, (item.defectQty||0)-1);
+    const inv = findInventoryItem(scan.sku, supply.clientName, item.size, wh);
     if(inv) inv.qty = Math.max(0, inv.qty-1);
-    logMovement(scan.sku, scan.name, -1, 'Удаление КИЗ', supply.clientName, item.size);
-    (item.size ? sb.from('supply_items').update({received_qty:item.receivedQty}).eq('supply_id', supplyId).eq('sku', scan.sku).eq('size', item.size) : sb.from('supply_items').update({received_qty:item.receivedQty}).eq('supply_id', supplyId).eq('sku', scan.sku).is('size', null)).then(({error})=>{
+    logMovement(scan.sku, scan.name, -1, 'Удаление КИЗ', supply.clientName, item.size, wh);
+    saveSupplyItemCounts(supplyId, item).then(({error})=>{
       if(error) console.error(error);
     });
   }

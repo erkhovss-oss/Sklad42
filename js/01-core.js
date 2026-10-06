@@ -248,11 +248,13 @@ function undoLastScan(){
   if(!supply){ toast('Поставка не найдена'); return; }
   const item = supply.items.find(i=>i.sku===info.sku && (i.size||'')===(info.size||''));
   if(!item){ toast('Позиция не найдена'); return; }
+  const undoWarehouse = info.warehouseId || supply.warehouseId || 'MAIN';
   item.receivedQty = Math.max(0, item.receivedQty - info.delta);
-  const inv = findInventoryItem(info.sku, supply.clientName, info.size||'', info.warehouseId || supply.warehouseId || 'MAIN');
+  if(undoWarehouse==='BRAK') item.defectQty = Math.max(0, (item.defectQty||0) - info.delta); // откатываем и учёт брака
+  const inv = findInventoryItem(info.sku, supply.clientName, info.size||'', undoWarehouse);
   if(inv) inv.qty = Math.max(0, inv.qty - info.delta);
-  logMovement(info.sku, info.name, -info.delta, 'Отмена скана', supply.clientName, info.size);
-  (info.size ? sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', info.sku).eq('size', info.size) : sb.from('supply_items').update({received_qty: item.receivedQty}).eq('supply_id', supply.id).eq('sku', info.sku).is('size', null)).then(({error})=>{
+  logMovement(info.sku, info.name, -info.delta, 'Отмена скана', supply.clientName, info.size, undoWarehouse);
+  saveSupplyItemCounts(supply.id, item).then(({error})=>{
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — отмена не сохранилась'); });
   pushRecentAction({name:info.name, sku:info.sku, qty:-info.delta, note:'отмена скана'});
@@ -275,10 +277,39 @@ const US_LAYOUT_MAP = {
   Backslash:['\\','|'], Semicolon:[';',':'], Quote:["'",'"'], Comma:[',','<'], Period:['.','>'], Slash:['/','?'],
   Backquote:['`','~'], Space:[' ',' ']
 };
+// ---------- КИЗ: разделитель GS и приведение кода к стандартному виду ----------
+// В полном коде «Честного знака» есть невидимые разделители GS (символ с кодом 29): после серийного
+// номера и после ключа проверки. Сканер в режиме «клавиатура» передаёт GS как сочетание Ctrl+] —
+// браузер на него ничего не вставляет, и разделители терялись (в базе оказывались коды на 2 символа
+// короче настоящих). Теперь это сочетание перехватывается и вставляет настоящий GS.
+const GS_CHAR = String.fromCharCode(29);
+function kizKey(code){ return String(code||'').split(GS_CHAR).join(''); } // для сравнения кодов без учёта GS
+function insertTextAtCursor(input, text){
+  const start = input.selectionStart, end = input.selectionEnd;
+  input.value = input.value.slice(0,start) + text + input.value.slice(end);
+  input.selectionStart = input.selectionEnd = start + text.length;
+}
+// Убирает переводы строк и служебный префикс сканера («]d2»), а если GS по дороге потерялись —
+// восстанавливает их по стандартной структуре: 01 GTIN(14) 21 серийный(13) GS 91 ключ(4) GS 92 хвост(44 или 88).
+// Восстановление только при точном совпадении структуры — иначе код остаётся как есть.
+function normalizeKizInput(raw){
+  let code = String(raw||'').replace(/[\r\n]+/g,'').trim();
+  code = code.replace(/^\][A-Za-z][0-9A-Za-z]/, '');
+  const gsCount = code.split(GS_CHAR).length - 1;
+  if(gsCount > 0) return {code, restored:false, gsCount};
+  const m = code.match(/^(01\d{14}21[\x21-\x7e]{13})(91[\x21-\x7e]{4})(92(?:[\x21-\x7e]{44}|[\x21-\x7e]{88}))$/);
+  if(m) return {code: m[1]+GS_CHAR+m[2]+GS_CHAR+m[3], restored:true, gsCount:2};
+  return {code, restored:false, gsCount:0};
+}
 function forceEnglishInput(input){
   if(!input || input.dataset.forceEnDone) return;
   input.dataset.forceEnDone = '1';
   input.addEventListener('keydown', function(e){
+    if((e.ctrlKey && !e.altKey && !e.metaKey && (e.code==='BracketRight' || e.key===']')) || e.key===GS_CHAR){
+      e.preventDefault();
+      insertTextAtCursor(input, GS_CHAR);
+      return;
+    }
     if(e.ctrlKey || e.metaKey) return;
     if(e.key==='Enter' || e.key==='Backspace' || e.key==='Delete' || e.key==='Tab' ||
        e.key==='ArrowLeft' || e.key==='ArrowRight' || e.key==='Home' || e.key==='End') return;

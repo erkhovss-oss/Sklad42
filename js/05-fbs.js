@@ -605,11 +605,70 @@ function forceShowWizardKiz(orderId){
   blockEl.innerHTML = `
     <div class="eyebrow" style="margin-bottom:6px">КИЗ (Честный Знак)</div>
     <input class="search mono" id="wizardKizInput" placeholder="Отсканируйте КИЗ этой единицы…" style="width:100%;max-width:420px;margin-bottom:6px" autocomplete="off">
-    <div id="wizardKizStatus" style="font-size:12px;margin-bottom:14px">${renderKizStatusLabel(order)}</div>
+    <div id="wizardKizStatus" style="font-size:12px;margin-bottom:6px">${renderKizStatusLabel(order)}</div>
+    <div style="margin-bottom:14px"><span style="font-size:11px;color:var(--accent);cursor:pointer" onclick="openKizScannerTest()">🔧 Проверка сканера КИЗ</span></div>
   `;
   forceEnglishInput(document.getElementById('wizardKizInput'));
   document.getElementById('wizardKizInput').focus();
   wireWizardKizInput(order);
+}
+// Окно «Проверка сканера КИЗ»: человек сканирует любой код, программа показывает, что реально
+// пришло от сканера (невидимый GS отображается как ␝), сколько разделителей дошло и какие
+// «служебные» нажатия клавиш передал сканер. Ничего никуда не отправляется.
+function openKizScannerTest(){
+  const prev = document.getElementById('kizTestOverlay');
+  if(prev) prev.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'kizTestOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;padding:22px;max-width:640px;width:100%;max-height:90vh;overflow:auto">
+      <h3 style="margin:0 0 6px 0;font-size:18px">Проверка сканера КИЗ</h3>
+      <p style="font-size:13px;color:var(--ink-soft);line-height:1.6;margin:0 0 12px 0">Отсканируйте любой КИЗ в поле ниже. Программа покажет, что реально пришло от сканера и дошли ли невидимые разделители GS. Ничего никуда не отправляется.</p>
+      <input class="search mono" id="kizTestInput" placeholder="Сканируйте КИЗ сюда…" style="width:100%" autocomplete="off">
+      <div id="kizTestResult" style="margin-top:12px;font-size:13px;line-height:1.6"></div>
+      <div style="text-align:right;margin-top:14px"><button class="btn btn-ghost" id="kizTestClose">Закрыть</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector('#kizTestInput');
+  const result = overlay.querySelector('#kizTestResult');
+  forceEnglishInput(input);
+  let keys = [];
+  input.addEventListener('keydown', (e)=>{
+    if(e.key==='Enter'){
+      e.preventDefault();
+      setTimeout(()=>{
+        const raw = input.value;
+        input.value = '';
+        const norm = normalizeKizInput(raw);
+        const shown = escapeHtml(raw).split(GS_CHAR).join('<span style="background:#FFE7A8;border-radius:3px;padding:0 3px;color:var(--warn);font-weight:700">␝</span>');
+        const specials = {};
+        keys.forEach(k=>{ if(k.ctrl || k.alt){ const name = (k.ctrl?'Ctrl+':'')+(k.alt?'Alt+':'')+(k.code||k.key); specials[name] = (specials[name]||0)+1; } });
+        const specialsHtml = Object.keys(specials).length
+          ? Object.keys(specials).map(n=>`<code>${escapeHtml(n)}</code> ×${specials[n]}`).join(', ')
+          : 'нет';
+        const gsInRaw = raw.split(GS_CHAR).length - 1;
+        let verdict;
+        if(gsInRaw >= 2) verdict = `<b style="color:var(--ok)">✅ Разделители дошли (${gsInRaw}). Сканер настроен правильно.</b>`;
+        else if(norm.restored) verdict = `<b style="color:#A06A00">⚠ Разделители от сканера не пришли, но программа восстановила их по структуре кода — в WB уйдёт полный код. Настраивать сканер не обязательно.</b>`;
+        else if(raw.length > 31) verdict = `<b style="color:var(--warn)">⚠ Разделителей нет, и структура кода нестандартная — автоматически восстановить нельзя. Если WB не принимает код, нужна настройка сканера.</b>`;
+        else verdict = `<b>Код короткий (${raw.length} симв.) — это не полный КИЗ.</b>`;
+        result.innerHTML = `
+          <div style="padding:10px 12px;background:var(--bg);border-radius:8px;margin-bottom:8px;word-break:break-all;font-family:'IBM Plex Mono',monospace;font-size:12px">${shown || '—'}</div>
+          <div>Длина: <b>${raw.length}</b> симв. · разделителей GS: <b>${gsInRaw}</b>${norm.restored ? ' → после восстановления: <b>'+norm.code.length+'</b> симв., GS: <b>2</b>' : ''}</div>
+          <div>Служебные нажатия от сканера: ${specialsHtml}</div>
+          <div style="margin-top:8px">${verdict}</div>`;
+        keys = [];
+      }, 0);
+      return;
+    }
+    keys.push({key:e.key, code:e.code, ctrl:e.ctrlKey, alt:e.altKey});
+  });
+  const close = ()=>{ overlay.remove(); document.removeEventListener('keydown', onEsc, true); };
+  const onEsc = (e)=>{ if(e.key==='Escape'){ e.preventDefault(); close(); } };
+  document.addEventListener('keydown', onEsc, true);
+  overlay.querySelector('#kizTestClose').onclick = close;
+  setTimeout(()=>input.focus(), 0);
 }
 function wireWizardKizInput(order){
   const kizInput = document.getElementById('wizardKizInput');
@@ -621,7 +680,8 @@ function wireWizardKizInput(order){
     // а после того как браузер точно успел записать последний символ (иначе
     // изредка теряется самый последний символ кода, и проверка у WB не проходит).
     setTimeout(()=>{
-      const kizCode = kizInput.value.trim();
+      const norm = normalizeKizInput(kizInput.value);
+      const kizCode = norm.code;
       kizInput.value='';
       if(!kizCode) return;
       if(kizCode===NEXT_ORDER_QR_CODE){ wizardNextOrder(); return; }
@@ -632,18 +692,19 @@ function wireWizardKizInput(order){
       }
       // Не подтверждённая/неудачная попытка не считается «использованием» кода —
       // иначе повторный скан того же кода после сбоя навсегда блокируется как «дубль».
-      const dup = kizScans.find(k=>k.kizCode===kizCode);
+      const dup = kizScans.find(k=>kizKey(k.kizCode)===kizKey(kizCode));
       if(dup){ playBeep('error'); toast(`Этот КИЗ уже был использован ранее (${dup.name})`); return; }
-      wizardAttachKiz(order, kizCode);
+      wizardAttachKiz(order, kizCode, norm);
     }, 0);
   });
 }
-function wizardAttachKiz(order, kizCode){
-  toast('Отправляем КИЗ на WB…');
+function wizardAttachKiz(order, kizCode, norm){
+  toast(`Отправляем КИЗ на WB… (${kizCode.length} симв., разделителей GS: ${norm ? norm.gsCount : '?'}${norm && norm.restored ? ', восстановлены автоматически' : ''})`);
   sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'attach_kiz', orderId: order.orderId, kizCode } }).then(({data, error})=>{
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus;
+    order.kizDecision = data.decision || null;
     if(data.kizStatus !== 'verify_failed'){
       kizScans.push({kizCode, supplyId: order.wbSupplyId || ('FBS-'+order.orderId), sku:order.article, name:order.name, size:order.size||'', clientName:order.clientName, time:new Date().toISOString()});
       sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id: order.wbSupplyId || ('FBS-'+order.orderId), sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
@@ -787,9 +848,10 @@ async function hideOrdersFromOtherWarehouse(clientId){
 }
 function renderKizStatusLabel(o){
   if(!o.requiresKiz && !o.kizCode) return '';
+  const why = o.kizDecision ? ` <span style="font-weight:400;font-size:11px">(WB: ${escapeHtml(o.kizDecision)})</span>` : '';
   if(o.kizStatus==='attached') return ' · <span style="color:var(--ok);font-weight:700">✅ КИЗ подтверждён WB</span>';
-  if(o.kizStatus==='pending') return ' · <span style="color:var(--ink-soft)">⏳ WB проверяет маркировку…</span>';
-  if(o.kizStatus==='verify_failed') return ' · <span style="color:var(--warn);font-weight:700">⚠ WB не подтвердил КИЗ</span>';
+  if(o.kizStatus==='pending') return ` · <span style="color:var(--ink-soft)">⏳ WB проверяет маркировку…${why}</span>`;
+  if(o.kizStatus==='verify_failed') return ` · <span style="color:var(--warn);font-weight:700">⚠ WB не подтвердил КИЗ${why}</span>`;
   if(o.kizCode) return ' · КИЗ отправлен, статус не проверен';
   return o.requiresKiz ? ' · <span style="color:var(--warn)">КИЗ не прикреплён ⚠</span>' : '';
 }
@@ -1843,7 +1905,7 @@ async function loadFbsOrders(){
     orderId:o.order_id, rid:o.rid||'', clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
-    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
+    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
 }
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; fetchNewFbsOrders(true); });

@@ -113,7 +113,7 @@ async function loadSupplies(){
     warehouseId: s.warehouse_id || 'MAIN',
     updDocNumber: s.upd_doc_number||'', updPricePerUnit: s.upd_price_per_unit||0, updVatRate: s.upd_vat_rate||0,
     createdAt: new Date(s.created_at),
-    items: itemRows.filter(it=>it.supply_id===s.id).map(it=>({sku:it.sku, name:it.name, qty:it.qty, receivedQty:it.received_qty, barcode:it.barcode||'', size:it.size||''}))
+    items: itemRows.filter(it=>it.supply_id===s.id).map(it=>({sku:it.sku, name:it.name, qty:it.qty, receivedQty:it.received_qty, defectQty:it.defect_qty||0, barcode:it.barcode||'', size:it.size||''}))
   }));
 }
 async function loadOutboundSupplies(){
@@ -135,5 +135,5 @@ async function loadOutboundSupplies(){
 async function loadKizScans(){
   const { data, error } = await sb.from('kiz_scans').select('*').order('created_at',{ascending:true}).limit(50000);
   if(error){ console.error(error); return; }
-  kizScans = data.map(k=>({kizCode:k.kiz_code, supplyId:k.supply_id, sku:k.sku, name:k.name, size:k.size||'', clientName:k.client_name, time:k.created_at, employeeName:k.employee_name||''}));
+  kizScans = data.map(k=>({kizCode:k.kiz_code, supplyId:k.supply_id, sku:k.sku, name:k.name, size:k.size||'', clientName:k.client_name, time:k.created_at, employeeName:k.employee_name||'', isDefect:!!k.is_defect}));
 }

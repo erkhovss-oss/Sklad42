@@ -737,14 +737,14 @@ function submitManualReceipt(){
   renderReceiving('manual');
 }
 
-function logReceipt(sku, name, qty, client, size){
+function logReceipt(sku, name, qty, client, size, warehouseId){
   const now = new Date();
   const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   receivingLog.push({sku, name, qty, time});
   sb.from('receiving_log').insert({sku, name, qty, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null})
     .then(({error})=>{ if(error) console.error(error); })
     .catch(e=>{ console.error(e); toast('Нет связи с базой — запись приёмки не сохранилась'); });
-  logMovement(sku, name, qty, 'Приёмка', client, size);
+  logMovement(sku, name, qty, 'Приёмка', client, size, warehouseId);
   if(client){
     const cl = clients.find(c=>c.name===client);
     if(cl && cl.receivingPricePerUnit > 0){

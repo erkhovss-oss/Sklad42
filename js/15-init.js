@@ -298,10 +298,11 @@ function renderPortalSuppliesList(){
           <div style="font-size:13px;color:var(--ink-soft);line-height:1.8;margin-top:12px">
             ${s.items.map(it=>{
               const fact = it.receivedQty||0;
+              const defect = Math.min(it.defectQty||0, fact);
               const mismatch = !inProgress && fact !== it.qty;
               return `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
                 <span>${escapeHtml(it.name||it.sku)}${it.size?' ('+escapeHtml(it.size)+')':''}</span>
-                <span class="mono" style="${mismatch?'color:var(--warn);font-weight:600':(inProgress?'color:var(--ink-faint)':'color:var(--ok);font-weight:600')}">${inProgress ? it.qty : `${fact}/${it.qty}`} шт</span>
+                <span class="mono" style="${mismatch?'color:var(--warn);font-weight:600':(inProgress?'color:var(--ink-faint)':'color:var(--ok);font-weight:600')}">${inProgress ? it.qty : `${fact}/${it.qty}`} шт${!inProgress && defect>0 ? `<span style="color:var(--warn);font-weight:600"> · из них брак ${defect}</span>` : ''}</span>
               </div>`;
             }).join('')}
           </div>
@@ -324,12 +325,14 @@ function downloadPortalSupplyActExcel(supplyId){
   const today = new Date().toLocaleDateString('ru-RU');
   const rows = s.items.map((it,idx)=>{
     const fact = it.receivedQty||0;
+    const defect = Math.min(it.defectQty||0, fact);
     const diff = fact - it.qty;
-    return [idx+1, it.sku, it.size||'', it.barcode||'', it.name, it.qty, fact, diff!==0 ? (diff>0?'+':'')+diff : '—'];
+    return [idx+1, it.sku, it.size||'', it.barcode||'', it.name, it.qty, fact, defect>0 ? defect : '—', diff!==0 ? (diff>0?'+':'')+diff : '—'];
   });
   const totalPlan = s.items.reduce((a,it)=>a+it.qty,0);
   const totalFact = s.items.reduce((a,it)=>a+(it.receivedQty||0),0);
-  const mismatches = rows.filter(r=>r[7]!=='—').length;
+  const totalDefect = s.items.reduce((a,it)=>a+Math.min(it.defectQty||0, it.receivedQty||0),0);
+  const mismatches = rows.filter(r=>r[8]!=='—').length;
 
   const data = [
     [`Акт приёмки № ${actNumber} от ${today}`],
@@ -338,13 +341,14 @@ function downloadPortalSupplyActExcel(supplyId){
     [`Клиент: ${clientViewMode.name}`],
     [`Поставка: ${s.id}`],
     [],
-    ['№','Артикул','Размер','ШК товара','Наименование','План, шт','Факт, шт','Расхождение'],
+    ['№','Артикул','Размер','ШК товара','Наименование','План, шт','Принято, шт','в т.ч. брак, шт','Расхождение'],
     ...rows,
     [],
-    ['','','','','Итого:', totalPlan, totalFact, mismatches ? `Расхождений: ${mismatches} поз.` : 'Без расхождений']
+    ['','','','','Итого:', totalPlan, totalFact, totalDefect || '—', mismatches ? `Расхождений: ${mismatches} поз.` : 'Без расхождений'],
+    ...(totalDefect ? [['','','','','Годного к продаже, шт:', totalFact - totalDefect], ['Брак размещён на отдельном складе «БРАК» и маркетплейсам не передаётся.']] : [])
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:18},{wch:32},{wch:10},{wch:10},{wch:18}];
+  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:18},{wch:32},{wch:10},{wch:12},{wch:15},{wch:18}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Акт приёмки');
   XLSX.writeFile(wb, `Akt_priemki_${actNumber}.xlsx`);
@@ -353,14 +357,13 @@ function downloadPortalSupplyActPdf(supplyId){
   const s = portalSuppliesList.find(x=>x.id===supplyId);
   if(!s) return;
   const actNumber = s.actNumber || s.act_number || s.id;
-  const rows = s.items.map((it,idx)=>({
-    n: idx+1, sku: it.sku, size: it.size||'', barcode: '', name: it.name,
-    plan: it.qty, fact: it.receivedQty||0, diff: (it.receivedQty||0) - it.qty
-  }));
-  const totalPlan = rows.reduce((a,r)=>a+r.plan,0);
-  const totalFact = rows.reduce((a,r)=>a+r.fact,0);
-  const mismatches = rows.filter(r=>r.diff!==0).length;
-  const noMismatches = mismatches === 0;
+  const rows = s.items.map((it,idx)=>{
+    const fact = it.receivedQty||0;
+    const defect = Math.min(it.defectQty||0, fact);
+    return { n: idx+1, sku: it.sku, size: it.size||'', barcode: '', name: it.name,
+      plan: it.qty, fact, defect, good: fact - defect, diff: fact - it.qty };
+  });
+  const summary = actSummary(rows);
   const companyName = portalCompany.name || 'ТелеПак';
   const today = new Date();
   const dateStr = today.toLocaleDateString('ru-RU', {day:'2-digit', month:'long', year:'numeric'});
@@ -456,12 +459,13 @@ function downloadPortalSupplyActPdf(supplyId){
       </div>
 
       <table>
-        <thead><tr><th>№</th><th>Артикул</th><th>Размер</th><th>Наименование</th><th class="num">План, шт</th><th class="num">Факт, шт</th><th class="num">Расхождение</th></tr></thead>
+        <thead><tr><th>№</th><th>Артикул</th><th>Размер</th><th>Наименование</th><th class="num">План, шт</th><th class="num">Принято, шт</th><th class="num">в т.ч. брак, шт</th><th class="num">Расхождение</th></tr></thead>
         <tbody>
           ${rows.map(r=>`
-            <tr class="${r.diff!==0?'mismatch':''}">
+            <tr class="${(r.diff!==0 || r.defect>0)?'mismatch':''}">
               <td class="mono">${r.n}</td><td class="mono">${escapeHtml(r.sku)}</td><td>${escapeHtml(r.size)}</td><td>${escapeHtml(r.name)}</td>
               <td class="num">${r.plan}</td><td class="num">${r.fact}</td>
+              <td class="num ${r.defect>0?'diff-bad':'diff-ok'}">${r.defect>0 ? r.defect : '—'}</td>
               <td class="num ${r.diff!==0?'diff-bad':'diff-ok'}">${r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—'}</td>
             </tr>
           `).join('')}
@@ -470,13 +474,13 @@ function downloadPortalSupplyActPdf(supplyId){
 
       <div class="summary-row">
         <div class="summary-nums">
-          <div class="stat"><div class="val">${totalPlan}</div><div class="lbl">По плану, шт</div></div>
-          <div class="stat"><div class="val">${totalFact}</div><div class="lbl">Принято, шт</div></div>
+          <div class="stat"><div class="val">${summary.totalPlan}</div><div class="lbl">По плану, шт</div></div>
+          <div class="stat"><div class="val">${summary.totalFact}</div><div class="lbl">Принято, шт</div></div>
+          ${summary.totalDefect ? `<div class="stat"><div class="val" style="color:var(--warn)">${summary.totalDefect}</div><div class="lbl">в т.ч. брак, шт</div></div><div class="stat"><div class="val">${summary.totalGood}</div><div class="lbl">Годных, шт</div></div>` : ''}
         </div>
-        ${noMismatches
-          ? `<span class="status-pill ok">✅ Без расхождений</span>`
-          : `<span class="status-pill bad">⚠ Расхождений: ${mismatches} поз.</span>`}
+        ${actStatusPillsHtml(summary)}
       </div>
+      ${actDefectNoteHtml(summary)}
 
       <div class="sign">
         <div><div class="role">Принял (склад)</div><div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
@@ -488,6 +492,99 @@ function downloadPortalSupplyActPdf(supplyId){
   `);
   win.document.close();
 }
+// ---------- REALTIME ----------
+// Живое обновление данных: когда коллега (или фоновая синхронизация) меняет остатки или
+// заказы, у остальных открытых вкладок список обновляется сам, без перезагрузки страницы.
+// Этап 1: остатки, заказы WB, заказы Ozon. Работает только для вошедших сотрудников —
+// на этих таблицах доступ закрыт политикой is_active_staff(), так что анонимы событий не видят.
+let realtimeChannel = null;
+let realtimeWasDown = false;
+const realtimeTimers = {};
+const REALTIME_TABS = { inventory:'tab-inventory', wb:'tab-fbs', ozon:'tab-ozon' };
+
+function isTabActive(tabId){
+  const el = document.getElementById(tabId);
+  return !!(el && el.classList.contains('active'));
+}
+// Нельзя перерисовывать список, пока человек что-то вводит или идёт сборка/сканирование —
+// иначе введённое пропадёт посреди работы.
+function isUserBusyIn(kind){
+  if(kind==='inventory'){
+    if(editingSku || writeOffSku || deletingSku || allocatingSku || historySku) return true;
+    return isTypingInside('invBody');
+  }
+  if(kind==='wb'){
+    if(assemblyModeQueue.length || scanModeActive) return true;
+    return isTypingInside('fbsBody');
+  }
+  if(kind==='ozon'){
+    return isTypingInside('ozonBody');
+  }
+  return false;
+}
+// Курсор стоит в поле ввода внутри перерисовываемой области?
+function isTypingInside(containerId){
+  const body = document.getElementById(containerId);
+  const el = document.activeElement;
+  if(!body || !el) return false;
+  return body.contains(el) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+}
+function renderRealtimeKind(kind){
+  if(kind==='inventory') renderInventory();
+  else if(kind==='wb') renderFbsBody();
+  else if(kind==='ozon') renderOzonBody();
+}
+// Пока вкладка открыта, но человек занят — ждём и пробуем перерисовать позже.
+// Если вкладка не открыта — просто ничего не рисуем: при переключении на неё всё и так
+// отрисуется из свежих данных.
+function tryRealtimeRender(kind){
+  if(!isTabActive(REALTIME_TABS[kind])) return;
+  if(isUserBusyIn(kind)){
+    clearTimeout(realtimeTimers[kind+'_render']);
+    realtimeTimers[kind+'_render'] = setTimeout(()=>tryRealtimeRender(kind), 2500);
+    return;
+  }
+  try{ renderRealtimeKind(kind); }catch(e){ console.error(e); }
+}
+async function reloadRealtimeKind(kind){
+  try{
+    if(kind==='inventory') await loadInventory();
+    else if(kind==='wb') await loadFbsOrders();
+    else if(kind==='ozon') await loadOzonOrders();
+  }catch(e){ console.error('Realtime: не удалось обновить', kind, e); return; }
+  tryRealtimeRender(kind);
+}
+// Событий бывает пачкой (например, сборка нескольких заказов подряд) — собираем их в одно обновление.
+function scheduleRealtimeReload(kind){
+  clearTimeout(realtimeTimers[kind]);
+  realtimeTimers[kind] = setTimeout(()=>reloadRealtimeKind(kind), kind==='inventory' ? 800 : 1500);
+}
+function startRealtime(){
+  if(realtimeChannel || !sb) return;
+  realtimeChannel = sb.channel('staff-live')
+    .on('postgres_changes', { event:'*', schema:'public', table:'inventory' }, ()=>scheduleRealtimeReload('inventory'))
+    .on('postgres_changes', { event:'*', schema:'public', table:'wb_orders' }, ()=>scheduleRealtimeReload('wb'))
+    .on('postgres_changes', { event:'*', schema:'public', table:'ozon_orders' }, ()=>scheduleRealtimeReload('ozon'))
+    .subscribe((status)=>{
+      if(status==='SUBSCRIBED'){
+        // После обрыва связи события за время простоя потеряны — перезагружаем всё целиком.
+        if(realtimeWasDown){
+          realtimeWasDown = false;
+          ['inventory','wb','ozon'].forEach(reloadRealtimeKind);
+          toast('Связь восстановлена — данные обновлены');
+        }
+      } else if(status==='CHANNEL_ERROR' || status==='TIMED_OUT' || status==='CLOSED'){
+        realtimeWasDown = true;
+      }
+    });
+}
+function stopRealtime(){
+  if(realtimeChannel && sb){ try{ sb.removeChannel(realtimeChannel); }catch(e){} }
+  realtimeChannel = null;
+  realtimeWasDown = false;
+  Object.keys(realtimeTimers).forEach(k=>clearTimeout(realtimeTimers[k]));
+}
+
 async function loadStaffData(){
   try{
     await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadBoxSizes(), loadKizScans(), loadFbsOrders(), loadOzonOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes(), loadConsumables(), loadKitComponents(), loadReturns()]);
@@ -509,6 +606,7 @@ async function loadStaffData(){
     switchTab(savedTab);
   }
   applyNavPermissions();
+  startRealtime();
 }
 async function initApp(){
   if(!sb){
