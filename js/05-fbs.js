@@ -561,6 +561,25 @@ async function fsRenderHistory(){
   }
 }
 
+// Кнопка «Списание по файлу» добавляется на вкладку FBS из кода — так для её появления достаточно обновить JS-файл
+function fsInjectButton(){
+  if(document.getElementById('fsOpenBtn')) return true;
+  const anchor = Array.from(document.querySelectorAll('#tab-fbs .page-head button')).find(b=>/backfillFbsSupplyIds/.test(b.getAttribute('onclick')||''))
+    || document.querySelector('#tab-fbs .page-head button');
+  if(!anchor || !anchor.parentElement) return false;
+  const btn = document.createElement('button');
+  btn.id = 'fsOpenBtn';
+  btn.className = 'btn btn-ghost';
+  btn.title = 'Списание остатков по файлу из кабинета маркетплейса — для клиентов, которые не дают доступ по API';
+  btn.textContent = '📥 Списание по файлу';
+  btn.addEventListener('click', ()=>openFileShipments());
+  anchor.parentElement.appendChild(btn);
+  return true;
+}
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fsInjectButton);
+else fsInjectButton();
+setTimeout(fsInjectButton, 800); // на случай, если вкладка достроилась позже
+
 function setFbsView(view){
   fbsView = view;
   fbsCompletePage = 1;
