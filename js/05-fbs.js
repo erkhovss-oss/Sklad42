@@ -9,6 +9,558 @@ function renderFbsClientSelect(){
   if(prev==='' || wbClients.find(c=>c.id===prev)) select.value = prev;
   fbsSelectedClientId = select.value;
 }
+// ---------- СПИСАНИЕ ПО ФАЙЛУ (клиенты, которые не дают доступ по API) ----------
+// Клиент присылает выгрузку из своего кабинета (WB: «Сборочные задания» поставки, Ozon: список отправлений),
+// мы разбираем файл, показываем, что будет списано, и списываем остаток. Каждая строка файла (№ задания /
+// № отправления) записывается в таблицу file_shipments ровно один раз — повторная загрузка того же файла
+// (или пересекающегося с ним) ничего не спишет второй раз. Загрузку можно отменить целиком.
+const FS_CANCEL_RE = /отмен|отклон|cancel|declin/i;
+let fsState = null;
+
+function fsCell(v){ return v==null ? '' : String(v).trim(); }
+// Штрихкод в Excel бывает числом (теряются ведущие нули) — сравниваем без ведущих нулей
+function fsNormBarcode(v){ return fsCell(v).replace(/\.0+$/,'').replace(/^0+/,''); }
+function fsParseQty(v){
+  if(typeof v==='number') return v>0 ? Math.round(v) : 1;
+  const m = fsCell(v).match(/\d+/);
+  return m ? Math.max(1, parseInt(m[0],10)) : 1;
+}
+// WB пишет дату как «13:08:10 06.10.2026»
+function fsParseWbDate(s){
+  const m = fsCell(s).match(/(\d{1,2}):(\d{2}):(\d{2})\s+(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if(!m) return null;
+  const d = new Date(+m[6], +m[5]-1, +m[4], +m[1], +m[2], +m[3]);
+  return isNaN(d) ? null : d.toISOString();
+}
+function fsHeaderMap(row){
+  const map = {};
+  (row||[]).forEach((c,i)=>{ const k = fsCell(c).toLowerCase().replace(/\s+/g,' '); if(k && !(k in map)) map[k] = i; });
+  return map;
+}
+// Ищет лист, где в одной из первых строк есть все нужные заголовки (столбцы ищем по названиям, не по номерам)
+function fsFindSheet(wb, needed){
+  for(const name of wb.SheetNames){
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:'', raw:true});
+    for(let r=0; r<Math.min(rows.length, 10); r++){
+      const map = fsHeaderMap(rows[r]);
+      if(needed.every(h=>h in map)) return {name, rows, headerRow:r, map};
+    }
+  }
+  return null;
+}
+// WB при выгрузке в Excel заменяет невидимые разделители GS символом-заменителем (U+FFFD) — возвращаем настоящий GS
+function fsFixKiz(code){
+  return normalizeKizInput(String(code||'').replace(/\uFFFD/g, GS_CHAR)).code;
+}
+function fsParseOzon(sh){
+  const m = sh.map, rows = [], index = {};
+  let declaredPositions = null, declaredQty = null;
+  sh.rows.forEach((row, r)=>{
+    if(r <= sh.headerRow) return;
+    const first = fsCell(row[0]);
+    const pm = first.match(/позиций\s*:\s*(\d+)/i);
+    if(pm){ declaredPositions = +pm[1]; return; }
+    if(/общее кол-во|всего/i.test(first)){
+      const q = row.map(fsCell).join(' ').match(/(\d+)\s*шт/i);
+      if(q) declaredQty = +q[1];
+      return;
+    }
+    const posting = fsCell(row[m['№ отправления']]);
+    if(!posting) return;
+    const barcodeRaw = fsCell(row[m['шк товара']]);
+    const barcode = fsNormBarcode(barcodeRaw);
+    const name = fsCell(row[m['наименование']]);
+    // артикул продавца у Ozon виден только в скобках в конце названия; «Артикул» в файле — числовой номер Ozon
+    const hint = (name.match(/\(([^()\s]{2,40})\)\s*$/) || [])[1] || '';
+    const row2 = {
+      posting, itemKey: barcode, qty: fsParseQty(row[m['кол-во']]), name, size: '', color: '',
+      vendor: hint, barcode, barcodeRaw, ozonSku: fsCell(row[m['артикул']]),
+      label: fsCell(row[m['этикетка']]), kiz: '', supplyRef: '', statusInFile: '', orderedAt: null
+    };
+    const key = posting+'|'+row2.itemKey;
+    if(index[key]){ index[key].qty += row2.qty; } else { index[key] = row2; rows.push(row2); }
+  });
+  return {
+    marketplace:'ozon', rows,
+    checks: {
+      declaredPositions, declaredQty,
+      parsedPositions: rows.length, parsedQty: rows.reduce((s,x)=>s+x.qty,0)
+    },
+    note: 'Ozon: список отправлений'
+  };
+}
+function fsParseWb(wb, sh){
+  const m = sh.map, rows = [], kizByOrder = {};
+  const kizSheet = fsFindSheet(wb, ['№ задания','киз']);
+  if(kizSheet){
+    kizSheet.rows.forEach((r,i)=>{
+      if(i <= kizSheet.headerRow) return;
+      const id = fsCell(r[kizSheet.map['№ задания']]), k = fsCell(r[kizSheet.map['киз']]);
+      if(id && k) kizByOrder[id] = fsFixKiz(k);
+    });
+  }
+  const seen = new Set();
+  sh.rows.forEach((row, i)=>{
+    if(i <= sh.headerRow) return;
+    const posting = fsCell(row[m['№ задания']]);
+    if(!posting || seen.has(posting)) return;
+    seen.add(posting);
+    const barcodeRaw = fsCell(row[m['баркод']]);
+    rows.push({
+      posting, itemKey:'', qty:1, name: fsCell(row[m['наименование']]), size: fsCell(row[m['размер']]), color: fsCell(row[m['цвет']]),
+      vendor: fsCell(row[m['артикул продавца']]), barcode: fsNormBarcode(barcodeRaw), barcodeRaw,
+      ozonSku: '', wbArticle: fsCell(row[m['артикул wildberries']]), label: fsCell(row[m['стикер']]),
+      kiz: kizByOrder[posting] || '', supplyRef: fsCell(row[m['qr-код поставки']]),
+      statusInFile: fsCell(row[m['статус задания']]), orderedAt: fsParseWbDate(row[m['дата создания']])
+    });
+  });
+  const supplies = [...new Set(rows.map(r=>r.supplyRef).filter(Boolean))];
+  return {
+    marketplace:'wb', rows,
+    checks: { declaredPositions:null, declaredQty:null, parsedPositions: rows.length, parsedQty: rows.length },
+    note: 'Wildberries: сборочные задания' + (supplies.length ? ' · поставка ' + supplies.join(', ') : '') + (kizSheet ? ` · КИЗ в файле: ${Object.keys(kizByOrder).length}` : '')
+  };
+}
+function fsParseFile(wb){
+  const wbSheet = fsFindSheet(wb, ['№ задания','артикул продавца']);
+  if(wbSheet) return fsParseWb(wb, wbSheet);
+  const ozSheet = fsFindSheet(wb, ['№ отправления','шк товара']);
+  if(ozSheet) return fsParseOzon(ozSheet);
+  return {error:'Не удалось определить формат файла. Поддерживаются выгрузки Wildberries (столбцы «№ задания», «Артикул продавца») и Ozon (столбцы «№ отправления», «ШК товара»).'};
+}
+
+// ----- сопоставление строк файла с нашими товарами -----
+function fsClientRows(clientName){ return inventory.filter(i=>(i.client||'')===clientName && (i.warehouseId||'MAIN')!=='BRAK'); }
+function fsItemRows(clientName, sku, size){ return fsClientRows(clientName).filter(i=>i.sku===sku && (i.size||'')===(size||'')); }
+function fsFindItem(r, clientName){
+  const rows = fsClientRows(clientName);
+  if(!rows.length) return null;
+  if(r.barcode){
+    const byMain = rows.find(i=>fsNormBarcode(i.barcode)===r.barcode);
+    if(byMain) return {sku:byMain.sku, size:byMain.size||'', via:'barcode'};
+    const ex = inventoryBarcodes.find(b=>(b.clientName||'')===clientName && fsNormBarcode(b.barcode)===r.barcode);
+    if(ex) return {sku:ex.sku, size:ex.size||'', via:'barcode'};
+  }
+  const v = (r.vendor||'').toLowerCase();
+  if(v){
+    const cand = rows.filter(i=>String(i.sku||'').toLowerCase()===v || String(i.vendorCode||'').toLowerCase()===v);
+    if(cand.length){
+      const sz = wbSizeKey(r.size);
+      const exact = cand.filter(i=>wbSizeKey(i.size)===sz);
+      const distinct = new Set(cand.map(i=>i.sku+'~~'+(i.size||'')));
+      if(exact.length) return {sku:exact[0].sku, size:exact[0].size||'', via:'article'};
+      if(distinct.size===1) return {sku:cand[0].sku, size:cand[0].size||'', via:'article-only'};
+    }
+  }
+  return null;
+}
+function fsAvailable(clientName, sku, size){
+  const rows = fsItemRows(clientName, sku, size);
+  if(rows.length && rows[0].isKit && rows[0].kitMode!=='assembled'){
+    try{ return Math.max(0, computeKitAvailability(rows[0]).available); }catch(e){ return 0; }
+  }
+  return rows.reduce((s,i)=>s+Math.max(0,i.qty||0), 0);
+}
+// Чистый расчёт плана (без обращений к сети): что спишется, что пропускается и почему
+function fsComputePlan(parsed, clientName, already, api, opts){
+  opts = opts || {};
+  const excluded = opts.excludedStatuses || new Set();
+  const rows = parsed.rows.map(r=>{
+    const row = Object.assign({}, r, {state:'ok', item:null, via:null});
+    const dup = already[r.posting+'|'+r.itemKey];
+    if(dup){ row.state = 'dup_file'; row.info = dup; return row; }
+    const a = api[r.posting];
+    if(a){ row.state = (a.status==='cancel') ? 'api_cancelled' : 'dup_api'; row.info = a; return row; }
+    if(r.statusInFile && excluded.has(r.statusInFile)){ row.state = 'status_excluded'; return row; }
+    const f = fsFindItem(r, clientName);
+    if(!f){ row.state = 'unmatched'; return row; }
+    row.item = f; row.via = f.via;
+    return row;
+  });
+  const byItem = new Map();
+  rows.filter(r=>r.state==='ok').forEach(r=>{
+    const k = r.item.sku+'~~'+r.item.size;
+    if(!byItem.has(k)) byItem.set(k, {sku:r.item.sku, size:r.item.size, rows:[], needed:0, available:0});
+    const g = byItem.get(k); g.rows.push(r); g.needed += r.qty;
+  });
+  byItem.forEach(g=>{
+    g.available = fsAvailable(clientName, g.sku, g.size);
+    let left = g.available;
+    g.rows.forEach(r=>{ if(r.qty <= left) left -= r.qty; else r.state = 'short'; });
+    g.shortage = Math.max(0, g.needed - g.available);
+  });
+  const count = s => rows.filter(r=>r.state===s).length;
+  const sum = s => rows.filter(r=>r.state===s).reduce((a,r)=>a+r.qty,0);
+  return {
+    rows, items: [...byItem.values()],
+    counts: {
+      ok: count('ok'), okQty: sum('ok'), short: count('short'), shortQty: sum('short'),
+      dupFile: count('dup_file'), dupApi: count('dup_api'), apiCancelled: count('api_cancelled'),
+      statusExcluded: count('status_excluded'), unmatched: count('unmatched')
+    }
+  };
+}
+function fsChunk(arr, n){ const out=[]; for(let i=0;i<arr.length;i+=n) out.push(arr.slice(i,i+n)); return out; }
+// Что из этого файла уже списывали раньше (по нашей таблице) …
+async function fsFetchAlreadyImported(clientName, marketplace, postings){
+  const out = {};
+  for(const part of fsChunk(postings, 150)){
+    const { data, error } = await sb.from('file_shipments').select('posting_number,item_key,imported_at,batch_id')
+      .eq('client_name', clientName).eq('marketplace', marketplace).in('posting_number', part);
+    if(error) throw error;
+    (data||[]).forEach(d=>{ out[d.posting_number+'|'+d.item_key] = d; });
+  }
+  return out;
+}
+// … и что уже пришло в систему как обычный заказ по API (чтобы не списать дважды: при сборке по API остаток уже списывается)
+async function fsFetchApiOrders(marketplace, postings){
+  const out = {};
+  for(const part of fsChunk(postings, 150)){
+    if(marketplace==='wb'){
+      const ids = part.map(p=>Number(p)).filter(n=>!isNaN(n));
+      if(!ids.length) continue;
+      const { data, error } = await sb.from('wb_orders').select('order_id,supplier_status').in('order_id', ids);
+      if(error) throw error;
+      (data||[]).forEach(d=>{ out[String(d.order_id)] = {status:d.supplier_status}; });
+    } else {
+      const { data, error } = await sb.from('ozon_orders').select('posting_number,status').in('posting_number', part);
+      if(error) throw error;
+      (data||[]).forEach(d=>{ out[d.posting_number] = {status:d.status}; });
+    }
+  }
+  return out;
+}
+
+// ----- списание -----
+// Для каждой строки выбирается ОДНА строка остатка (склад): сначала та, где хватает на всё количество
+// (основной склад в приоритете), иначе та, где больше всего. Так отмена точно вернёт товар на тот же склад.
+function fsAllocate(rows, clientName){
+  const left = new Map();
+  const remaining = r => left.has(r) ? left.get(r) : Math.max(0, r.qty||0);
+  const out = [];
+  rows.forEach(row=>{
+    const cands = fsItemRows(clientName, row.item.sku, row.item.size)
+      .slice().sort((a,b)=> ((a.warehouseId||'MAIN')==='MAIN'?0:1) - ((b.warehouseId||'MAIN')==='MAIN'?0:1) || remaining(b)-remaining(a));
+    let target = cands.find(c=>remaining(c) >= row.qty) || cands.slice().sort((a,b)=>remaining(b)-remaining(a))[0] || null;
+    const take = target ? Math.min(row.qty, remaining(target)) : 0;
+    if(target) left.set(target, remaining(target) - take);
+    out.push({row, target, take});
+  });
+  return out;
+}
+function fsBillingAmount(item, qty, clientId){
+  if(!item || !item.dims || !(item.dims.l && item.dims.w && item.dims.h)) return null;
+  const liters = (item.dims.l * item.dims.w * item.dims.h) / 1000 * qty;
+  return {liters, price: getFbsTariffPrice(clientId, liters)};
+}
+async function fsApplyPlan(){
+  const st = fsState;
+  if(!st || !st.plan || st.applying) return;
+  const client = clients.find(c=>c.name===st.clientName);
+  const opts = st.options;
+  const todo = st.plan.rows.filter(r=>r.state==='ok' || (r.state==='short' && opts.allowShort));
+  if(!todo.length){ toast('Нечего списывать'); return; }
+  st.applying = true;
+  const btn = document.getElementById('fsApplyBtn'); if(btn){ btn.disabled = true; btn.textContent = '⏳ Списываю…'; }
+  try{
+    const batchId = 'FS-' + Date.now();
+    const allocs = fsAllocate(todo, st.clientName);
+    const recs = allocs.map(a=>({
+      batch_id: batchId, client_name: st.clientName, marketplace: st.parsed.marketplace,
+      posting_number: a.row.posting, item_key: a.row.itemKey || '',
+      sku: a.row.item.sku, size: a.row.item.size || '', barcode: a.row.barcodeRaw || a.row.barcode || null, name: a.row.name,
+      qty: a.row.qty, deducted_qty: a.take, warehouse_id: a.target ? (a.target.warehouseId||'MAIN') : null,
+      label: a.row.label || null, kiz: a.row.kiz || null, supply_ref: a.row.supplyRef || null,
+      status_in_file: a.row.statusInFile || null, ordered_at: a.row.orderedAt, source_file: st.fileName,
+      imported_by: currentUser ? currentUser.name : null
+    }));
+    // Сначала запись (с защитой от дублей на стороне базы), потом списание — и только по тем строкам, которые реально записались.
+    const inserted = new Set();
+    for(const part of fsChunk(recs, 100)){
+      const { data, error } = await sb.from('file_shipments').upsert(part, {onConflict:'client_name,marketplace,posting_number,item_key', ignoreDuplicates:true}).select('posting_number,item_key');
+      if(error) throw error;
+      (data||[]).forEach(d=>inserted.add(d.posting_number+'|'+d.item_key));
+    }
+    let deducted = 0, skippedDup = 0, shortUnits = 0, billed = 0, billedSum = 0;
+    const reason = `Списание по файлу ${st.parsed.marketplace==='wb'?'WB':'Ozon'}`;
+    allocs.forEach((a, i)=>{
+      const rec = recs[i];
+      if(!inserted.has(rec.posting_number+'|'+rec.item_key)){ skippedDup++; return; }
+      if(a.take > 0 && a.target){
+        if(a.target.isKit && a.target.kitMode==='virtual'){ deductStockForShipment(a.target, a.take, `${reason} №${rec.posting_number}`); }
+        else {
+          a.target.qty = Math.max(0, a.target.qty - a.take);
+          logMovement(a.target.sku, a.target.name, -a.take, `${reason} №${rec.posting_number}`, a.target.client, a.target.size, a.target.warehouseId||'MAIN');
+        }
+        deducted += a.take;
+      }
+      shortUnits += (a.row.qty - a.take);
+      if(opts.bill && client){
+        const b = fsBillingAmount(a.target || a.row.item && inventory.find(x=>x.sku===a.row.item.sku && (x.client||'')===st.clientName && (x.size||'')===(a.row.item.size||'')), a.row.qty, client.id);
+        if(b && b.price!==null && b.price!==undefined){
+          const ddsId = `FILE-SHIP-${rec.marketplace}-${rec.posting_number}-${rec.item_key||'0'}`;
+          if(!ddsEntries.find(d=>d.id===ddsId)){
+            const description = `Отгрузка по файлу ${rec.marketplace==='wb'?'WB':'Ozon'} №${rec.posting_number} · ${b.liters.toFixed(2)} л`;
+            const date = new Date().toISOString().slice(0,10);
+            ddsEntries.unshift({id:ddsId, type:'income', category:'Отгрузка FBS', amount:b.price, description, clientId:client.id, clientName:client.name, date, warehouseId: rec.warehouse_id || 'MAIN', createdAt:new Date().toISOString()});
+            sb.from('dds_entries').insert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:b.price, description, client_id:client.id, client_name:client.name, date, warehouse_id: rec.warehouse_id || 'MAIN', employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
+            billed++; billedSum += b.price;
+          }
+        }
+      }
+    });
+    st.lastResult = {batchId, applied: inserted.size, deducted, skippedDup, shortUnits, billed, billedSum};
+    toast(`Списано по файлу: ${deducted} шт (строк файла: ${inserted.size})${skippedDup?` · уже были записаны: ${skippedDup}`:''}${shortUnits?` · не хватило остатка: ${shortUnits} шт`:''}${billed?` · начислено за отгрузку: ${billed} на ${billedSum.toFixed(0)} ₽`:''}`);
+    if(typeof renderInventory==='function') renderInventory();
+    fsReset(true);
+  }catch(e){
+    console.error(e);
+    toast('Не удалось списать по файлу: ' + (e && e.message ? e.message : e) + ' — остаток не менялся, повторите');
+  }finally{
+    if(fsState) fsState.applying = false;
+  }
+}
+// ----- отмена загрузки целиком -----
+async function fsUndoBatch(batchId){
+  const { data: recs, error } = await sb.from('file_shipments').select('*').eq('batch_id', batchId);
+  if(error){ toast('Не удалось прочитать загрузку: ' + error.message); return; }
+  if(!recs || !recs.length){ toast('Эта загрузка уже отменена'); fsRenderHistory(); return; }
+  const units = recs.reduce((s,r)=>s+(r.deducted_qty||0),0);
+  if(!await customConfirm(`Отменить загрузку «${recs[0].source_file||batchId}»? Остаток вернётся на склад (${units} шт по ${recs.length} строкам), начисления за отгрузку по ней удалятся, а сами отправления можно будет загрузить заново.`)) return;
+  let restored = 0, lost = 0;
+  const ddsIds = [];
+  recs.forEach(r=>{
+    ddsIds.push(`FILE-SHIP-${r.marketplace}-${r.posting_number}-${r.item_key||'0'}`);
+    if(!(r.deducted_qty > 0)) return;
+    const row = inventory.find(i=>i.sku===r.sku && (i.client||'')===r.client_name && (i.size||'')===(r.size||'') && (i.warehouseId||'MAIN')===(r.warehouse_id||'MAIN'));
+    if(!row){ lost += r.deducted_qty; return; }
+    row.qty += r.deducted_qty;
+    logMovement(row.sku, row.name, r.deducted_qty, `Отмена списания по файлу ${r.marketplace==='wb'?'WB':'Ozon'} №${r.posting_number}`, row.client, row.size, row.warehouseId||'MAIN');
+    restored += r.deducted_qty;
+  });
+  for(const part of fsChunk(ddsIds, 100)){
+    const { error: dErr } = await sb.from('dds_entries').delete().in('id', part);
+    if(dErr) console.error(dErr);
+  }
+  ddsEntries = ddsEntries.filter(d=>!ddsIds.includes(d.id));
+  const { error: delErr } = await sb.from('file_shipments').delete().eq('batch_id', batchId);
+  if(delErr){ toast('Остаток вернул, но удалить записи загрузки не удалось: ' + delErr.message); }
+  else toast(`Загрузка отменена: возвращено ${restored} шт${lost?` (не нашёл строку остатка для ${lost} шт — проверьте вручную)`:''}`);
+  if(typeof renderInventory==='function') renderInventory();
+  fsRenderHistory();
+}
+
+// ----- привязка и создание товаров из файла -----
+async function fsLinkGroup(idx){
+  const st = fsState; const g = st && st.unmatchedGroups && st.unmatchedGroups[idx];
+  const sel = document.getElementById('fsLink-'+idx);
+  if(!g || !sel || !sel.value){ toast('Выберите товар из списка'); return; }
+  const [sku, size] = sel.value.split('~~');
+  const rows = fsItemRows(st.clientName, sku, size);
+  if(!rows.length){ toast('Товар не найден'); return; }
+  if(g.barcode){
+    const owner = inventory.find(i=>(i.client||'')===st.clientName && fsNormBarcode(i.barcode)===g.barcode) || null;
+    if(owner){ toast('Этот штрихкод уже числится за другим товаром'); return; }
+    const row = {barcode: g.barcodeRaw || g.barcode, sku, client_name: st.clientName, size: size||''};
+    const { error } = await sb.from('inventory_barcodes').upsert([row], {onConflict:'barcode,client_name', ignoreDuplicates:true});
+    if(error){ console.error(error); toast('Не удалось сохранить привязку: ' + error.message); return; }
+    inventoryBarcodes.push({barcode: row.barcode, sku, clientName: st.clientName, size: row.size});
+    toast('Штрихкод привязан к товару — в следующих файлах он найдётся сам');
+  } else {
+    if(rows[0].vendorCode && String(rows[0].vendorCode).toLowerCase()!==g.vendor.toLowerCase()){ toast(`У товара уже указан другой артикул (${rows[0].vendorCode}) — поправьте артикул в остатках или создайте новый товар`); return; }
+    rows.forEach(r=>{ r.vendorCode = g.vendor; });
+    for(const r of rows) await syncInventoryRow(r.sku, r.client, r.size, r.warehouseId);
+    toast(`Артикул «${g.vendor}» привязан к товару — в следующих файлах он найдётся сам`);
+  }
+  fsRecompute();
+}
+async function fsCreateMissing(){
+  const st = fsState; if(!st || !st.unmatchedGroups || !st.unmatchedGroups.length) return;
+  let created = 0;
+  for(const g of st.unmatchedGroups){
+    const first = g.rows[0];
+    const sku = g.vendor || (st.parsed.marketplace==='ozon' ? ('OZ-' + (first.ozonSku || g.barcode)) : '');
+    if(!sku) continue;
+    const size = st.parsed.marketplace==='wb' ? (first.size||'') : '';
+    if(findInventoryItem(sku, st.clientName, size)) continue;
+    const item = {sku, name: first.name || sku, qty:0, client: st.clientName, size, vendorCode: g.vendor || null, barcode: g.barcodeRaw || g.barcode || '', color: first.color || '', warehouseId:'MAIN'};
+    inventory.push(item);
+    await ensureCellAssigned(item);
+    await syncInventoryRow(item.sku, item.client, item.size, item.warehouseId);
+    created++;
+  }
+  toast(`Создано товаров: ${created} (остаток 0) — оформите приёмку, чтобы появился остаток, затем загрузите файл заново`);
+  fsRecompute();
+}
+
+// ----- окно -----
+function fsGroupUnmatched(plan){
+  const groups = new Map();
+  plan.rows.filter(r=>r.state==='unmatched').forEach(r=>{
+    const k = (r.barcode || r.vendor || r.name) + '|' + (r.size||'');
+    if(!groups.has(k)) groups.set(k, {key:k, barcode:r.barcode, barcodeRaw:r.barcodeRaw, vendor:r.vendor, size:r.size, name:r.name, rows:[]});
+    groups.get(k).rows.push(r);
+  });
+  return [...groups.values()];
+}
+function fsStateLabel(s){
+  return {ok:'к списанию', short:'не хватает остатка', dup_file:'уже списано по файлу', dup_api:'уже есть как заказ по API', api_cancelled:'отменён (по API)', status_excluded:'исключён по статусу', unmatched:'товар не найден'}[s] || s;
+}
+function fsClose(){ const o = document.getElementById('fileShipOverlay'); if(o) o.remove(); fsState = null; }
+function fsReset(keepHistory){
+  if(!fsState) return;
+  fsState.parsed = null; fsState.plan = null; fsState.fileName = '';
+  fsRender();
+}
+function openFileShipments(){
+  fsClose();
+  const firstClient = (document.getElementById('fbsClientSelect')||{}).value;
+  fsState = {clientName: (clients.find(c=>c.id===firstClient)||{}).name || (clients[0]||{}).name || '', parsed:null, plan:null, fileName:'', options:{bill:true, allowShort:false, excludedStatuses:new Set()}, unmatchedGroups:[], history:null};
+  const o = document.createElement('div');
+  o.id = 'fileShipOverlay';
+  o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9990;display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow:auto';
+  o.innerHTML = '<div id="fileShipBox" style="background:#fff;border-radius:14px;padding:22px;max-width:980px;width:100%"></div>';
+  o.addEventListener('mousedown', e=>{ if(e.target===o) fsClose(); });
+  document.body.appendChild(o);
+  fsRender();
+  fsRenderHistory();
+}
+function fsSetClient(name){ if(fsState){ fsState.clientName = name; fsState.parsed = null; fsState.plan = null; fsRender(); fsRenderHistory(); } }
+function fsSetOpt(k, v){
+  if(!fsState) return;
+  fsState.options[k] = v;
+  if(fsState.plan) fsRender();
+}
+function fsToggleStatus(status, include){
+  if(!fsState) return;
+  if(include) fsState.options.excludedStatuses.delete(status); else fsState.options.excludedStatuses.add(status);
+  fsRecompute();
+}
+async function fsHandleFile(inputEl){
+  const file = inputEl.files && inputEl.files[0];
+  if(!file || !fsState) return;
+  const st = fsState;
+  if(!st.clientName){ toast('Сначала выберите клиента'); return; }
+  const box = document.getElementById('fsStatusLine'); if(box) box.textContent = '⏳ Читаю файл…';
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(new Uint8Array(buf), {type:'array'});
+    const parsed = fsParseFile(wb);
+    if(parsed.error){ toast(parsed.error); if(box) box.textContent = parsed.error; return; }
+    if(!parsed.rows.length){ toast('В файле не найдено ни одной строки'); if(box) box.textContent = 'В файле не найдено ни одной строки'; return; }
+    const postings = parsed.rows.map(r=>r.posting);
+    st.already = await fsFetchAlreadyImported(st.clientName, parsed.marketplace, postings);
+    st.api = await fsFetchApiOrders(parsed.marketplace, postings);
+    st.parsed = parsed; st.fileName = file.name;
+    st.options.excludedStatuses = new Set([...new Set(parsed.rows.map(r=>r.statusInFile).filter(s=>s && FS_CANCEL_RE.test(s)))]);
+    fsRecompute();
+  }catch(e){
+    console.error(e);
+    toast('Не удалось разобрать файл: ' + (e && e.message ? e.message : e));
+    if(box) box.textContent = 'Не удалось разобрать файл';
+  }
+}
+function fsRecompute(){
+  const st = fsState; if(!st || !st.parsed) return;
+  st.plan = fsComputePlan(st.parsed, st.clientName, st.already||{}, st.api||{}, st.options);
+  st.unmatchedGroups = fsGroupUnmatched(st.plan);
+  fsRender();
+}
+function fsRender(){
+  const box = document.getElementById('fileShipBox'); const st = fsState;
+  if(!box || !st) return;
+  const clientOptions = clients.map(c=>`<option value="${escapeHtml(c.name)}" ${c.name===st.clientName?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
+  let body = '';
+  if(!st.plan){
+    body = `<p id="fsStatusLine" style="font-size:13px;color:var(--ink-soft);margin:14px 0 0 0;line-height:1.6">Загрузите выгрузку из кабинета маркетплейса: Wildberries («Сборочные задания» поставки, с листом КИЗ) или Ozon (список отправлений). Формат определится сам. Перед списанием вы увидите, что именно изменится.</p>`;
+  } else {
+    const p = st.plan, c = p.counts, ch = st.parsed.checks;
+    const totalsOk = (ch.declaredQty==null || ch.declaredQty===ch.parsedQty) && (ch.declaredPositions==null || ch.declaredPositions===ch.parsedPositions);
+    const statuses = [...new Set(st.parsed.rows.map(r=>r.statusInFile).filter(Boolean))];
+    const apply = c.ok + (st.options.allowShort ? c.short : 0);
+    const applyQty = p.rows.filter(r=>r.state==='ok' || (r.state==='short' && st.options.allowShort)).reduce((s,r)=>s+r.qty,0);
+    const chip = (n, label, color) => n ? `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${color};font-size:12px;font-weight:600;margin:0 6px 6px 0">${label}: ${n}</span>` : '';
+    const itemRows = p.items.map(g=>{
+      const it = fsItemRows(st.clientName, g.sku, g.size)[0] || {};
+      const bad = g.shortage > 0;
+      return `<tr style="${bad?'background:var(--warn-bg)':''}"><td>${escapeHtml(it.name||g.sku)}${g.size?` · ${escapeHtml(g.size)}`:''}<div class="mono" style="font-size:11px;color:var(--ink-faint)">${escapeHtml(g.sku)}</div></td>
+        <td class="mono" style="text-align:right">${g.needed}</td><td class="mono" style="text-align:right">${g.available}</td>
+        <td class="mono" style="text-align:right;${bad?'color:var(--warn);font-weight:700':''}">${Math.max(0,g.available-g.needed)}${bad?` (не хватает ${g.shortage})`:''}</td></tr>`;
+    }).join('');
+    const unmatchedHtml = st.unmatchedGroups.length ? `
+      <div style="margin-top:16px;padding:12px;border:1px solid var(--warn);border-radius:10px;background:var(--warn-bg)">
+        <div style="font-weight:700;font-size:13px;color:var(--warn);margin-bottom:6px">Товары не найдены у клиента: ${st.unmatchedGroups.length} (строк файла: ${c.unmatched})</div>
+        ${st.unmatchedGroups.slice(0,30).map((g,i)=>`
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;border-top:1px solid rgba(0,0,0,0.08)">
+            <div style="flex:1;min-width:240px;font-size:12px"><b>${escapeHtml(g.name)}</b>${g.size?` · ${escapeHtml(g.size)}`:''}<div class="mono" style="font-size:11px;color:var(--ink-soft)">${g.vendor?`артикул ${escapeHtml(g.vendor)} · `:''}${g.barcode?`ШК ${escapeHtml(g.barcodeRaw||g.barcode)} · `:''}строк: ${g.rows.length}</div></div>
+            <select class="search" id="fsLink-${i}" style="width:230px"><option value="">Привязать к товару…</option>${[...new Set(fsClientRows(st.clientName).map(x=>x.sku+'~~'+(x.size||'')))].map(k=>{ const it=fsItemRows(st.clientName,...k.split('~~'))[0]; return `<option value="${escapeHtml(k)}">${escapeHtml((it&&it.name)||k)}${it&&it.size?` · ${escapeHtml(it.size)}`:''} (${escapeHtml(it?it.sku:k)})</option>`; }).join('')}</select>
+            <button class="btn btn-ghost" style="padding:4px 10px" onclick="fsLinkGroup(${i})">Привязать</button>
+          </div>`).join('')}
+        <div style="margin-top:8px"><button class="btn btn-ghost" onclick="fsCreateMissing()">＋ Создать недостающие товары (остаток 0)</button></div>
+      </div>` : '';
+    const skipped = [
+      c.dupFile ? `уже списано по файлу раньше: <b>${c.dupFile}</b>` : '',
+      c.dupApi ? `уже есть как заказ по API (там остаток списывается при сборке): <b>${c.dupApi}</b>` : '',
+      c.apiCancelled ? `отменены (по API): <b>${c.apiCancelled}</b>` : '',
+      c.statusExcluded ? `исключены по статусу: <b>${c.statusExcluded}</b>` : ''
+    ].filter(Boolean);
+    body = `
+      <div id="fsStatusLine" style="font-size:13px;color:var(--ink-soft);margin:12px 0 8px 0">${escapeHtml(st.parsed.note)} · файл «${escapeHtml(st.fileName)}» · строк: ${ch.parsedPositions}, единиц: ${ch.parsedQty}
+        ${ch.declaredQty!=null||ch.declaredPositions!=null ? (totalsOk ? ' · <span style="color:var(--ok);font-weight:600">итоги файла сошлись ✓</span>' : ` · <span style="color:var(--warn);font-weight:700">итоги файла не сошлись: в файле указано ${ch.declaredPositions!=null?ch.declaredPositions+' поз.':''} ${ch.declaredQty!=null?ch.declaredQty+' шт':''}, прочитано ${ch.parsedPositions} поз. / ${ch.parsedQty} шт — проверьте файл</span>`) : ''}</div>
+      <div style="margin-bottom:6px">
+        ${chip(c.ok,'К списанию','#E7F2EA')}${chip(c.short,'Не хватает остатка','#FBE9E1')}${chip(c.unmatched,'Товар не найден','#FBE9E1')}${chip(c.dupFile,'Уже списано','#EEE')}${chip(c.dupApi,'Уже есть по API','#EEE')}${chip(c.apiCancelled,'Отменены','#EEE')}${chip(c.statusExcluded,'Исключены по статусу','#EEE')}
+      </div>
+      ${skipped.length ? `<div style="font-size:12px;color:var(--ink-soft);line-height:1.7;margin-bottom:8px">Пропускаются: ${skipped.join(' · ')}</div>` : ''}
+      ${statuses.length>1 || statuses.some(s=>FS_CANCEL_RE.test(s)) ? `<div style="font-size:12px;margin-bottom:8px">Статусы в файле (отметьте, какие списывать): ${statuses.map(s=>`<label style="margin-right:12px"><input type="checkbox" ${st.options.excludedStatuses.has(s)?'':'checked'} onchange="fsToggleStatus('${escapeHtml(s).replace(/'/g,'&#39;')}', this.checked)"> ${escapeHtml(s)} (${st.parsed.rows.filter(r=>r.statusInFile===s).length})</label>`).join('')}</div>` : ''}
+      ${p.items.length ? `<table style="width:100%;margin-top:6px"><thead><tr><th>Товар</th><th style="text-align:right">Списать, шт</th><th style="text-align:right">Остаток сейчас</th><th style="text-align:right">Будет после</th></tr></thead><tbody>${itemRows}</tbody></table>` : ''}
+      ${unmatchedHtml}
+      <div style="margin-top:14px;display:flex;gap:16px;flex-wrap:wrap;font-size:12px">
+        <label><input type="checkbox" ${st.options.bill?'checked':''} onchange="fsSetOpt('bill', this.checked)"> Начислять за отгрузку по тарифу FBS (если у клиента заданы тарифы и габариты товара)</label>
+        <label><input type="checkbox" ${st.options.allowShort?'checked':''} onchange="fsSetOpt('allowShort', this.checked)"> Списывать и при нехватке остатка (спишется сколько есть, остаток станет 0)</label>
+      </div>
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="btn btn-ghost" onclick="fsReset()">Выбрать другой файл</button>
+        <button class="btn btn-accent" id="fsApplyBtn" ${apply?'':'disabled'} onclick="fsApplyPlan()">${apply ? `Списать ${applyQty} шт (строк: ${apply})` : 'Нечего списывать'}</button>
+      </div>`;
+  }
+  box.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div><div class="eyebrow">Заказы FBS</div><h2 style="margin:2px 0 0 0;font-size:22px">Списание по файлу</h2></div>
+      <button class="btn btn-ghost" onclick="fsClose()">✕ Закрыть</button>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px">
+      <select class="search" id="fsClientSelect" style="width:240px" onchange="fsSetClient(this.value)">${clientOptions}</select>
+      <input type="file" id="fsFileInput" accept=".xlsx,.xls,.csv" onchange="fsHandleFile(this)">
+    </div>
+    ${body}
+    <div id="fsHistory" style="margin-top:22px;padding-top:16px;border-top:1px solid var(--line)"></div>`;
+  fsRenderHistory();
+}
+async function fsRenderHistory(){
+  const el = document.getElementById('fsHistory'); const st = fsState;
+  if(!el || !st) return;
+  try{
+    const { data, error } = await sb.from('file_shipments').select('batch_id,client_name,marketplace,source_file,imported_at,imported_by,qty,deducted_qty')
+      .eq('client_name', st.clientName).order('imported_at', {ascending:false}).limit(2000);
+    if(error) throw error;
+    const batches = new Map();
+    (data||[]).forEach(d=>{
+      if(!batches.has(d.batch_id)) batches.set(d.batch_id, {id:d.batch_id, file:d.source_file, at:d.imported_at, by:d.imported_by, mp:d.marketplace, rows:0, units:0});
+      const b = batches.get(d.batch_id); b.rows++; b.units += (d.deducted_qty||0);
+    });
+    const list = [...batches.values()].slice(0, 12);
+    el.innerHTML = `<div class="eyebrow" style="margin-bottom:6px">Последние загрузки · ${escapeHtml(st.clientName)}</div>` + (list.length ? list.map(b=>`
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px">
+        <span style="min-width:140px">${new Date(b.at).toLocaleString('ru-RU')}</span><span>${b.mp==='wb'?'WB':'Ozon'}</span>
+        <span style="flex:1;min-width:160px" class="mono">${escapeHtml(b.file||b.id)}</span><span>строк: ${b.rows} · списано: ${b.units} шт</span><span style="color:var(--ink-faint)">${escapeHtml(b.by||'')}</span>
+        <button class="btn btn-ghost" style="padding:2px 8px;color:var(--warn)" onclick="fsUndoBatch('${b.id}')">Отменить</button>
+      </div>`).join('') : `<div style="font-size:12px;color:var(--ink-faint)">Загрузок по этому клиенту ещё не было</div>`);
+  }catch(e){
+    console.error(e);
+    el.innerHTML = `<div style="font-size:12px;color:var(--ink-faint)">Не удалось загрузить историю загрузок</div>`;
+  }
+}
+
 function setFbsView(view){
   fbsView = view;
   fbsCompletePage = 1;
@@ -670,6 +1222,38 @@ function openKizScannerTest(){
   overlay.querySelector('#kizTestClose').onclick = close;
   setTimeout(()=>input.focus(), 0);
 }
+// Пока WB проверяет код (через API это занимает от секунд до пары минут, хотя в кабинете WB «Маркировка
+// корректна» видно раньше), сами переспрашиваем WB по нарастающей и обновляем статус на экране —
+// не ждём фоновой задачи и ручного обновления страницы. Прекращаем, как только решение получено.
+const kizWatchers = {};
+function watchPendingKiz(order){
+  if(!order || kizWatchers[order.orderId]) return;
+  kizWatchers[order.orderId] = true;
+  const delays = [6000, 10000, 15000, 20000, 30000, 40000]; // всего около двух минут
+  (async ()=>{
+    for(const ms of delays){
+      await new Promise(r=>setTimeout(r, ms));
+      if(order.kizStatus !== 'pending') break;
+      try{
+        await sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'recheck_pending_kiz' } });
+        const { data } = await sb.from('wb_orders').select('kiz_status, kiz_decision, kiz_code').eq('order_id', order.orderId).maybeSingle();
+        if(data && data.kiz_status && data.kiz_status !== order.kizStatus){
+          order.kizStatus = data.kiz_status;
+          order.kizDecision = data.kiz_decision || null;
+          if(data.kiz_code) order.kizCode = data.kiz_code;
+          const twin = fbsOrders.find(o=>o.orderId===order.orderId);
+          if(twin && twin!==order){ twin.kizStatus = order.kizStatus; twin.kizDecision = order.kizDecision; if(order.kizCode) twin.kizCode = order.kizCode; }
+          const statusDiv = document.getElementById('wizardKizStatus');
+          if(statusDiv) statusDiv.innerHTML = renderKizStatusLabel(order);
+          if(data.kiz_status === 'attached'){ playBeep('ok'); toast(`✅ Заказ №${order.orderId}: КИЗ подтверждён WB`); }
+          else if(data.kiz_status === 'verify_failed'){ playBeep('warn'); toast(`⚠ Заказ №${order.orderId}: WB не подтвердил КИЗ${data.kiz_decision ? ' ('+data.kiz_decision+')' : ''}`); }
+          if(!scanModeActive) renderFbsBody();
+        }
+      }catch(e){ /* сеть моргнула — следующая попытка или фоновая задача по расписанию */ }
+    }
+    delete kizWatchers[order.orderId];
+  })();
+}
 function wireWizardKizInput(order){
   const kizInput = document.getElementById('wizardKizInput');
   if(!kizInput || kizInput.dataset.wired) return;
@@ -723,6 +1307,7 @@ function wizardAttachKiz(order, kizCode, norm){
     else if(data.kizStatus==='pending'){
       playBeep('ok');
       toast('⏳ КИЗ отправлен, WB ещё проверяет — можно продолжать сборку, статус обновится сам');
+      watchPendingKiz(order);
     }
     else { playBeep('warn'); toast('⚠ WB не подтвердил КИЗ — ' + (data.warning||'проверьте вручную')); }
     const statusDiv = document.getElementById('wizardKizStatus');
@@ -848,7 +1433,8 @@ async function hideOrdersFromOtherWarehouse(clientId){
 }
 function renderKizStatusLabel(o){
   if(!o.requiresKiz && !o.kizCode) return '';
-  const why = o.kizDecision ? ` <span style="font-weight:400;font-size:11px">(WB: ${escapeHtml(o.kizDecision)})</span>` : '';
+  // «pending» — штатное «идёт проверка», его пугающим английским словом не показываем; прочие ответы WB — как есть
+  const why = (o.kizDecision && o.kizDecision!=='pending') ? ` <span style="font-weight:400;font-size:11px">(WB: ${escapeHtml(o.kizDecision)})</span>` : '';
   if(o.kizStatus==='attached') return ' · <span style="color:var(--ok);font-weight:700">✅ КИЗ подтверждён WB</span>';
   if(o.kizStatus==='pending') return ` · <span style="color:var(--ink-soft)">⏳ WB проверяет маркировку…${why}</span>`;
   if(o.kizStatus==='verify_failed') return ` · <span style="color:var(--warn);font-weight:700">⚠ WB не подтвердил КИЗ${why}</span>`;
@@ -951,7 +1537,7 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
       });
     }
     if(data.kizStatus === 'attached') toast(`Заказ №${order.orderId}: КИЗ прикреплён и подтверждён у WB ✅`);
-    else if(data.kizStatus === 'pending') toast(`Заказ №${order.orderId}: КИЗ отправлен, WB ещё проверяет — можно продолжать ⏳`);
+    else if(data.kizStatus === 'pending'){ toast(`Заказ №${order.orderId}: КИЗ отправлен, WB ещё проверяет — можно продолжать ⏳`); watchPendingKiz(order); }
     else if(data.kizStatus === 'verify_failed') toast(`Заказ №${order.orderId}: собран, но КИЗ WB не подтвердил — ${data.warning||'проверьте вручную'} ⚠`);
     if(skipViewSwitch) renderFbsBody();
     else if(fbsView!=='confirm') setFbsView('confirm');
