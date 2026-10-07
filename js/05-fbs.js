@@ -626,15 +626,137 @@ if(document.readyState === 'loading') document.addEventListener('DOMContentLoade
 else fbsInitHeader();
 setTimeout(fbsInitHeader, 800); // на случай, если вкладка достроилась позже
 
+// ---------- ВКЛАДКИ FBS КАК В КАБИНЕТЕ WB ----------
+// Новые → На сборке → В доставке → Завершённые → Отменённые → Архив. Вкладка определяется по двум статусам WB:
+// supplierStatus (его меняет продавец: new / confirm / complete / cancel) и wbStatus (сторона WB: waiting, sorted,
+// ready_for_pickup, sold, canceled_by_client, declined_by_client, canceled, defect и т.д.).
+const FBS_WB_FINAL = new Set(['sold','canceled','canceled_by_client','declined_by_client','defect']);
+const FBS_STATUS_STALE_DAYS = 30; // WB отдаёт статусы только по заказам за последние 30 дней — у более старых итог уже не узнать
+const FBS_ARCHIVE_DAYS = 90;      // «Завершённые» хранятся 3 месяца, затем уходят в «Архив» (как в кабинете WB)
+const FBS_TABS = [
+  {key:'new',      label:'Новые',       badge:true},
+  {key:'confirm',  label:'На сборке',   badge:true},
+  {key:'complete', label:'В доставке',  badge:false},
+  {key:'done',     label:'Завершённые', badge:false},
+  {key:'cancel',   label:'Отменённые',  badge:true},
+  {key:'archive',  label:'Архив',       badge:false}
+];
+const FBS_WB_STATUS_LABELS = {
+  waiting:['Передан, ждёт приёмки WB','planned'],
+  sorted:['Отсортирован на складе WB','printed'],
+  ready_for_pickup:['Ждёт покупателя в ПВЗ','assembling'],
+  postponed_delivery:['Доставка отложена','assembling'],
+  accepted_by_carrier:['У перевозчика','planned'],
+  sent_to_carrier:['Передан перевозчику','planned'],
+  sold:['Продан','assembled'],
+  canceled_by_client:['Отказ покупателя (возврат)','overdue'],
+  declined_by_client:['Отменён покупателем','overdue'],
+  canceled:['Отменён продавцом','overdue'],
+  defect:['Брак','overdue']
+};
+function fbsOrderAgeDays(o){
+  const t = o && o.orderCreatedAt ? new Date(o.orderCreatedAt).getTime() : NaN;
+  return isNaN(t) ? null : (Date.now() - t) / 86400000;
+}
+function fbsTabOf(o){
+  const s = o.supplierStatus;
+  if(s==='cancel') return 'cancel';
+  if(s==='new') return 'new';
+  if(s==='confirm') return 'confirm';
+  if(s==='complete'){
+    if(o.wbStatus==='canceled' || o.wbStatus==='declined_by_client') return 'cancel'; // отменён до того, как дошёл до покупателя
+    const age = fbsOrderAgeDays(o);
+    const finished = FBS_WB_FINAL.has(o.wbStatus) || (age!==null && age > FBS_STATUS_STALE_DAYS);
+    if(finished) return (age!==null && age > FBS_ARCHIVE_DAYS) ? 'archive' : 'done';
+    return 'complete';
+  }
+  return 'new'; // незнакомый статус не теряем из виду
+}
+function fbsStatusBadge(o){
+  const m = FBS_WB_STATUS_LABELS[o.wbStatus];
+  const label = m ? m[0] : (o.wbStatus ? o.wbStatus : 'Передан');
+  return `<span class="status ${m ? m[1] : 'shipped'}">${escapeHtml(label)}</span>`;
+}
+function fbsGroupSummary(orders){
+  const cnt = {};
+  orders.forEach(o=>{ const k = o.wbStatus || '?'; cnt[k] = (cnt[k]||0) + 1; });
+  return [['sold','продано'],['canceled_by_client','отказов'],['declined_by_client','отменено покупателем'],['defect','брак'],['ready_for_pickup','в ПВЗ'],['sorted','отсортировано'],['waiting','ждут приёмки']]
+    .filter(([k])=>cnt[k]).map(([k,t])=>`${t}: ${cnt[k]}`).join(' · ');
+}
+function renderFbsCancelList(rows, clientId){
+  const LIMIT = 300;
+  const shown = rows.slice(0, LIMIT);
+  return `<div class="panel">${shown.map(o=>`
+      <div class="pick-row">
+        <div><div class="sku-name">${(pi=>escapeHtml(pi.name||o.name||o.article))(findLocalProductInfo(o))}${o.size?` · ${escapeHtml(o.size)}`:''}</div>
+          <div class="sku-code mono">${escapeHtml(o.article||'')}${o.barcode?` · ШК ${escapeHtml(o.barcode)}`:''} · заказ №${o.orderId}${!clientId?` · ${escapeHtml(o.clientName||'')}`:''}${o.orderCreatedAt?` · ${new Date(o.orderCreatedAt).toLocaleDateString('ru-RU')}`:''}</div></div>
+        <div>${fbsStatusBadge(o)}</div>
+      </div>`).join('')}
+    ${rows.length>LIMIT ? `<div style="padding:12px 16px;font-size:12px;color:var(--ink-faint)">Показаны последние ${LIMIT} из ${rows.length}. Остальные можно найти по номеру заказа в кабинете WB.</div>` : ''}
+  </div>`;
+}
+// Панель вкладок строится из кода (для обновления достаточно этого JS-файла): прежние три кнопки скрываются
+function fbsInitTabs(){
+  const oldBtn = document.getElementById('fbsTabNew');
+  if(!oldBtn || !oldBtn.parentElement) return false;
+  if(document.getElementById('fbsTabsBar')) return true;
+  const holder = oldBtn.parentElement;
+  ['fbsTabNew','fbsTabConfirm','fbsTabComplete'].forEach(id=>{ const b = document.getElementById(id); if(b) b.style.display = 'none'; });
+  if(!document.getElementById('fbsTabsStyle')){
+    const st = document.createElement('style');
+    st.id = 'fbsTabsStyle';
+    st.textContent = `
+      #fbsTabsBar{display:inline-flex;gap:2px;padding:5px;background:#ECEAE4;border-radius:14px;max-width:100%;overflow-x:auto}
+      #fbsTabsBar .fbs-tab{display:inline-flex;align-items:center;gap:8px;border:0;background:transparent;border-radius:10px;padding:9px 14px;font-size:14px;font-weight:600;color:var(--ink-soft);cursor:pointer;white-space:nowrap}
+      #fbsTabsBar .fbs-tab:hover:not(.active){color:var(--ink)}
+      #fbsTabsBar .fbs-tab.active{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+      #fbsTabsBar .fbs-tab-badge{font-size:11px;font-weight:700;line-height:1;padding:3px 7px;border-radius:6px;background:#DDDAD2;color:var(--ink-soft)}
+      #fbsTabsBar .fbs-tab.active .fbs-tab-badge{background:#E9D8FF;color:#6B21A8}`;
+    document.head.appendChild(st);
+  }
+  const bar = document.createElement('div');
+  bar.id = 'fbsTabsBar';
+  bar.setAttribute('role', 'tablist');
+  FBS_TABS.forEach(t=>{
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'fbs-tab';
+    b.dataset.view = t.key;
+    b.setAttribute('role', 'tab');
+    b.innerHTML = `<span class="fbs-tab-label">${t.label}</span><span class="fbs-tab-badge" style="display:none"></span>`;
+    b.addEventListener('click', ()=>setFbsView(t.key));
+    bar.appendChild(b);
+  });
+  holder.insertBefore(bar, holder.firstChild);
+  return true;
+}
+function fbsUpdateTabCounts(){
+  const bar = document.getElementById('fbsTabsBar');
+  if(!bar) return;
+  const sel = document.getElementById('fbsClientSelect');
+  const clientId = sel ? sel.value : '';
+  const counts = {};
+  fbsOrders.forEach(o=>{ if(clientId && o.clientId!==clientId) return; const t = fbsTabOf(o); counts[t] = (counts[t]||0) + 1; });
+  FBS_TABS.forEach(t=>{
+    const b = bar.querySelector(`[data-view="${t.key}"]`);
+    if(!b) return;
+    b.classList.toggle('active', fbsView===t.key);
+    b.setAttribute('aria-selected', fbsView===t.key ? 'true' : 'false');
+    const badge = b.querySelector('.fbs-tab-badge');
+    if(t.badge){ badge.textContent = String(counts[t.key]||0); badge.style.display = ''; } else { badge.style.display = 'none'; }
+  });
+}
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fbsInitTabs);
+else fbsInitTabs();
+setTimeout(fbsInitTabs, 800);
+
 function setFbsView(view){
   fbsView = view;
   fbsCompletePage = 1;
-  document.getElementById('fbsTabNew').className = 'btn ' + (view==='new'?'btn-accent':'btn-ghost');
-  document.getElementById('fbsTabConfirm').className = 'btn ' + (view==='confirm'?'btn-accent':'btn-ghost');
-  document.getElementById('fbsTabComplete').className = 'btn ' + (view==='complete'?'btn-accent':'btn-ghost');
+  fbsInitTabs();
   const pageSizeSelect = document.getElementById('fbsCompletePageSize');
   if(pageSizeSelect){
-    pageSizeSelect.style.display = view==='complete' ? '' : 'none';
+    pageSizeSelect.style.display = ['complete','done','archive'].includes(view) ? '' : 'none';
     pageSizeSelect.value = String(fbsCompletePageSize);
   }
   renderFbsBody();
@@ -799,7 +921,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
         <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;flex-wrap:wrap;gap:10px">
           <div style="cursor:pointer;flex:1" onclick="toggleFbsSupplyGroup('${escapeHtml(key)}')">
             <div style="font-weight:600;font-size:14px">${g.supplyId ? 'Поставка ' + escapeHtml(g.supplyId) : 'Без номера поставки'}${!clientId?` · ${escapeHtml(g.clientName)}`:''}</div>
-            <div style="font-size:12px;color:var(--ink-faint)">${g.orders.length} заказ(ов)${missingKizInGroup?` · ⚠ КИЗ не привязан: ${missingKizInGroup}`:''}${outOfStockInGroup?` · ❌ нет на складе: ${outOfStockInGroup}`:''}</div>
+            <div style="font-size:12px;color:var(--ink-faint)">${g.orders.length} заказ(ов)${isDelivered && fbsGroupSummary(g.orders) ? ' · ' + fbsGroupSummary(g.orders) : ''}${missingKizInGroup?` · ⚠ КИЗ не привязан: ${missingKizInGroup}`:''}${outOfStockInGroup?` · ❌ нет на складе: ${outOfStockInGroup}`:''}</div>
           </div>
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadSupplyBarcode('${escapeHtml(g.supplyId)}','${escapeHtml(g.orders[0].clientId)}')">📥 QR поставки</button>` : ''}
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadFbsKizExcel('${escapeHtml(g.supplyId)}','${escapeHtml(g.clientName)}')">📊 КИЗ (Excel)</button>` : ''}
@@ -814,7 +936,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
                 <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.orderCreatedAt?` · ${timeAgoRu(o.orderCreatedAt)}`:''}${isDelivered?'':renderKizStatusLabel(o)}</div></div>
                 <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                   ${!isDelivered && clientId ? renderTrbxAssignControl(o) : ''}
-                  ${isDelivered ? `<span class="status shipped">В доставке</span>` : ''}
+                  ${isDelivered ? fbsStatusBadge(o) : ''}
                   <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
                 </div>
               </div>
@@ -832,8 +954,11 @@ function toggleFbsSupplyGroup(key){
 function renderFbsBody(){
   const clientId = document.getElementById('fbsClientSelect') ? document.getElementById('fbsClientSelect').value : '';
   const body = document.getElementById('fbsBody');
-  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus===fbsView)
+  fbsUpdateTabCounts();
+  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && fbsTabOf(o)===fbsView)
     .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
+  // в «В доставке», «Завершённых», «Отменённых» и «Архиве» новые заказы сверху
+  if(['complete','done','cancel','archive'].includes(fbsView)) rows.sort((a,b)=> new Date(b.orderCreatedAt||0) - new Date(a.orderCreatedAt||0));
   if(!clients.some(c=>c.wbConnected)){
     body.innerHTML = `<div class="panel empty"><span class="eyebrow">Нет клиента</span>Подключите WB хотя бы одному клиенту в разделе «Клиенты»</div>`;
     return;
@@ -927,6 +1052,8 @@ function renderFbsBody(){
       if(fbsTrbxLoadedFor !== clientId) loadFbsTrbxes(clientId);
       else renderFbsTrbxPanel(clientId);
     }
+  } else if(fbsView==='cancel'){
+    body.innerHTML = renderFbsCancelList(rows, clientId);
   } else {
     body.innerHTML = renderFbsGroupedBySupply(rows, clientId, true, fbsCompletePage, fbsCompletePageSize);
   }
