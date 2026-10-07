@@ -1083,17 +1083,50 @@ function renderScanModeScreen(msg, msgIsError){
   `;
   setTimeout(()=>{ const el = document.getElementById('orderScanInput'); if(el) el.focus(); }, 50);
 }
-function handleOrderScan(inputEl){
+// Код стикера заказа WB — то, что зашито в штрихкод на этикетке (например «*DbEFl55V»). Это поле barcode из ответа WB
+// про стикеры; в самом заказе его нет, поэтому при первом скане запрашиваем стикеры заказов «На сборке» у WB и запоминаем.
+function stickerKey(s){ return String(s||'').replace(/[^A-Za-z0-9]/g, ''); } // без служебных символов в начале (* ! $), которые зависят от сканера
+const stickerFetchTried = new Set();
+async function ensureStickerCodes(pool){
+  const missing = pool.filter(o=>!o.stickerCode && !stickerFetchTried.has(o.orderId));
+  if(!missing.length) return 0;
+  const byClient = {};
+  missing.forEach(o=>{ (byClient[o.clientId] = byClient[o.clientId] || []).push(o); });
+  let got = 0;
+  for(const cid of Object.keys(byClient)){
+    const list = byClient[cid];
+    for(let i=0; i<list.length; i+=100){
+      const chunk = list.slice(i, i+100);
+      chunk.forEach(o=>stickerFetchTried.add(o.orderId)); // чтобы не опрашивать повторно заказы, по которым WB не ответил
+      try{
+        const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action:'get_sticker', orderIds: chunk.map(o=>o.orderId) } });
+        if(error || (data && data.error)) continue;
+        (data.stickers || []).forEach(s=>{
+          const o = chunk.find(x=>x.orderId===Number(s.orderId));
+          if(o && s.barcode){
+            o.stickerCode = s.barcode; got++;
+            sb.from('wb_orders').update({sticker_code: s.barcode}).eq('order_id', o.orderId).then(()=>{});
+          }
+        });
+      }catch(e){ console.error(e); }
+    }
+  }
+  return got;
+}
+async function handleOrderScan(inputEl){
   const raw = inputEl.value.trim();
   inputEl.value = '';
   if(!raw) return;
   const clientId = document.getElementById('fbsClientSelect').value;
   const pool = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
+  const key = stickerKey(raw);
+  const bySticker = ()=> key.length >= 6 ? pool.find(o=>o.stickerCode && (o.stickerCode===raw || stickerKey(o.stickerCode)===key)) : null;
 
   let order = pool.find(o=>String(o.orderId)===raw)
     || pool.find(o=>o.rid && o.rid===raw)
     || pool.find(o=>o.barcode && o.barcode===raw)
-    || pool.find(o=>o.article && o.article===raw);
+    || pool.find(o=>o.article && o.article===raw)
+    || bySticker();
 
   if(!order){
     const digits = (raw.match(/\d{4,}/g) || []).sort((a,b)=>b.length-a.length);
@@ -1103,8 +1136,15 @@ function handleOrderScan(inputEl){
     }
   }
 
+  if(!order && key.length >= 6){
+    renderScanModeScreen('Ищу заказ по стикеру…');
+    await ensureStickerCodes(pool);
+    if(!scanModeActive) return; // пока ждали ответ WB, из режима скана вышли
+    order = bySticker();
+  }
+
   if(!order){
-    renderScanModeScreen(`Не нашёл заказ по «${raw}» — сообщите мне этот текст, донастрою сопоставление`, true);
+    renderScanModeScreen(`Не нашёл заказ по «${raw}» среди заказов «На сборке». Проверьте, что заказ уже на сборке и выбран нужный клиент.`, true);
     return;
   }
 
@@ -2932,7 +2972,7 @@ async function loadFbsOrders(){
     orderId:o.order_id, rid:o.rid||'', clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
-    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
+    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
 }
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; fetchNewFbsOrders(true); });
