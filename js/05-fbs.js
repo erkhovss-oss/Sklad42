@@ -933,7 +933,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
             ${g.orders.map(o=>`
               <div class="pick-row">
                 ${!isDelivered ? `<input type="checkbox" ${fbsCloseSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsCloseSelected(${o.orderId}, this.checked)">` : ''}
-                <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.orderCreatedAt?` · ${timeAgoRu(o.orderCreatedAt)}`:''}${isDelivered?'':renderKizStatusLabel(o)}</div></div>
+                <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.outOfStock?' <span style="color:var(--warn);font-weight:700">· ❌ НЕТ НА СКЛАДЕ</span>':''}</div><div class="sku-code mono">${o.article}${o.barcode?` · ШК ${o.barcode}`:''} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.orderCreatedAt?` · ${timeAgoRu(o.orderCreatedAt)}`:''}${isDelivered?'':renderKizStatusLabel(o)}${isDelivered?'':pickBadgeHtml(o)}</div></div>
                 <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                   ${!isDelivered && clientId ? renderTrbxAssignControl(o) : ''}
                   ${isDelivered ? fbsStatusBadge(o) : ''}
@@ -1009,7 +1009,7 @@ function renderFbsBody(){
     body.innerHTML = `
       <div class="panel" style="padding:14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length}. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
+          <span style="font-size:13px;color:var(--ink-soft)">Позиций на сборке: ${rows.length} · <b>Собрано ${rows.filter(isOrderPicked).length} / ${rows.length}</b>. Когда всё собрано и промаркировано — закройте поставку и передайте на склад WB.</span>
           <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;white-space:nowrap;flex-wrap:wrap">
             <input type="checkbox" ${allSelected?'checked':''} onchange="toggleAllFbsCloseSelected(this.checked, ${JSON.stringify(visibleIds)})"> Выбрать все
           </label>
@@ -1064,6 +1064,89 @@ let assemblyResume = null;       // откуда вернуться к очер�
 let assemblyPreconfirm = null;   // заказ найден по штрихкоду товара — ШК уже отсканирован, повторно не просим
 function isAssemblyAutoSearch(){ try{ return localStorage.getItem('sklad42_assembly_auto_search') !== '0'; }catch(e){ return true; } }
 function setAssemblyAutoSearch(on){ try{ localStorage.setItem('sklad42_assembly_auto_search', on ? '1' : '0'); }catch(e){} }
+// ---------- СЧЁТЧИК «СОБРАНО N / M» ----------
+// Заказ считается собранным, когда в режиме сборки подтверждён ШК товара и (если нужен) принят КИЗ. Отметка хранится в базе
+// (picked_at), поэтому счётчик не сбрасывается при обновлении страницы и общий для всех сотрудников. M — все заказы клиента
+// «На сборке». «Нет на складе» считаются отдельно, чтобы число несобранных показывало только то, что реально осталось собрать.
+let assemblyShowRemaining = false;
+let lastScanMsg = '', lastScanErr = false;
+function isOrderPicked(o){ return !!o.pickedAt || assemblyDoneIds.has(o.orderId); }
+function assemblyPool(){
+  const sel = document.getElementById('fbsClientSelect');
+  const clientId = sel ? sel.value : '';
+  return fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
+}
+function pickProgress(pool){
+  pool = pool || assemblyPool();
+  return {
+    total: pool.length,
+    picked: pool.filter(isOrderPicked).length,
+    noStock: pool.filter(o=>!isOrderPicked(o) && o.outOfStock).length,
+    remaining: pool.filter(o=>!isOrderPicked(o) && !o.outOfStock)
+  };
+}
+function pickProgressHtml(){
+  const p = pickProgress();
+  const pct = p.total ? Math.round(p.picked / p.total * 100) : 0;
+  const allDone = p.total > 0 && p.remaining.length === 0 && p.noStock === 0;
+  const extra = [p.remaining.length ? `осталось собрать: ${p.remaining.length}` : (allDone ? 'все заказы собраны ✓' : ''), p.noStock ? `❌ нет на складе: ${p.noStock}` : ''].filter(Boolean).join(' · ');
+  return `<div style="margin-bottom:16px">
+      <div style="font-size:32px;font-weight:700;line-height:1.1;color:${allDone?'var(--ok)':'var(--ink)'}">Собрано ${p.picked} / ${p.total}</div>
+      <div style="height:8px;border-radius:4px;background:#E7E4DC;margin:8px auto 6px auto;max-width:360px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--ok)"></div></div>
+      ${extra ? `<div style="font-size:12px;color:var(--ink-soft)">${extra}</div>` : ''}
+    </div>`;
+}
+function pickChipHtml(){
+  const p = pickProgress();
+  const allDone = p.total > 0 && p.remaining.length === 0 && p.noStock === 0;
+  return `<span class="status ${allDone?'assembled':'planned'}" style="cursor:default">Собрано ${p.picked} / ${p.total}</span>`;
+}
+function pickBadgeHtml(o){
+  if(isOrderPicked(o)) return ' · <span style="color:var(--ok);font-weight:700">✅ собран</span>';
+  return o.outOfStock ? '' : ' · <span style="color:var(--ink-faint)">⏳ не собран</span>';
+}
+function remainingListHtml(){
+  const p = pickProgress();
+  const resetLink = p.picked ? `<div style="margin-top:12px"><span style="font-size:11px;color:var(--ink-faint);cursor:pointer;text-decoration:underline" onclick="resetPickMarks()">сбросить отметки «собрано»</span></div>` : '';
+  if(!p.remaining.length) return resetLink;
+  const btn = `<button class="btn btn-ghost" style="margin-top:10px;font-size:12px;padding:5px 12px" onclick="toggleRemainingList()">${assemblyShowRemaining ? '▾ Скрыть несобранные' : `▸ Показать несобранные (${p.remaining.length})`}</button>`;
+  if(!assemblyShowRemaining) return btn + resetLink;
+  const sorted = p.remaining.slice().sort((a,b)=>{
+    const ca = findLocalProductInfo(a).cell, cb = findLocalProductInfo(b).cell;
+    if(ca && cb && ca!==cb) return ca - cb;
+    if(ca && !cb) return -1;
+    if(!ca && cb) return 1;
+    return (a.article||'').localeCompare(b.article||'');
+  });
+  const rows = sorted.slice(0, 80).map(o=>{
+    const pi = findLocalProductInfo(o);
+    return `<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);text-align:left;font-size:12px">
+        <div><b>${escapeHtml(pi.name||o.name||o.article)}</b>${o.size?` · ${escapeHtml(o.size)}`:''}<div class="mono" style="color:var(--ink-faint)">№${o.orderId}${pi.cell?` · яч. ${pi.cell}`:''}</div></div>
+        <button class="btn btn-ghost" style="padding:3px 10px;font-size:12px" onclick="openRemainingOrder(${o.orderId})">Открыть</button>
+      </div>`;
+  }).join('');
+  return btn + `<div style="margin-top:8px;max-height:260px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:2px 10px">${rows}${sorted.length>80?`<div style="padding:8px 0;font-size:12px;color:var(--ink-faint)">…и ещё ${sorted.length-80}</div>`:''}</div>` + resetLink;
+}
+function toggleRemainingList(){ assemblyShowRemaining = !assemblyShowRemaining; renderScanModeScreen(lastScanMsg, lastScanErr); }
+function openRemainingOrder(orderId){
+  const o = assemblyPool().find(x=>x.orderId===orderId);
+  if(o) openOrderInWizard(o, false);
+}
+function markOrderPicked(order){
+  if(order.pickedAt) return;
+  order.pickedAt = new Date().toISOString();
+  sb.from('wb_orders').update({picked_at: order.pickedAt, picked_by: (typeof currentUser!=='undefined' && currentUser) ? currentUser.name : null}).eq('order_id', order.orderId)
+    .then(({error})=>{ if(error) console.error(error); });
+}
+async function resetPickMarks(){
+  const pool = assemblyPool();
+  const marked = pool.filter(o=>o.pickedAt);
+  if(!await customConfirm(`Сбросить отметки «собрано» у ${pool.filter(isOrderPicked).length} заказов? Счётчик начнётся с нуля — пригодится, если начинаете сборку заново.`)) return;
+  pool.forEach(o=>{ o.pickedAt = null; });
+  assemblyDoneIds = new Set();
+  if(marked.length) await sb.from('wb_orders').update({picked_at:null, picked_by:null}).in('order_id', marked.map(o=>o.orderId));
+  if(scanModeActive) renderScanModeScreen(lastScanMsg, lastScanErr); else renderFbsBody();
+}
 function enterScanMode(){
   scanModeActive = true;
   assemblyDoneIds = new Set();
@@ -1079,15 +1162,17 @@ function exitScanMode(){
   renderFbsBody();
 }
 function renderScanModeScreen(msg, msgIsError){
+  lastScanMsg = msg || ''; lastScanErr = !!msgIsError;
   const body = document.getElementById('fbsBody');
   body.innerHTML = `
     <div class="panel" style="padding:30px;text-align:center;max-width:520px;margin:0 auto">
       <div class="eyebrow" style="margin-bottom:10px">Поиск заказа</div>
+      ${pickProgressHtml()}
       <p style="font-size:13px;color:var(--ink-soft);margin-bottom:20px">Отсканируйте стикер заказа (или штрихкод товара, или введите номер заказа) — заказ откроется автоматически.</p>
       <input class="search mono" id="orderScanInput" placeholder="Ждём скан…" style="width:100%;text-align:center;font-size:16px;padding:14px" autofocus
         onkeydown="if(event.key==='Enter') handleOrderScan(this)">
       ${msg ? `<p style="font-size:13px;margin-top:14px;font-weight:600;color:${msgIsError?'var(--warn)':'var(--ok)'}">${escapeHtml(msg)}</p>` : ''}
-      <div style="font-size:12px;color:var(--ink-faint);margin-top:12px">Обработано в этом сеансе: <b>${assemblyDoneIds.size}</b></div>
+      ${remainingListHtml()}
       <label style="display:flex;gap:6px;align-items:center;justify-content:center;font-size:12px;color:var(--ink-soft);margin-top:12px;cursor:pointer">
         <input type="checkbox" ${isAssemblyAutoSearch()?'checked':''} onchange="setAssemblyAutoSearch(this.checked)"> После заказа сразу возвращаться к поиску
       </label>
@@ -1133,7 +1218,7 @@ async function ensureStickerCodes(pool){
 // заказах, берём ещё не обработанный в этом сеансе. via сообщает, чем нашли (по штрихкоду товара ШК уже подтверждён).
 function findOrderForScan(raw, pool){
   const key = stickerKey(raw);
-  const undoneFirst = (list)=> list.find(o=>!assemblyDoneIds.has(o.orderId)) || null;
+  const undoneFirst = (list)=> list.find(o=>!isOrderPicked(o)) || null;
   let o = pool.find(x=>String(x.orderId)===raw) || pool.find(x=>x.rid && x.rid===raw);
   if(o) return {order:o, via:'order'};
   if(key.length >= 6){
@@ -1173,7 +1258,7 @@ async function handleOrderScan(inputEl){
 
   if(found && found.allDone){
     playBeep('warn');
-    renderScanModeScreen(`Все заказы с этим товаром (${found.allDone}) уже обработаны в этом сеансе.`, true);
+    renderScanModeScreen(`Все заказы с этим товаром (${found.allDone}) уже собраны.`, true);
     return;
   }
   if(!found || !found.order){
@@ -1205,16 +1290,17 @@ function resumeAssemblyQueue(){
   assemblyResume = null;
   scanModeActive = false;
   let si = r.supplyIndex;
-  while(si < r.supplyQueue.length && r.supplyQueue[si].orders.every(o=>assemblyDoneIds.has(o.orderId))) si++;
+  while(si < r.supplyQueue.length && r.supplyQueue[si].orders.every(isOrderPicked)) si++;
   if(si >= r.supplyQueue.length){ toast('Все заказы очереди обработаны'); exitAssemblyMode(); return; }
   assemblySupplyQueue = r.supplyQueue;
   assemblySupplyIndex = si;
   assemblyModeQueue = r.supplyQueue[si].orders;
-  assemblyModeIndex = Math.max(0, assemblyModeQueue.findIndex(o=>!assemblyDoneIds.has(o.orderId)));
+  assemblyModeIndex = Math.max(0, assemblyModeQueue.findIndex(o=>!isOrderPicked(o)));
   renderAssemblyModeStep();
 }
 function wizardOrderDone(order){
   assemblyDoneIds.add(order.orderId);
+  markOrderPicked(order);
   playBeep('ok');
   if(!isAssemblyAutoSearch()) return; // выключено: остаёмся на заказе, дальше кнопкой «Следующий заказ»
   const pi = findLocalProductInfo(order);
@@ -1240,9 +1326,11 @@ function startAssemblyMode(){
   assemblyDoneIds = new Set();
   assemblyResume = null;
   const clientId = document.getElementById('fbsClientSelect').value;
-  const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
+  const pool = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
+  const rows = pool.filter(o=>!isOrderPicked(o))
     .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
-  if(!rows.length){ toast('Нет заказов на сборке'); return; }
+  if(!pool.length){ toast('Нет заказов на сборке'); return; }
+  if(!rows.length){ toast(`Все заказы уже собраны (${pool.length} / ${pool.length}). Чтобы перепроверить заказ — «Найти заказ по скану»`); return; }
 
   const groups = {};
   const order = [];
@@ -1304,7 +1392,7 @@ async function wizardFindByCode(inputEl){
   }
   if(!found || !found.order){
     playBeep('error');
-    toast(found && found.allDone ? `Все заказы с этим товаром (${found.allDone}) уже обработаны` : `Не нашёл заказ по «${raw}» среди заказов на сборке`);
+    toast(found && found.allDone ? `Все заказы с этим товаром (${found.allDone}) уже собраны` : `Не нашёл заказ по «${raw}» среди заказов на сборке`);
     return;
   }
   playBeep('ok');
@@ -1356,7 +1444,7 @@ function renderAssemblyModeStepContent(order, requiresKiz){
     <div class="panel" style="padding:24px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
-          <div class="eyebrow">Поставка ${assemblySupplyIndex+1} из ${assemblySupplyQueue.length} · ${escapeHtml(currentSupply.clientName)}${currentSupply.supplyId?` (${escapeHtml(currentSupply.supplyId)})`:''} · заказ ${assemblyModeIndex+1} из ${assemblyModeQueue.length}</div>
+          <div class="eyebrow">${pickChipHtml()} Поставка ${assemblySupplyIndex+1} из ${assemblySupplyQueue.length} · ${escapeHtml(currentSupply.clientName)}${currentSupply.supplyId?` (${escapeHtml(currentSupply.supplyId)})`:''} · заказ ${assemblyModeIndex+1} из ${assemblyModeQueue.length}</div>
           <h2 style="margin:6px 0 0 0">${escapeHtml(pi.name)}${pi.color?` · ${escapeHtml(pi.color)}`:''}${order.size?` · ${order.size}`:''}</h2>
         </div>
         ${pi.cell ? `<div style="background:var(--accent);color:#fff;border-radius:10px;padding:10px 20px;text-align:center;line-height:1.1"><div style="font-size:11px;opacity:0.85">ЯЧЕЙКА</div><div style="font-size:26px;font-weight:800">${pi.cell}</div></div>` : ''}
@@ -2267,6 +2355,11 @@ async function closeFbsSupply(explicitClientId){
   const toClose = isPartial ? allConfirmed.filter(o=>selected.includes(o.orderId)) : allConfirmed;
   const toHold = isPartial ? allConfirmed.filter(o=>!selected.includes(o.orderId)) : [];
 
+  const unpicked = toClose.filter(o=>!isOrderPicked(o) && !o.outOfStock);
+  if(unpicked.length){
+    const names = unpicked.slice(0,5).map(o=>`«${o.name||o.article}» (заказ №${o.orderId})`).join(', ');
+    if(!await customConfirm(`⚠ Собрано ${toClose.length-unpicked.length} из ${toClose.length}. Не отсканировано заказов: ${unpicked.length} — ${names}${unpicked.length>5?` и ещё ${unpicked.length-5}`:''}.\n\nОтгружать всё равно?`)) return;
+  }
   const missingKiz = toClose.filter(o=>o.requiresKiz && o.kizStatus!=='attached');
   if(missingKiz.length){
     const names = missingKiz.slice(0,5).map(o=>`«${o.name||o.article}» (заказ №${o.orderId})`).join(', ');
@@ -3063,7 +3156,7 @@ async function loadFbsOrders(){
     orderId:o.order_id, rid:o.rid||'', clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
-    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
+    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, pickedAt:o.picked_at||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
 }
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; fetchNewFbsOrders(true); });
