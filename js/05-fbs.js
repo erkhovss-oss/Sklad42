@@ -925,7 +925,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
           </div>
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadSupplyBarcode('${escapeHtml(g.supplyId)}','${escapeHtml(g.orders[0].clientId)}')">📥 QR поставки</button>` : ''}
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadFbsKizExcel('${escapeHtml(g.supplyId)}','${escapeHtml(g.clientName)}')">📊 КИЗ (Excel)</button>` : ''}
-          ${!isDelivered ? `<button class="btn btn-accent" style="padding:6px 12px" onclick="event.stopPropagation();closeFbsSupply('${escapeHtml(g.orders[0].clientId)}')">📦 Закрыть эту поставку</button>` : ''}
+          ${!isDelivered ? `<button class="btn btn-accent" style="padding:6px 12px" onclick="event.stopPropagation();closeFbsSupply('${escapeHtml(g.orders[0].clientId)}')">📦 Отгрузка поставки</button>` : ''}
           <span style="font-size:18px;color:var(--ink-faint);cursor:pointer" onclick="toggleFbsSupplyGroup('${escapeHtml(key)}')">${isExpanded?'▾':'▸'}</span>
         </div>
         ${isExpanded ? `
@@ -1024,7 +1024,7 @@ function renderFbsBody(){
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="openLabelSettingsModal()">⚙️ Настройки этикетки</button>
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="forgetQzPrinter()" title="Выбрать другой принтер при следующей печати">⚙️ Сменить принтер</button>
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="previewThermalInfoCard()" title="Посмотреть, что именно генерируется для принтера">👁 Предпросмотр растра</button>
-          <button class="btn btn-accent" onclick="closeFbsSupply()">📦 ${partialSelection ? `Закрыть выбранные (${fbsCloseSelectedOrders.length})` : 'Закрыть поставку и отправить'}</button>
+          <button class="btn btn-accent" onclick="closeFbsSupply()">📦 ${partialSelection ? `Закрыть выбранные (${fbsCloseSelectedOrders.length})` : 'Отгрузка поставки…'}</button>
         </div>
       </div>
       ${missingKizCount ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;background:var(--warn-bg);color:var(--warn);font-size:13px;font-weight:600">⚠ У ${missingKizCount} заказ(ов) требуется КИЗ, но он ещё не привязан — используйте «Режим сборки», прежде чем закрывать поставку</div>` : ''}
@@ -1758,113 +1758,373 @@ async function cancelFbsOrder(orderId){
     renderFbsBody();
   });
 }
+// ---------- ОТГРУЗКА ПОСТАВКИ FBS: грузоместа → данные о доставке → передача в доставку ----------
+// WB не примет поставку в ПВЗ/ППТ/ПФЦ без грузомест (одно на короб, QR-код на каждом коробе), а передать поставку в
+// доставку нельзя без пункта отгрузки, способа доставки и даты. Всё это собрано в одном окне — как в кабинете WB.
+// Серверная часть — функция wb-supply-ts (доступна только вошедшим сотрудникам).
+const SHIP_CARGO_NAMES = {1:'МГТ', 2:'СГТ', 3:'КГТ+'};
+const SHIP_POINT_TYPES = {pp:'ПВЗ', sc:'СЦ', sw:'Склад'};
+let shipState = null;
+
+async function supplyCall(clientId, action, extra){
+  const { data, error } = await sb.functions.invoke('wb-supply-ts', { body: Object.assign({clientId, action}, extra||{}) });
+  if(error) throw new Error(await extractFnErrorMessage(error));
+  if(data && data.error){ const e = new Error(data.error); e.payload = data; throw e; }
+  return data;
+}
+function shipBoxNo(id){ return String(id).replace(/^WB-(?:MP|TRBX)-/, ''); }
+// по правилам WB грузомест не больше, чем половина заказов (но хотя бы одно)
+function shipMaxBoxes(orders){ return Math.max(1, Math.floor(orders/2)); }
+function shipDateStr(d){ const p = n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
+function shipOrdersCount(){
+  const st = shipState;
+  if(!st) return 0;
+  return (st.orderIds && st.orderIds.length) ? st.orderIds.length : (st.orders||[]).length;
+}
+function shipRoom(){ const st = shipState; return Math.max(0, shipMaxBoxes(shipOrdersCount()) - st.trbxes.length); }
+
+// ----- QR грузомест: печать на этикетки 58×40 мм -----
+async function shipPrintStickers(clientId, ids){
+  if(!ids || !ids.length){ toast('Сначала создайте грузоместа'); return; }
+  toast('Запрашиваем QR грузомест у WB…');
+  let data;
+  try{ data = await supplyCall(clientId, 'box_stickers', {trbxIds: ids, stickerType:'svg'}); }
+  catch(e){ toast('WB: ' + e.message); return; }
+  const stickers = data.stickers || [];
+  const win = window.open('', '_blank');
+  if(!win){ toast('Браузер заблокировал окно печати — разрешите всплывающие окна для сайта'); return; }
+  // в стикере от WB нет номера короба, только закодированное значение (…:номер) — сопоставляем по нему, иначе по порядку
+  const labels = ids.map((id, i)=>{
+    const no = shipBoxNo(id);
+    const s = stickers.find(x=>String(x.barcode||'').split(':').pop()===no) || stickers[i];
+    return s && s.file
+      ? `<div class="lbl"><img src="data:image/svg+xml;base64,${s.file}" alt="Грузоместо ${escapeHtml(no)}"></div>`
+      : `<div class="lbl"><div class="miss">QR грузоместа ${escapeHtml(no)} не получен от WB</div></div>`;
+  }).join('');
+  win.document.write(`<html><head><title>QR грузомест</title><style>
+    @page{size:58mm 40mm;margin:0}
+    html,body{margin:0;padding:0;background:#fff}
+    .lbl{width:58mm;height:40mm;page-break-after:always;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    .lbl:last-child{page-break-after:auto}
+    .lbl img{width:58mm;height:40mm;object-fit:contain}
+    .miss{font:12px Arial;color:#c00;padding:6px;text-align:center}
+    .note{font:13px Arial;padding:10px 14px;background:#FFF6D6;border-bottom:1px solid #E5D28A}
+    @media print{.note{display:none}}
+  </style></head><body><div class="note">Наклейте QR на <b>каждый короб</b> (не на заказ). Размер этикетки — 58×40 мм, выберите его в настройках печати.</div>${labels}
+  <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 500); };<\/script></body></html>`);
+  win.document.close();
+}
+function downloadFbsTrbxLabels(clientId){ shipPrintStickers(clientId, fbsTrbxes.map(t=>t.id)); }
+
+// ----- компактная панель на вкладке «На сборке» -----
 function loadFbsTrbxes(clientId){
-  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'list_trbx' } }).then(({data, error})=>{
-    if(error || (data && data.error)){ console.error(error||(data&&data.error)); return; }
-    fbsTrbxes = data.trbxes || [];
-    fbsTrbxLoadedFor = clientId;
-    renderFbsBody();
-  });
+  supplyCall(clientId, 'boxes')
+    .then(data=>{ fbsTrbxes = data.trbxes || []; })
+    .catch(e=>{ console.error(e); fbsTrbxes = []; })
+    .finally(()=>{ fbsTrbxLoadedFor = clientId; renderFbsBody(); });
 }
 function renderFbsTrbxPanel(clientId){
   const wrap = document.getElementById('fbsTrbxPanel');
   if(!wrap) return;
   wrap.innerHTML = `
-    <div class="panel" style="padding:16px;margin-bottom:14px">
-      <div class="eyebrow" style="margin-bottom:10px">Короба поставки (${fbsTrbxes.length})</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:${fbsTrbxes.length?'14px':'0'}">
-        <input class="search mono" id="fbsTrbxAmount" type="number" min="1" value="1" style="width:90px">
-        <button class="btn btn-ghost" onclick="createFbsTrbx('${clientId}')">+ Создать короба</button>
-        ${fbsTrbxes.length ? `<button class="btn btn-accent" onclick="downloadFbsTrbxLabels('${clientId}')">📦 Скачать этикетки коробов</button>` : ''}
+    <div class="panel" style="padding:14px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="font-size:13px;max-width:640px">
+        <b>Грузоместа поставки: ${fbsTrbxes.length}</b>
+        <div style="font-size:12px;color:var(--ink-faint);line-height:1.5;margin-top:2px">Для отгрузки в ПВЗ, ППТ и ПФЦ нужны грузоместа — по одному на короб, QR на каждом коробе. Создаются и печатаются в окне «Отгрузка поставки».</div>
       </div>
-      ${fbsTrbxes.length ? `
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${fbsTrbxes.map(t=>`<span class="status planned" style="cursor:default">Короб ${String(t.id).replace('WB-TRBX-','№')} · ${(t.orders||[]).length} шт</span>`).join('')}
-        </div>
-      ` : `<p style="font-size:12px;color:var(--ink-faint)">Коробов ещё нет — создайте хотя бы один, чтобы распределять по ним заказы.</p>`}
-    </div>
-  `;
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${fbsTrbxes.length ? `<button class="btn btn-ghost" onclick="downloadFbsTrbxLabels('${clientId}')">🖨 QR грузомест</button>` : ''}
+        <button class="btn btn-accent" onclick="closeFbsSupply('${clientId}')">📦 Отгрузка поставки…</button>
+      </div>
+    </div>`;
 }
-function createFbsTrbx(clientId){
-  const amount = Math.max(1, parseInt(document.getElementById('fbsTrbxAmount').value)||1);
-  toast('Создаём короба у WB…');
-  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'create_trbx', amount } }).then(({data, error})=>{
-    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
-    toast(`Создано коробов: ${(data.trbxIds||[]).length}`);
-    loadFbsTrbxes(clientId);
-  });
+// в API WB привязки конкретного заказа к грузоместу больше нет — заказы раскладываются по коробам физически
+function renderTrbxAssignControl(o){ return ''; }
+
+// ----- окно «Отгрузка поставки» -----
+function closeSupplyShipment(){
+  const o = document.getElementById('shipOverlay');
+  if(o) o.remove();
+  shipState = null;
 }
-function renderTrbxAssignControl(o){
-  if(!fbsTrbxes.length) return '';
-  const assigned = fbsTrbxes.find(t=>(t.orders||[]).includes(o.orderId));
-  if(assigned){
-    return `<span class="mono" style="font-size:11px;color:var(--ink-faint)">короб ${String(assigned.id).replace('WB-TRBX-','№')}</span><button class="btn btn-ghost" style="padding:3px 8px" onclick="removeFbsTrbxOrder('${o.clientId}','${assigned.id}',${o.orderId})">✕</button>`;
-  }
-  return `
-    <select class="search" style="width:130px;padding:4px 6px;font-size:12px" onchange="if(this.value) assignFbsTrbxOrder('${o.clientId}', this.value, ${o.orderId})">
-      <option value="">в короб…</option>
-      ${fbsTrbxes.map(t=>`<option value="${t.id}">Короб ${String(t.id).replace('WB-TRBX-','№')}</option>`).join('')}
-    </select>
-  `;
-}
-function assignFbsTrbxOrder(clientId, trbxId, orderId){
-  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'assign_trbx_order', trbxId, orderId } }).then(({data, error})=>{
-    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
-    toast('Заказ привязан к коробу');
-    loadFbsTrbxes(clientId);
-  });
-}
-function removeFbsTrbxOrder(clientId, trbxId, orderId){
-  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'remove_trbx_order', trbxId, orderId } }).then(({data, error})=>{
-    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
-    toast('Заказ убран из короба');
-    loadFbsTrbxes(clientId);
-  });
-}
-function downloadFbsTrbxLabels(clientId){
+async function openSupplyShipment(clientId, orders){
+  closeSupplyShipment();
   const client = clients.find(c=>c.id===clientId);
-  if(!fbsTrbxes.length){ toast('Сначала создайте короба'); return; }
-  toast('Запрашиваем стикеры коробов у WB…');
-  const trbxIds = fbsTrbxes.map(t=>t.id);
-  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'get_trbx_stickers', trbxIds, stickerType:'svg' } }).then(({data, error})=>{
-    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
-    const stickers = data.stickers || [];
-    const win = window.open('', '_blank');
-    if(!win){ toast('Браузер заблокировал открытие окна'); return; }
-    const pages = fbsTrbxes.map((t)=>{
-      const sticker = stickers.find(s=>(s.trbxId||s.id)===t.id);
-      const ordersInBox = (t.orders||[]).map(oid=>fbsOrders.find(o=>o.orderId===oid)).filter(Boolean);
-      const contentRows = ordersInBox.map(o=>`<tr><td>${escapeHtml(o.article)}</td><td>${escapeHtml(o.name||'')}</td><td>${escapeHtml(o.size||'—')}</td><td>${escapeHtml(o.barcode||'—')}</td></tr>`).join('');
-      return `
-        <div class="trbx-page">
-          <h2>Короб ${String(t.id).replace('WB-TRBX-','№')}</h2>
-          <div style="color:#666;font-size:12px;margin-bottom:10px">${escapeHtml(client?client.name:'')}</div>
-          <table>
-            <thead><tr><th>Артикул</th><th>Название</th><th>Размер</th><th>Штрихкод</th></tr></thead>
-            <tbody>${contentRows || '<tr><td colspan="4">нет привязанных заказов</td></tr>'}</tbody>
-          </table>
-          ${sticker && sticker.file ? `<div class="qr-wrap"><img src="data:image/svg+xml;base64,${sticker.file}"></div>` : `<p style="color:#c00">QR-стикер не получен от WB</p>`}
-        </div>
-      `;
-    }).join('');
-    win.document.write(`
-      <html><head><title>Этикетки коробов</title>
-      <style>
-        body{font-family:Arial,sans-serif;padding:10px;color:#111}
-        .trbx-page{page-break-after:always;padding:16px;border:1px solid #ccc;border-radius:8px;margin-bottom:16px;max-width:420px}
-        .trbx-page:last-child{page-break-after:avoid}
-        h2{margin:0 0 4px 0;font-size:18px}
-        table{width:100%;border-collapse:collapse;margin-bottom:14px}
-        th,td{border:1px solid #333;padding:4px 6px;font-size:11px;text-align:left}
-        .qr-wrap{display:flex;justify-content:center}
-        .qr-wrap img{width:220px}
-      </style></head><body>${pages}
-      <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
-      </body></html>
-    `);
-    win.document.close();
-  });
+  let city = 'Москва', filter = 'all';
+  try{ city = localStorage.getItem('sklad42_ship_city') || 'Москва'; filter = localStorage.getItem('sklad42_ship_filter') || 'all'; }catch(e){}
+  shipState = {
+    clientId, clientName: client ? client.name : '', orders: orders || [],
+    supply:null, trbxes:[], orderIds:[], fatal:false,
+    points:null, pointsLoading:false, pointsError:'', pointId:null,
+    shippingType:'selfShipping', shippingDt: shipDateStr(new Date()),
+    city, query:'', typeFilter:filter, amount:1, busy:false, error:'', errorOrders:[]
+  };
+  const o = document.createElement('div');
+  o.id = 'shipOverlay';
+  o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9990;display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow:auto';
+  o.innerHTML = '<div id="shipBox" style="background:#fff;border-radius:14px;padding:22px;max-width:860px;width:100%"></div>';
+  o.addEventListener('mousedown', e=>{ if(e.target===o && shipState && !shipState.busy) closeSupplyShipment(); });
+  document.body.appendChild(o);
+  shipRender();
+  try{
+    const data = await supplyCall(clientId, 'info');
+    if(!shipState) return;
+    if(!data.supply){ closeSupplyShipment(); toast('У клиента нет открытой поставки в WB — отгружать нечего'); return; }
+    const st = shipState;
+    st.supply = data.supply; st.trbxes = data.trbxes || []; st.orderIds = data.orderIds || [];
+    if(data.supply.shippingType) st.shippingType = data.supply.shippingType;
+    if(data.supply.shippingDt && data.supply.shippingDt >= shipDateStr(new Date())) st.shippingDt = data.supply.shippingDt;
+    if(data.supply.shippingPointId) st.pointId = data.supply.shippingPointId;
+    st.amount = Math.min(Math.max(1, shipRoom()), 1);
+    shipRender();
+    shipLoadPoints();
+  }catch(e){
+    if(!shipState) return;
+    shipState.fatal = true; shipState.error = 'Не удалось получить поставку у WB: ' + e.message;
+    shipRender();
+  }
 }
+function shipRender(){
+  const st = shipState, box = document.getElementById('shipBox');
+  if(!box || !st) return;
+  const head = `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div><div class="eyebrow">Заказы FBS · ${escapeHtml(st.clientName)}</div><h2 style="margin:2px 0 0 0;font-size:22px">Отгрузка поставки</h2></div>
+      <button class="btn btn-ghost" onclick="closeSupplyShipment()" ${st.busy?'disabled':''}>✕ Закрыть</button></div>`;
+  if(st.fatal){ box.innerHTML = head + `<p style="margin-top:16px;color:var(--warn);font-size:13px">${escapeHtml(st.error)}</p>`; return; }
+  if(!st.supply){ box.innerHTML = head + `<p style="margin-top:20px;font-size:13px;color:var(--ink-soft)">⏳ Запрашиваю поставку у WB…</p>`; return; }
+  const n = shipOrdersCount();
+  const mismatch = st.orders.length && st.orderIds.length && st.orders.length !== st.orderIds.length;
+  box.innerHTML = `
+    ${head}
+    <div style="font-size:13px;color:var(--ink-soft);margin:12px 0 4px 0;line-height:1.7">
+      <b style="color:var(--ink)">${escapeHtml(st.supply.name || 'Поставка')}</b> · <span class="mono">${escapeHtml(st.supply.id)}</span> ·
+      ${SHIP_CARGO_NAMES[st.supply.cargoType] || 'МГТ'} · заказов: <b>${n}</b>
+      ${mismatch ? `<div style="color:var(--warn);font-weight:600">⚠ В поставке у WB заданий: ${st.orderIds.length}, у нас на сборке выбрано: ${st.orders.length} — проверьте перед отгрузкой.</div>` : ''}
+    </div>
+    <div id="shipBoxes" style="margin-top:14px;padding:14px;border:1px solid var(--line);border-radius:10px"></div>
+    <div id="shipDelivery" style="margin-top:14px;padding:14px;border:1px solid var(--line);border-radius:10px">
+      <div class="eyebrow">Данные о доставке</div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:10px 0">
+        <div style="font-size:13px">Способ:
+          <label style="margin-left:8px"><input type="radio" name="shipType" value="selfShipping" ${st.shippingType==='selfShipping'?'checked':''} onchange="shipSet('shippingType',this.value)"> Своими силами</label>
+          <label style="margin-left:8px"><input type="radio" name="shipType" value="transportCompany" ${st.shippingType==='transportCompany'?'checked':''} onchange="shipSet('shippingType',this.value)"> Транспортная компания</label>
+        </div>
+        <div style="font-size:13px">Дата отгрузки: <input class="search" type="date" min="${shipDateStr(new Date())}" value="${escapeHtml(st.shippingDt)}" onchange="shipSet('shippingDt',this.value)" style="width:160px"></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        <input class="search" id="shipCity" value="${escapeHtml(st.city)}" placeholder="Город" style="width:170px" oninput="shipSet('city',this.value,true)" onkeydown="if(event.key==='Enter') shipLoadPoints()">
+        <button class="btn btn-ghost" onclick="shipLoadPoints()">Найти пункты</button>
+        <input class="search" id="shipQuery" value="${escapeHtml(st.query)}" placeholder="Поиск по адресу или названию" style="flex:1;min-width:200px" oninput="shipOnQuery(this.value)">
+        <span id="shipFilterChips"></span>
+      </div>
+      <div id="shipSelected" style="font-size:13px;margin:6px 0"></div>
+      <div id="shipPointsList" style="max-height:280px;overflow-y:auto;border:1px solid var(--line);border-radius:8px"></div>
+    </div>
+    <div id="shipFooter" style="margin-top:16px"></div>`;
+  shipRenderBoxes();
+  shipRenderPoints();
+  shipRenderFooter();
+}
+function shipSet(key, value, silent){
+  const st = shipState; if(!st) return;
+  st[key] = value;
+  if(!silent){ shipRenderFooter(); }
+}
+function shipRenderBoxes(){
+  const st = shipState, el = document.getElementById('shipBoxes');
+  if(!el || !st) return;
+  const n = shipOrdersCount(), has = st.trbxes.length, room = shipRoom(), max = shipMaxBoxes(n);
+  if(st.amount > Math.max(1, room)) st.amount = Math.max(1, room);
+  el.innerHTML = `
+    <div class="eyebrow">Грузоместа${has ? ` · создано: ${has}` : ''}</div>
+    <p style="font-size:12px;color:var(--ink-soft);line-height:1.6;margin:6px 0 10px 0">
+      Нужны, если поставка едет в <b>ПВЗ, ППТ или ПФЦ</b> — иначе её не примут. 1 грузоместо = 1 короб.
+      В каждый короб — минимум 2 заказа (при нечётном количестве один можно добавить в последний короб).
+      QR-код клеится на короб, а не на заказ. В поставке заказов: ${n} — можно создать не больше ${max} грузомест.
+    </p>
+    ${has ? `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        ${st.trbxes.map(t=>`<span class="status planned" style="cursor:default">Грузоместо №${escapeHtml(shipBoxNo(t.id))}</span>`).join('')}
+        <button class="btn btn-accent" onclick="shipPrintStickers('${st.clientId}', shipState.trbxes.map(t=>t.id))">🖨 Печать QR (${has})</button>
+        <button class="btn btn-ghost" style="color:var(--warn)" onclick="shipDeleteBoxes()" ${st.busy?'disabled':''}>Удалить все</button>
+      </div>` : ''}
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-ghost" onclick="shipStep(-1)" ${st.amount<=1?'disabled':''}>−</button>
+      <input class="search mono" id="shipAmount" type="number" min="1" max="${Math.max(1,room)}" value="${st.amount}" style="width:80px;text-align:center" oninput="shipSetAmount(this.value)">
+      <button class="btn btn-ghost" onclick="shipStep(1)" ${st.amount>=room?'disabled':''}>＋</button>
+      <button class="btn btn-accent" onclick="shipCreateBoxes()" ${(st.busy||room<1)?'disabled':''}>${has ? 'Добавить грузоместа' : 'Создать грузоместа'}</button>
+      ${room<1 ? `<span style="font-size:12px;color:var(--ink-faint)">достигнут максимум для ${n} заказов</span>` : ''}
+    </div>`;
+}
+function shipSetAmount(v){
+  const st = shipState; if(!st) return;
+  st.amount = Math.max(1, Math.min(Math.max(1, shipRoom()), parseInt(v) || 1));
+}
+function shipStep(d){
+  const st = shipState; if(!st) return;
+  st.amount = Math.max(1, Math.min(Math.max(1, shipRoom()), st.amount + d));
+  shipRenderBoxes();
+}
+async function shipCreateBoxes(){
+  const st = shipState; if(!st || st.busy) return;
+  const amount = Math.max(1, Math.min(Math.max(1, shipRoom()), st.amount));
+  st.busy = true; st.error = ''; shipRenderBoxes(); shipRenderFooter();
+  try{
+    await supplyCall(st.clientId, 'create_boxes', {amount});
+    const data = await supplyCall(st.clientId, 'boxes');
+    if(!shipState) return;
+    shipState.trbxes = data.trbxes || [];
+    fbsTrbxes = shipState.trbxes; fbsTrbxLoadedFor = st.clientId;
+    toast(`Создано грузомест: ${amount} — напечатайте QR и наклейте на короба`);
+  }catch(e){ if(shipState) shipState.error = e.message; }
+  if(!shipState) return;
+  shipState.busy = false; shipRenderBoxes(); shipRenderFooter();
+}
+async function shipDeleteBoxes(){
+  const st = shipState; if(!st || st.busy || !st.trbxes.length) return;
+  if(!await customConfirm(`Удалить все грузоместа (${st.trbxes.length}) этой поставки? Наклеенные на короба QR-коды станут недействительными.`)) return;
+  const ids = st.trbxes.map(t=>t.id);
+  st.busy = true; st.error = ''; shipRenderBoxes(); shipRenderFooter();
+  try{
+    await supplyCall(st.clientId, 'delete_boxes', {trbxIds: ids});
+    if(!shipState) return;
+    shipState.trbxes = []; fbsTrbxes = []; fbsTrbxLoadedFor = st.clientId;
+  }catch(e){ if(shipState) shipState.error = e.message; }
+  if(!shipState) return;
+  shipState.busy = false; shipRenderBoxes(); shipRenderFooter();
+}
+
+// ----- пункты отгрузки -----
+async function shipLoadPoints(){
+  const st = shipState;
+  if(!st || !st.supply) return;
+  const city = (st.city || '').trim();
+  if(!city){ st.pointsError = 'Укажите город'; shipRenderPoints(); return; }
+  st.pointsLoading = true; st.pointsError = ''; shipRenderPoints();
+  try{
+    const data = await supplyCall(st.clientId, 'shipping_points', {city, cargoType: st.supply.cargoType});
+    if(!shipState) return;
+    shipState.points = data.points || [];
+    try{ localStorage.setItem('sklad42_ship_city', city); }catch(e){}
+  }catch(e){
+    if(!shipState) return;
+    shipState.points = []; shipState.pointsError = e.message;
+  }
+  shipState.pointsLoading = false;
+  shipRenderPoints(); shipRenderFooter();
+}
+function shipOnQuery(v){ if(!shipState) return; shipState.query = v; shipRenderPoints(); }
+function shipSetFilter(f){
+  if(!shipState) return;
+  shipState.typeFilter = f;
+  try{ localStorage.setItem('sklad42_ship_filter', f); }catch(e){}
+  shipRenderPoints();
+}
+function shipFilteredPoints(){
+  const st = shipState;
+  const words = (st.query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const rec = st.supply ? st.supply.recommendedWhId : null;
+  const list = (st.points || []).filter(p=>{
+    if(st.typeFilter==='pp' && p.officeType!=='pp') return false;
+    if(st.typeFilter==='sc' && p.officeType==='pp') return false;
+    const hay = (String(p.address) + ' ' + String(p.name) + ' ' + p.id).toLowerCase();
+    return words.every(w=>hay.includes(w));
+  });
+  const rank = p => (p.id===st.pointId ? 0 : (p.id===rec ? 1 : 2));
+  const typeRank = {pp:0, sw:1, sc:2};
+  return list.sort((a,b)=> rank(a)-rank(b) || (typeRank[a.officeType]??9)-(typeRank[b.officeType]??9) || String(a.address).localeCompare(String(b.address), 'ru'));
+}
+function shipPoint(){
+  const st = shipState;
+  return (st && st.points) ? st.points.find(p=>p.id===st.pointId) || null : null;
+}
+function shipPickPoint(id){
+  const st = shipState; if(!st) return;
+  st.pointId = id;
+  shipRenderPoints(); shipRenderFooter();
+}
+function shipRenderPoints(){
+  const st = shipState;
+  const listEl = document.getElementById('shipPointsList');
+  if(!listEl || !st) return;
+  const chips = document.getElementById('shipFilterChips');
+  if(chips) chips.innerHTML = [['all','Все'],['pp','ПВЗ'],['sc','СЦ и склады']].map(([k,t])=>
+    `<button class="btn ${st.typeFilter===k?'btn-accent':'btn-ghost'}" style="padding:5px 10px;font-size:12px" onclick="shipSetFilter('${k}')">${t}</button>`).join(' ');
+  const selEl = document.getElementById('shipSelected');
+  if(selEl){
+    const p = shipPoint();
+    selEl.innerHTML = st.pointId
+      ? `Выбрано: ${p ? `<b>${SHIP_POINT_TYPES[p.officeType]||p.officeType}</b> · ${escapeHtml(p.address)} <span class="mono" style="color:var(--ink-faint)">№${p.id}</span>` : `<b>пункт №${st.pointId}</b> <span style="color:var(--ink-faint)">(из текущих параметров поставки; в списке выбранного города его нет)</span>`}`
+      : `<span style="color:var(--ink-faint)">Пункт отгрузки не выбран</span>`;
+  }
+  if(st.pointsLoading){ listEl.innerHTML = `<div style="padding:14px;font-size:13px;color:var(--ink-soft)">⏳ Загружаю пункты отгрузки…</div>`; return; }
+  if(st.pointsError){ listEl.innerHTML = `<div style="padding:14px;font-size:13px;color:var(--warn)">${escapeHtml(st.pointsError)}</div>`; return; }
+  if(!st.points){ listEl.innerHTML = ''; return; }
+  const all = shipFilteredPoints();
+  const rec = st.supply ? st.supply.recommendedWhId : null;
+  const shown = all.slice(0, 60);
+  listEl.innerHTML = (shown.length ? shown.map(p=>`
+      <label style="display:flex;gap:10px;align-items:flex-start;padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer;${p.id===st.pointId?'background:var(--bg,#F3F0E8)':''}">
+        <input type="radio" name="shipPoint" ${p.id===st.pointId?'checked':''} onchange="shipPickPoint(${p.id})">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600">${escapeHtml(p.address)}</div>
+          <div style="font-size:11px;color:var(--ink-faint)">${SHIP_POINT_TYPES[p.officeType]||escapeHtml(p.officeType)} · №${p.id}${p.fulfillment?' · фулфилмент в СЦ':''}${p.id===rec?' · <span style="color:var(--accent);font-weight:700">★ рекомендует WB для этой поставки</span>':''}</div>
+        </div>
+      </label>`).join('') : `<div style="padding:14px;font-size:13px;color:var(--ink-faint)">Ничего не найдено — измените запрос, тип пункта или город.</div>`)
+    + (all.length > shown.length ? `<div style="padding:10px 12px;font-size:12px;color:var(--ink-faint)">Показаны первые ${shown.length} из ${all.length} — уточните адрес в поиске.</div>` : '');
+}
+
+// ----- проверка и передача в доставку -----
+function shipValidate(){
+  const st = shipState;
+  if(!st.pointId) return 'Выберите пункт отгрузки.';
+  if(!st.shippingDt) return 'Укажите дату отгрузки.';
+  if(st.shippingDt < shipDateStr(new Date())) return 'Дата отгрузки не может быть в прошлом.';
+  const p = shipPoint();
+  if(p && p.officeType==='pp' && st.supply.isPickupPointShipmentAllowed === false) return 'Эту поставку нельзя отгрузить в ПВЗ (ограничения по товарам) — выберите СЦ или склад.';
+  if(p && (p.officeType==='pp' || p.fulfillment) && st.trbxes.length < 1) return 'Для отгрузки в этот пункт нужно создать грузоместа (минимум одно) и наклеить QR на короб — иначе WB не примет поставку.';
+  return '';
+}
+function shipRenderFooter(){
+  const st = shipState, el = document.getElementById('shipFooter');
+  if(!el || !st) return;
+  const problem = shipValidate();
+  el.innerHTML = `
+    ${st.error ? `<div style="padding:10px 12px;border-radius:8px;background:var(--warn-bg);color:var(--warn);font-size:13px;margin-bottom:10px;line-height:1.5">${escapeHtml(st.error)}
+        ${st.errorOrders && st.errorOrders.length ? `<div style="margin-top:6px;font-size:12px">${st.errorOrders.slice(0,15).map(o=>`<div>Заказ <span class="mono">№${o.id}</span> — ${o.problems.map(escapeHtml).join('; ')}</div>`).join('')}${st.errorOrders.length>15?`<div>…и ещё ${st.errorOrders.length-15}</div>`:''}</div>` : ''}
+      </div>` : ''}
+    ${!st.error && problem ? `<div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">${escapeHtml(problem)}</div>` : ''}
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn btn-ghost" onclick="closeSupplyShipment()" ${st.busy?'disabled':''}>Отмена</button>
+      <button class="btn btn-primary" id="shipSubmitBtn" onclick="shipSubmit()" ${(st.busy||problem)?'disabled':''}>${st.busy ? '⏳ Передаю…' : '🚚 Передать в доставку'}</button>
+    </div>`;
+}
+async function shipSubmit(){
+  const st = shipState; if(!st || st.busy) return;
+  const problem = shipValidate();
+  if(problem){ st.error = problem; shipRenderFooter(); return; }
+  st.busy = true; st.error = ''; st.errorOrders = [];
+  shipRenderBoxes(); shipRenderFooter();
+  try{
+    await supplyCall(st.clientId, 'ship', {shippingType: st.shippingType, shippingDt: st.shippingDt, shippingPointId: st.pointId});
+    const toClose = st.orders;
+    toClose.forEach(o=>{ o.supplierStatus = 'complete'; });
+    if(toClose.length) sb.from('wb_orders').update({supplier_status:'complete'}).in('order_id', toClose.map(o=>o.orderId)).then(()=>{});
+    fbsCloseSelectedOrders = [];
+    fbsTrbxes = [];
+    fbsTrbxLoadedFor = '';
+    closeSupplyShipment();
+    toast('Поставка передана в доставку');
+    setFbsView('complete');
+  }catch(e){
+    if(!shipState) return;
+    shipState.busy = false;
+    shipState.error = e.message;
+    shipState.errorOrders = (e.payload && e.payload.orders) || [];
+    shipRenderBoxes(); shipRenderFooter();
+  }
+}
+
 async function closeFbsSupply(explicitClientId){
   const clientId = explicitClientId || document.getElementById('fbsClientSelect').value;
   const client = clients.find(c=>c.id===clientId);
@@ -1880,12 +2140,9 @@ async function closeFbsSupply(explicitClientId){
   if(missingKiz.length){
     const names = missingKiz.slice(0,5).map(o=>`«${o.name||o.article}» (заказ №${o.orderId})`).join(', ');
     const more = missingKiz.length>5 ? ` и ещё ${missingKiz.length-5}` : '';
-    if(!await customConfirm(`⚠ У ${missingKiz.length} заказ(ов) не привязан КИЗ, хотя он требуется: ${names}${more}.\n\nЗакрыть поставку без КИЗ рискованно — WB может отклонить поставку или заблокировать продажу. Всё равно закрыть?`)) return;
-  } else {
-    const confirmMsg = isPartial
-      ? `Закрыть ${toClose.length} из ${allConfirmed.length} заказов клиента «${client?client.name:''}»? Остальные ${toHold.length} останутся в отдельной поставке до следующего раза.`
-      : `Закрыть текущую поставку клиента «${client?client.name:''}» и передать на склад WB?`;
-    if(!await customConfirm(confirmMsg)) return;
+    if(!await customConfirm(`⚠ У ${missingKiz.length} заказ(ов) не привязан КИЗ, хотя он требуется: ${names}${more}.\n\nОтгружать без КИЗ рискованно — WB может отклонить поставку или заблокировать продажу. Всё равно продолжить?`)) return;
+  } else if(isPartial){
+    if(!await customConfirm(`Отгрузить ${toClose.length} из ${allConfirmed.length} заказов клиента «${client?client.name:''}»? Остальные ${toHold.length} останутся в отдельной поставке до следующего раза.`)) return;
   }
 
   if(isPartial){
@@ -1901,16 +2158,8 @@ async function closeFbsSupply(explicitClientId){
     }
   }
 
-  sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'close_supply' } }).then(({data, error})=>{
-    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
-    toClose.forEach(o=>{ o.supplierStatus='complete'; });
-    sb.from('wb_orders').update({supplier_status:'complete'}).in('order_id', toClose.map(o=>o.orderId)).then(()=>{});
-    fbsCloseSelectedOrders = [];
-    fbsTrbxes = [];
-    fbsTrbxLoadedFor = '';
-    toast(isPartial ? `Закрыто ${toClose.length} заказ(ов) — остальные ждут следующей отгрузки` : 'Поставка закрыта и передана на склад WB');
-    setFbsView('complete');
-  });
+  // дальше — окно «Отгрузка поставки»: грузоместа (для ПВЗ), пункт и дата отгрузки, передача в доставку
+  openSupplyShipment(clientId, toClose);
 }
 function printFbsPickList(){
   const clientId = document.getElementById('fbsClientSelect').value;
