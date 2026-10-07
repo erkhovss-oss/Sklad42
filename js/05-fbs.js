@@ -1059,26 +1059,42 @@ function renderFbsBody(){
   }
 }
 let scanModeActive = false;
+let assemblyDoneIds = new Set(); // заказы, обработанные в текущем сеансе сканирования: одинаковые товары идут по очереди, повторы видны
+let assemblyResume = null;       // откуда вернуться к очереди «Режима сборки» после поиска заказа
+let assemblyPreconfirm = null;   // заказ найден по штрихкоду товара — ШК уже отсканирован, повторно не просим
+function isAssemblyAutoSearch(){ try{ return localStorage.getItem('sklad42_assembly_auto_search') !== '0'; }catch(e){ return true; } }
+function setAssemblyAutoSearch(on){ try{ localStorage.setItem('sklad42_assembly_auto_search', on ? '1' : '0'); }catch(e){} }
 function enterScanMode(){
   scanModeActive = true;
+  assemblyDoneIds = new Set();
+  assemblyResume = null;
   renderScanModeScreen();
 }
 function exitScanMode(){
   scanModeActive = false;
   assemblyModeQueue = [];
   assemblyModeIndex = 0;
+  assemblyResume = null;
+  assemblyDoneIds = new Set();
   renderFbsBody();
 }
 function renderScanModeScreen(msg, msgIsError){
   const body = document.getElementById('fbsBody');
   body.innerHTML = `
     <div class="panel" style="padding:30px;text-align:center;max-width:520px;margin:0 auto">
-      <div class="eyebrow" style="margin-bottom:10px">Найти заказ по скану</div>
-      <p style="font-size:13px;color:var(--ink-soft);margin-bottom:20px">Отсканируйте стикер, уже наклеенный на товар, — заказ откроется автоматически.</p>
+      <div class="eyebrow" style="margin-bottom:10px">Поиск заказа</div>
+      <p style="font-size:13px;color:var(--ink-soft);margin-bottom:20px">Отсканируйте стикер заказа (или штрихкод товара, или введите номер заказа) — заказ откроется автоматически.</p>
       <input class="search mono" id="orderScanInput" placeholder="Ждём скан…" style="width:100%;text-align:center;font-size:16px;padding:14px" autofocus
         onkeydown="if(event.key==='Enter') handleOrderScan(this)">
-      ${msg ? `<p style="font-size:12px;margin-top:14px;color:${msgIsError?'var(--warn)':'var(--ok)'}">${escapeHtml(msg)}</p>` : ''}
-      <button class="btn btn-ghost" style="margin-top:20px" onclick="exitScanMode()">Выйти из режима сканирования</button>
+      ${msg ? `<p style="font-size:13px;margin-top:14px;font-weight:600;color:${msgIsError?'var(--warn)':'var(--ok)'}">${escapeHtml(msg)}</p>` : ''}
+      <div style="font-size:12px;color:var(--ink-faint);margin-top:12px">Обработано в этом сеансе: <b>${assemblyDoneIds.size}</b></div>
+      <label style="display:flex;gap:6px;align-items:center;justify-content:center;font-size:12px;color:var(--ink-soft);margin-top:12px;cursor:pointer">
+        <input type="checkbox" ${isAssemblyAutoSearch()?'checked':''} onchange="setAssemblyAutoSearch(this.checked)"> После заказа сразу возвращаться к поиску
+      </label>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:18px">
+        ${assemblyResume ? `<button class="btn btn-ghost" onclick="resumeAssemblyQueue()">↩ Продолжить по очереди</button>` : ''}
+        <button class="btn btn-ghost" onclick="exitScanMode()">Выйти из режима сканирования</button>
+      </div>
     </div>
   `;
   setTimeout(()=>{ const el = document.getElementById('orderScanInput'); if(el) el.focus(); }, 50);
@@ -1113,49 +1129,116 @@ async function ensureStickerCodes(pool){
   }
   return got;
 }
+// Что отсканировано → какой заказ: номер заказа, rid, код стикера, штрихкод товара, артикул. Если товар один и тот же в нескольких
+// заказах, берём ещё не обработанный в этом сеансе. via сообщает, чем нашли (по штрихкоду товара ШК уже подтверждён).
+function findOrderForScan(raw, pool){
+  const key = stickerKey(raw);
+  const undoneFirst = (list)=> list.find(o=>!assemblyDoneIds.has(o.orderId)) || null;
+  let o = pool.find(x=>String(x.orderId)===raw) || pool.find(x=>x.rid && x.rid===raw);
+  if(o) return {order:o, via:'order'};
+  if(key.length >= 6){
+    o = pool.find(x=>x.stickerCode && (x.stickerCode===raw || stickerKey(x.stickerCode)===key));
+    if(o) return {order:o, via:'sticker'};
+  }
+  for(const [field, via] of [['barcode','barcode'], ['article','article']]){
+    const matches = pool.filter(x=>x[field] && x[field]===raw);
+    if(matches.length){
+      const next = undoneFirst(matches);
+      if(!next) return {order:null, via, allDone:matches.length};
+      return {order:next, via};
+    }
+  }
+  const digits = (raw.match(/\d{4,}/g) || []).sort((a,b)=>b.length-a.length);
+  for(const d of digits){
+    o = pool.find(x=>String(x.orderId)===d);
+    if(o) return {order:o, via:'order'};
+  }
+  return null;
+}
 async function handleOrderScan(inputEl){
   const raw = inputEl.value.trim();
   inputEl.value = '';
   if(!raw) return;
+  if(raw===NEXT_ORDER_QR_CODE){ renderScanModeScreen('Код «Следующий заказ» здесь не нужен — отсканируйте стикер заказа', true); return; }
   const clientId = document.getElementById('fbsClientSelect').value;
   const pool = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm');
-  const key = stickerKey(raw);
-  const bySticker = ()=> key.length >= 6 ? pool.find(o=>o.stickerCode && (o.stickerCode===raw || stickerKey(o.stickerCode)===key)) : null;
+  let found = findOrderForScan(raw, pool);
 
-  let order = pool.find(o=>String(o.orderId)===raw)
-    || pool.find(o=>o.rid && o.rid===raw)
-    || pool.find(o=>o.barcode && o.barcode===raw)
-    || pool.find(o=>o.article && o.article===raw)
-    || bySticker();
-
-  if(!order){
-    const digits = (raw.match(/\d{4,}/g) || []).sort((a,b)=>b.length-a.length);
-    for(const d of digits){
-      order = pool.find(o=>String(o.orderId)===d);
-      if(order) break;
-    }
-  }
-
-  if(!order && key.length >= 6){
+  if(!(found && (found.order || found.allDone)) && stickerKey(raw).length >= 6){
     renderScanModeScreen('Ищу заказ по стикеру…');
     await ensureStickerCodes(pool);
     if(!scanModeActive) return; // пока ждали ответ WB, из режима скана вышли
-    order = bySticker();
+    found = findOrderForScan(raw, pool);
   }
 
-  if(!order){
+  if(found && found.allDone){
+    playBeep('warn');
+    renderScanModeScreen(`Все заказы с этим товаром (${found.allDone}) уже обработаны в этом сеансе.`, true);
+    return;
+  }
+  if(!found || !found.order){
+    playBeep('error');
     renderScanModeScreen(`Не нашёл заказ по «${raw}» среди заказов «На сборке». Проверьте, что заказ уже на сборке и выбран нужный клиент.`, true);
     return;
   }
-
+  openOrderInWizard(found.order, found.via==='barcode');
+}
+function openOrderInWizard(order, barcodeAlreadyScanned){
+  assemblyPreconfirm = barcodeAlreadyScanned ? order.orderId : null;
   assemblySupplyQueue = [{ supplyId: order.wbSupplyId||null, clientId: order.clientId, clientName: order.clientName, orders: [order] }];
   assemblySupplyIndex = 0;
   assemblyModeQueue = [order];
   assemblyModeIndex = 0;
   renderAssemblyModeStep();
 }
+// Заказ обработан (ШК подтверждён, а если нужен КИЗ — он принят): сразу открываем «Поиск заказа» для следующего скана
+function openOrderSearch(message){
+  if(!scanModeActive && assemblyModeQueue.length && assemblySupplyQueue.length){
+    assemblyResume = { supplyQueue: assemblySupplyQueue, supplyIndex: assemblySupplyIndex }; // пришли из очереди — запомним, чтобы можно было вернуться
+  }
+  scanModeActive = true;
+  renderScanModeScreen(message, false);
+}
+function resumeAssemblyQueue(){
+  const r = assemblyResume;
+  if(!r) return;
+  assemblyResume = null;
+  scanModeActive = false;
+  let si = r.supplyIndex;
+  while(si < r.supplyQueue.length && r.supplyQueue[si].orders.every(o=>assemblyDoneIds.has(o.orderId))) si++;
+  if(si >= r.supplyQueue.length){ toast('Все заказы очереди обработаны'); exitAssemblyMode(); return; }
+  assemblySupplyQueue = r.supplyQueue;
+  assemblySupplyIndex = si;
+  assemblyModeQueue = r.supplyQueue[si].orders;
+  assemblyModeIndex = Math.max(0, assemblyModeQueue.findIndex(o=>!assemblyDoneIds.has(o.orderId)));
+  renderAssemblyModeStep();
+}
+function wizardOrderDone(order){
+  assemblyDoneIds.add(order.orderId);
+  playBeep('ok');
+  if(!isAssemblyAutoSearch()) return; // выключено: остаёмся на заказе, дальше кнопкой «Следующий заказ»
+  const pi = findLocalProductInfo(order);
+  openOrderSearch(`✓ Заказ №${order.orderId} · ${pi.name||order.name||order.article}${order.size?' · '+order.size:''} — готово. Сканируйте следующий`);
+}
+// ШК подтверждён (отсканирован или найдено по нему): если нужен КИЗ — просим его, иначе заказ готов
+function wizardBarcodeConfirmed(order){
+  playBeep('ok');
+  const kizDone = order.kizStatus==='attached' || order.kizStatus==='pending';
+  const kizInput = document.getElementById('wizardKizInput');
+  if(kizInput && !kizDone){
+    kizInput.disabled = false;
+    forceEnglishInput(kizInput);
+    kizInput.focus();
+    toast('Теперь отсканируйте КИЗ этой единицы');
+  } else {
+    toast('Штрихкод подтверждён');
+    wizardOrderDone(order);
+  }
+}
 function startAssemblyMode(){
   scanModeActive = false;
+  assemblyDoneIds = new Set();
+  assemblyResume = null;
   const clientId = document.getElementById('fbsClientSelect').value;
   const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='confirm')
     .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
@@ -1206,23 +1289,27 @@ function jumpToOrderInWizard(targetOrder){
   }
   return false;
 }
-function wizardFindByCode(inputEl){
+async function wizardFindByCode(inputEl){
+  if(scanModeActive) return handleOrderScan(inputEl); // в режиме поиска ищем среди всех заказов «На сборке», как на экране поиска
   const raw = inputEl.value.trim();
   inputEl.value = '';
   if(!raw) return;
   if(raw===NEXT_ORDER_QR_CODE){ wizardNextOrder(); return; }
   const pool = assemblySupplyQueue.flatMap(s=>s.orders);
-  let found = pool.find(o=>String(o.orderId)===raw)
-    || pool.find(o=>o.rid && o.rid===raw)
-    || pool.find(o=>o.barcode && o.barcode===raw)
-    || pool.find(o=>o.article && o.article===raw);
-  if(!found){
+  let found = findOrderForScan(raw, pool);
+  if(!(found && found.order) && stickerKey(raw).length >= 6){
+    toast('Ищу заказ по стикеру…');
+    await ensureStickerCodes(pool);
+    found = findOrderForScan(raw, pool);
+  }
+  if(!found || !found.order){
     playBeep('error');
-    toast(`Не нашёл заказ по «${raw}» среди заказов на сборке — сообщите мне этот текст, донастрою сопоставление`);
+    toast(found && found.allDone ? `Все заказы с этим товаром (${found.allDone}) уже обработаны` : `Не нашёл заказ по «${raw}» среди заказов на сборке`);
     return;
   }
   playBeep('ok');
-  jumpToOrderInWizard(found);
+  if(found.via==='barcode') assemblyPreconfirm = found.order.orderId;
+  jumpToOrderInWizard(found.order);
 }
 function renderAssemblyModeStep(){
   const body = document.getElementById('fbsBody');
@@ -1282,6 +1369,9 @@ function renderAssemblyModeStepContent(order, requiresKiz){
       <div style="margin-bottom:16px;padding:10px 12px;background:var(--bg);border-radius:10px">
         <div class="eyebrow" style="margin-bottom:6px">🔍 Найти заказ по коду (если товары перемешаны)</div>
         <input class="search mono" id="wizardFindByCodeInput" placeholder="Номер заказа, штрихкод или код со стикера…" style="width:100%;max-width:420px" autocomplete="off">
+        <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--ink-soft);margin-top:8px;cursor:pointer">
+          <input type="checkbox" id="wizardAutoSearch" ${isAssemblyAutoSearch()?'checked':''} onchange="setAssemblyAutoSearch(this.checked)"> После заказа сразу открывать поиск (не идти по очереди)
+        </label>
       </div>
       <table style="margin-bottom:20px">
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Артикул</td><td class="mono">${escapeHtml(order.article)}</td></tr>
@@ -1333,20 +1423,16 @@ function renderAssemblyModeStepContent(order, requiresKiz){
       toast('Штрихкод не совпадает с товаром этого заказа');
       return;
     }
-    playBeep('ok');
-    const kizInput = document.getElementById('wizardKizInput');
-    if(kizInput){
-      kizInput.disabled = false;
-      forceEnglishInput(kizInput);
-      kizInput.focus();
-      toast('Теперь отсканируйте КИЗ этой единицы');
-    } else {
-      toast('Штрихкод подтверждён');
-    }
+    wizardBarcodeConfirmed(order);
   });
   wireWizardKizInput(order);
   if(pi.cell) announceCell(pi.cell);
   renderFixedNextOrderQr();
+  // заказ найден по штрихкоду товара: ШК уже отсканирован — сразу к КИЗ (или к следующему поиску, если КИЗ не нужен)
+  if(assemblyPreconfirm === order.orderId){
+    assemblyPreconfirm = null;
+    setTimeout(()=>wizardBarcodeConfirmed(order), 0);
+  }
 }
 function renderFixedNextOrderQr(){
   const holder = document.getElementById('fixedNextOrderQr');
@@ -1544,6 +1630,9 @@ function wizardAttachKiz(order, kizCode, norm){
     else { playBeep('warn'); toast('⚠ WB не подтвердил КИЗ — ' + (data.warning||'проверьте вручную')); }
     const statusDiv = document.getElementById('wizardKizStatus');
     if(statusDiv) statusDiv.innerHTML = renderKizStatusLabel(order);
+    // КИЗ принят (или WB ещё проверяет — досмотрим сами): заказ готов, открываем поиск следующего.
+    // Если WB КИЗ не принял — остаёмся на заказе, чтобы сразу отсканировать другой код.
+    if(data.kizStatus !== 'verify_failed' && assemblyModeQueue[assemblyModeIndex] === order) wizardOrderDone(order);
   });
 }
 async function wizardNextOrder(){
@@ -1585,6 +1674,8 @@ async function markOrderOutOfStock(orderId){
 }
 function exitAssemblyMode(){
   scanModeActive = false;
+  assemblyResume = null;
+  assemblyDoneIds = new Set();
   assemblyModeQueue = [];
   assemblyModeIndex = 0;
   assemblySupplyQueue = [];
