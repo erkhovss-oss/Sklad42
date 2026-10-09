@@ -464,7 +464,8 @@ if('speechSynthesis' in window){
 }
 
 function hasPermission(key){
-  if(clientViewMode) return key==='inventory';
+  if(clientViewMode) return key==='inventory' || key==='portal-pack';
+  if(key==='portal-pack') return false;
   if(!currentUser) return false;
   const role = roles.find(r=>r.id===currentUser.roleId);
   if(!role) return true; // роль не назначена — не блокируем интерфейс из-за отсутствующих данных
@@ -611,6 +612,8 @@ function switchTab(tab){
   if(tab==='ozon') renderOzon();
   if(tab==='portal-supplies'){ renderPortalSupplyDraftRows(); renderPortalSuppliesList(); }
   if(tab==='portal-kiz') renderPortalKizList();
+  if(tab==='packing') packLoadStaff();
+  if(tab==='portal-pack') packLoadPortal();
   if(tab==='journal') renderJournal();
   if(tab==='employees') renderEmployeesTab();
   try{ localStorage.setItem('sklad42_active_tab', tab); }catch(e){}

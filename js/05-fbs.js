@@ -1660,6 +1660,13 @@ function watchPendingKiz(order){
     delete kizWatchers[order.orderId];
   })();
 }
+// КИЗ уже привязан к другому заказу WB? Смотрим заказы из базы — это переживает обновление страницы и общее для всех сотрудников.
+// Коды приёмки сюда не входят: принятый с КИЗ товар законно отгружается с тем же кодом. Коды, которые WB не принял
+// (verify_failed), «использованными» не считаются — иначе после сбоя повторный скан блокировался бы навсегда.
+function findKizOnOtherOrder(code, exceptOrderId){
+  const key = kizKey(code);
+  return fbsOrders.find(o=>o.orderId!==exceptOrderId && o.kizCode && o.kizStatus!=='verify_failed' && kizKey(o.kizCode)===key) || null;
+}
 function wireWizardKizInput(order){
   const kizInput = document.getElementById('wizardKizInput');
   if(!kizInput || kizInput.dataset.wired) return;
@@ -1680,10 +1687,8 @@ function wireWizardKizInput(order){
         toast(`Код слишком короткий (${kizCode.length} симв.) — отсканируйте ещё раз`);
         return;
       }
-      // Не подтверждённая/неудачная попытка не считается «использованием» кода —
-      // иначе повторный скан того же кода после сбоя навсегда блокируется как «дубль».
-      const dup = kizScans.find(k=>kizKey(k.kizCode)===kizKey(kizCode));
-      if(dup){ playBeep('error'); toast(`Этот КИЗ уже был использован ранее (${dup.name})`); return; }
+      const dup = findKizOnOtherOrder(kizCode, order.orderId);
+      if(dup){ playBeep('error'); toast(`Этот КИЗ уже привязан к заказу №${dup.orderId} («${dup.name||dup.article}») — проверьте, тот ли код`); return; }
       wizardAttachKiz(order, kizCode, norm);
     }, 0);
   });
@@ -1695,10 +1700,6 @@ function wizardAttachKiz(order, kizCode, norm){
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus;
     order.kizDecision = data.decision || null;
-    if(data.kizStatus !== 'verify_failed'){
-      kizScans.push({kizCode, supplyId: order.wbSupplyId || ('FBS-'+order.orderId), sku:order.article, name:order.name, size:order.size||'', clientName:order.clientName, time:new Date().toISOString()});
-      sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id: order.wbSupplyId || ('FBS-'+order.orderId), sku:order.article, name:order.name, size:order.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
-    }
     sb.from('wb_orders').update({kiz_code:kizCode, kiz_status:data.kizStatus, requires_kiz:true}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
     if(data.kizStatus==='attached'){
       playBeep('ok');
@@ -1941,12 +1942,6 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus || null;
     sb.from('wb_orders').update({supplier_status:'confirm', wb_supply_id:data.wbSupplyId, kiz_code:kizCode, kiz_status:data.kizStatus||null}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
-    if(kizCode){
-      kizScans.push({kizCode, supplyId: data.wbSupplyId, sku:inv.sku, name:inv.name, size:inv.size||'', clientName:order.clientName, time:new Date().toISOString()});
-      sb.from('kiz_scans').insert({kiz_code:kizCode, supply_id: data.wbSupplyId, sku:inv.sku, name:inv.name, size:inv.size||null, client_name:order.clientName, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
-        if(error) console.error(error);
-      });
-    }
     if(data.kizStatus === 'attached') toast(`Заказ №${order.orderId}: КИЗ прикреплён и подтверждён у WB ✅`);
     else if(data.kizStatus === 'pending'){ toast(`Заказ №${order.orderId}: КИЗ отправлен, WB ещё проверяет — можно продолжать ⏳`); watchPendingKiz(order); }
     else if(data.kizStatus === 'verify_failed') toast(`Заказ №${order.orderId}: собран, но КИЗ WB не подтвердил — ${data.warning||'проверьте вручную'} ⚠`);
@@ -3156,7 +3151,7 @@ async function loadFbsOrders(){
     orderId:o.order_id, rid:o.rid||'', clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
-    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, pickedAt:o.picked_at||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
+    kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, pickedAt:o.picked_at||null, kizUpdatedAt:o.kiz_updated_at||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
 }
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; fetchNewFbsOrders(true); });

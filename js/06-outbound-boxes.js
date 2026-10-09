@@ -266,6 +266,34 @@ function reportItemAlreadyComplete(supply, planItem, boxId){
     onClose: ()=>{ const el = document.getElementById('boxScanInput-'+boxId); if(el) el.focus(); }
   });
 }
+// Штрихкода нет среди товаров поставки: сигнал + голос + окно (как и при повторном скане
+// собранного товара). Различаем два случая — штрихкод вообще неизвестен, либо это товар
+// клиента, который просто не входит в эту поставку: подсказка в окне разная.
+function reportBarcodeNotInSupply(supply, code, boxId){
+  const inv = findInventoryItemByBarcode(code, supply.clientName);
+  playBeep('error');
+  if(inv){
+    speakRu('Этого товара нет в поставке');
+    showScanAlert({
+      icon: '🚫',
+      title: 'Нет в этой поставке',
+      subject: `${inv.name}${inv.size?` (${inv.size})`:''}`,
+      message: 'Товар есть у клиента на складе, но в состав этой поставки он не входит.\nВ короб его добавлять не нужно — отложите.',
+      tone: 'warn',
+      onClose: ()=>{ const el = document.getElementById('boxScanInput-'+boxId); if(el) el.focus(); }
+    });
+  } else {
+    speakRu('Штрихкод не найден');
+    showScanAlert({
+      icon: '🔍',
+      title: 'Штрихкод не найден',
+      subject: code,
+      message: 'Такого штрихкода нет среди товаров этой поставки.\nПроверьте, тот ли товар отсканирован.',
+      tone: 'warn',
+      onClose: ()=>{ const el = document.getElementById('boxScanInput-'+boxId); if(el) el.focus(); }
+    });
+  }
+}
 function renderBoxScanHandler(supplyId, boxId){
   const input = document.getElementById('boxScanInput-'+boxId);
   if(!input) return;
@@ -276,10 +304,14 @@ function renderBoxScanHandler(supplyId, boxId){
     input.value = '';
     if(!code) return;
     const supply = outboundSupplies.find(s=>s.id===supplyId);
-    const planItem = supply.items.find(i=>i.barcode && i.barcode===code);
+    let planItem = supply.items.find(i=>i.barcode && i.barcode===code);
     if(!planItem){
-      playBeep('error');
-      alert(`⚠ Штрихкод ${code} не найден среди товаров этой поставки.\n\nПроверьте, туда ли отсканирован товар.`);
+      // возможно, отсканирован дополнительный штрихкод товара, который в поставке есть
+      const inv = findInventoryItemByBarcode(code, supply.clientName);
+      if(inv) planItem = supply.items.find(i=>i.sku===inv.sku && (i.size||'')===(inv.size||'')) || null;
+    }
+    if(!planItem){
+      reportBarcodeNotInSupply(supply, code, boxId);
       return;
     }
     if(getRemainingForItem(supply, planItem.sku, planItem.size||'') <= 0){

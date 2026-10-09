@@ -13,7 +13,7 @@ async function enterClientPortal(token){
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('appRoot').style.display = 'flex';
   document.querySelectorAll('.nav-item[data-tab]').forEach(el=>{
-    el.style.display = (el.dataset.tab==='inventory' || el.dataset.tab==='portal-supplies' || el.dataset.tab==='portal-kiz') ? '' : 'none';
+    el.style.display = (el.dataset.tab==='inventory' || el.dataset.tab==='portal-supplies' || el.dataset.tab==='portal-kiz' || el.dataset.tab==='portal-pack') ? '' : 'none';
   });
   const groupLabel = document.querySelector('.nav-group-label');
   if(groupLabel) groupLabel.textContent = 'Личный кабинет';

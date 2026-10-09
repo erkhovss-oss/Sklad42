@@ -1489,18 +1489,21 @@ document.addEventListener('click', function(e){
   else if(act==='openAllocate') openAllocate(key);
   else if(act==='saveAllocate') saveAllocate(key);
 });
+// КИЗ по поставке WB берём у самих заказов (wb_orders): они хранятся в базе, поэтому выгрузка работает и после обновления страницы
 function downloadFbsKizExcel(wbSupplyId, clientName){
-  const rows = kizScans.filter(k=>k.supplyId===wbSupplyId);
-  if(!rows.length){ toast('По этой поставке ещё нет отсканированных КИЗ'); return; }
+  const rows = fbsOrders.filter(o=>o.wbSupplyId===wbSupplyId && o.kizCode && o.kizStatus!=='verify_failed')
+    .sort((a,b)=> new Date(a.kizUpdatedAt||a.orderCreatedAt||0) - new Date(b.kizUpdatedAt||b.orderCreatedAt||0));
+  if(!rows.length){ toast('По этой поставке нет привязанных КИЗ'); return; }
+  const statusRu = s => s==='attached' ? 'подтверждён WB' : (s==='pending' ? 'проверяется WB' : '—');
   const data = [
     [`КИЗ по поставке WB № ${wbSupplyId}`],
     [`Клиент: ${clientName}`],
     [],
-    ['№','Артикул','Размер','Наименование','КИЗ','Время'],
-    ...rows.map((r,idx)=>[idx+1, r.sku, r.size||'—', r.name, r.kizCode, new Date(r.time).toLocaleString('ru-RU')])
+    ['№','Заказ №','Артикул','Размер','Наименование','КИЗ','Статус WB','Время привязки'],
+    ...rows.map((o,idx)=>[idx+1, o.orderId, o.article, o.size||'—', o.name, o.kizCode, statusRu(o.kizStatus), o.kizUpdatedAt ? new Date(o.kizUpdatedAt).toLocaleString('ru-RU') : '—'])
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:30},{wch:36},{wch:20}];
+  ws['!cols'] = [{wch:4},{wch:12},{wch:14},{wch:10},{wch:30},{wch:36},{wch:16},{wch:20}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'КИЗ');
   XLSX.writeFile(wb, `KIZ_${wbSupplyId}.xlsx`);
