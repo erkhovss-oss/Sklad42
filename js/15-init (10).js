@@ -1,0 +1,634 @@
+// ---------- INIT ----------
+let portalToken = null;
+async function enterClientPortal(token){
+  const { data, error } = await sb.rpc('client_portal_snapshot', { p_token: token });
+  if(error || !data){
+    console.error(error);
+    toast('Ссылка недействительна или устарела');
+    return false;
+  }
+  portalToken = token;
+  inventory = (data.inventory||[]).map(i=>({...i, client: data.client.name}));
+  clientViewMode = { id: data.client.id, name: data.client.name, pricePerLiter: data.client.pricePerLiter||0 };
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appRoot').style.display = 'flex';
+  document.querySelectorAll('.nav-item[data-tab]').forEach(el=>{
+    el.style.display = (el.dataset.tab==='inventory' || el.dataset.tab==='portal-supplies' || el.dataset.tab==='portal-kiz' || el.dataset.tab==='portal-pack') ? '' : 'none';
+  });
+  const groupLabel = document.querySelector('.nav-group-label');
+  if(groupLabel) groupLabel.textContent = 'Личный кабинет';
+  const foot = document.querySelector('.sidebar-foot');
+  if(foot) foot.textContent = 'ТОЛЬКО ПРОСМОТР';
+  const filterSelect = document.getElementById('invClientFilter');
+  if(filterSelect) filterSelect.style.display = 'none';
+  const cellFilterSelect = document.getElementById('invCellFilter');
+  if(cellFilterSelect) cellFilterSelect.style.display = 'none';
+  const writeoffsBtn = document.getElementById('viewWriteoffsBtn');
+  if(writeoffsBtn) writeoffsBtn.style.display = 'none';
+  setInventoryView('stock');
+  const heading = document.querySelector('#tab-inventory h1');
+  if(heading) heading.textContent = 'Остатки — ' + clientViewMode.name;
+  const sub = document.querySelector('#tab-inventory .page-head p');
+  if(sub) sub.textContent = 'Только просмотр';
+  renderPortalStorageStats();
+  switchTab('inventory');
+  renderInventory();
+  renderPortalSupplyDraftRows();
+  await loadPortalSupplies();
+  await loadPortalKiz();
+  return true;
+}
+function downloadPortalSupplyTemplate(){
+  const seen = new Set();
+  const data = [['Артикул','Наименование','Размер','ШК','Кол-во']];
+  inventory.forEach(i=>{
+    const key = i.sku+'~~'+(i.size||'');
+    if(seen.has(key)) return;
+    seen.add(key);
+    data.push([i.sku, i.name, i.size||'', i.barcode||'', '']);
+  });
+  if(data.length===1){
+    data.push(['TK-1001','Пример товара','','', 10]);
+  }
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:14},{wch:26},{wch:10},{wch:16},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Заявка');
+  XLSX.writeFile(wb, 'shablon_zayavka_postavka.xlsx');
+}
+function downloadPortalSupplyEmptyTemplate(){
+  const data = [
+    ['Артикул','Наименование','Размер','ШК','Кол-во'],
+    ['TK-1001','Пример товара','','', 10]
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:14},{wch:26},{wch:10},{wch:16},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Заявка');
+  XLSX.writeFile(wb, 'shablon_zayavka_postavka_pustoy.xlsx');
+}
+function handlePortalSupplyExcelUpload(inputEl){
+  const file = inputEl.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      const workbook = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+      const items = [];
+      for(let i=1;i<rows.length;i++){ // строка 0 — заголовок
+        const row = rows[i];
+        if(!row || !row.length) continue;
+        const sku = String(row[0]||'').trim().toUpperCase();
+        const nameFromFile = String(row[1]||'').trim();
+        const size = String(row[2]||'').trim();
+        const qty = parseInt(row[4]) || 0;
+        if(!sku || qty<=0) continue;
+        const invItem = inventory.find(x=>x.sku===sku && (x.size||'')===size);
+        if(invItem){
+          items.push({sku, customSku:'', customName:'', size, qty});
+        } else {
+          items.push({sku:'', customSku:sku, customName:nameFromFile||sku, size:'', qty});
+        }
+      }
+      if(!items.length){
+        toast('В файле не найдено строк с артикулом и количеством');
+        inputEl.value = '';
+        return;
+      }
+      portalSupplyDraft = items;
+      toast(`Файл прочитан: ${items.length} позиц. — проверьте список ниже перед отправкой`);
+      renderPortalSupplyDraftRows();
+    }catch(err){
+      toast('Не удалось прочитать файл — проверьте формат Excel');
+    }
+    inputEl.value = '';
+  };
+  reader.readAsArrayBuffer(file);
+}
+function renderPortalStorageStats(){
+  const wrap = document.getElementById('portalStorageStats');
+  if(!wrap || !clientViewMode) return;
+  const liters = inventory
+    .filter(i => i.dims && i.dims.l && i.dims.w && i.dims.h)
+    .reduce((sum, i) => sum + (i.dims.l * i.dims.w * i.dims.h / 1000) * i.qty, 0);
+  const pricePerLiter = clientViewMode.pricePerLiter || 0;
+  const dailyCost = liters * pricePerLiter;
+  wrap.style.display = 'flex';
+  wrap.innerHTML = `
+    <div class="stat"><div class="val">${liters.toFixed(1)} л</div><div class="lbl">Занято на складе</div></div>
+    ${pricePerLiter > 0 ? `
+      <div class="stat"><div class="val">${dailyCost.toFixed(2)} ₽</div><div class="lbl">Списывается в сутки за хранение</div></div>
+      <div class="stat"><div class="val">${pricePerLiter.toFixed(2)} ₽</div><div class="lbl">Тариф за литр в сутки</div></div>
+    ` : ''}
+  `;
+}
+let portalSuppliesList = [];
+let portalSupplyDraft = [{sku:'', customSku:'', customName:'', size:'', qty:1}];
+function addPortalSupplyDraftRow(){
+  portalSupplyDraft.push({sku:'', customSku:'', customName:'', size:'', qty:1});
+  renderPortalSupplyDraftRows();
+}
+function removePortalSupplyDraftRow(idx){
+  portalSupplyDraft.splice(idx,1);
+  if(!portalSupplyDraft.length) portalSupplyDraft.push({sku:'', customSku:'', customName:'', size:'', qty:1});
+  renderPortalSupplyDraftRows();
+}
+function updatePortalDraftField(idx, field, value){
+  portalSupplyDraft[idx][field] = value;
+  if(field==='sku') portalSupplyDraft[idx].size = '';
+  renderPortalSupplyDraftRows();
+}
+function updatePortalDraftFieldSilent(idx, field, value){
+  portalSupplyDraft[idx][field] = value;
+}
+function renderPortalSupplyDraftRows(){
+  const wrap = document.getElementById('portalSupplyDraftRows');
+  if(!wrap) return;
+  const knownSkus = [...new Map(inventory.map(i=>[i.sku, i.name])).entries()];
+  wrap.innerHTML = portalSupplyDraft.map((row, idx)=>{
+    const sizesForSku = row.sku ? [...new Set(inventory.filter(i=>i.sku===row.sku).map(i=>i.size).filter(Boolean))] : [];
+    return `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--line)">
+      <select class="search" style="width:240px" onchange="updatePortalDraftField(${idx},'sku',this.value)">
+        <option value="" ${!row.sku?'selected':''}>— другой товар (укажу вручную) —</option>
+        ${knownSkus.map(([sku,name])=>`<option value="${escapeHtml(sku)}" ${row.sku===sku?'selected':''}>${escapeHtml(name)} (${escapeHtml(sku)})</option>`).join('')}
+      </select>
+      ${row.sku ? (sizesForSku.length ? `
+        <select class="search" style="width:110px" onchange="updatePortalDraftField(${idx},'size',this.value)">
+          <option value="">Размер</option>
+          ${sizesForSku.map(s=>`<option value="${escapeHtml(s)}" ${row.size===s?'selected':''}>${escapeHtml(s)}</option>`).join('')}
+        </select>
+      ` : '') : `
+        <input class="search" style="width:140px" placeholder="Артикул" value="${escapeHtml(row.customSku)}" oninput="updatePortalDraftFieldSilent(${idx},'customSku',this.value)">
+        <input class="search" style="width:200px" placeholder="Название товара" value="${escapeHtml(row.customName)}" oninput="updatePortalDraftFieldSilent(${idx},'customName',this.value)">
+      `}
+      <input class="search mono" type="number" min="1" style="width:90px" placeholder="Кол-во" value="${row.qty}" oninput="updatePortalDraftFieldSilent(${idx},'qty',this.value)">
+      <button class="btn btn-ghost" style="padding:5px 10px" onclick="removePortalSupplyDraftRow(${idx})">✕</button>
+    </div>`;
+  }).join('');
+}
+async function submitPortalSupply(){
+  const items = [];
+  for(const row of portalSupplyDraft){
+    const qty = parseInt(row.qty) || 0;
+    if(qty <= 0) continue;
+    if(row.sku){
+      const invItem = inventory.find(i=>i.sku===row.sku && (i.size||'')===(row.size||''));
+      items.push({sku:row.sku, name: invItem?invItem.name:row.sku, qty, size: row.size||null});
+    } else if(row.customSku && row.customSku.trim()){
+      items.push({sku:row.customSku.trim(), name: (row.customName||'').trim()||row.customSku.trim(), qty, size: null});
+    }
+  }
+  if(!items.length){ toast('Добавьте хотя бы одну позицию с указанным количеством'); return; }
+  const { data, error } = await sb.rpc('client_portal_create_supply', { p_token: portalToken, p_items: items });
+  if(error){ console.error(error); toast('Не удалось отправить заявку — попробуйте ещё раз'); return; }
+  toast('Заявка отправлена — статус появится в списке ниже');
+  portalSupplyDraft = [{sku:'', customSku:'', customName:'', size:'', qty:1}];
+  renderPortalSupplyDraftRows();
+  await loadPortalSupplies();
+}
+let portalCompany = {name:'', inn:''};
+let portalKizGroups = [];
+let portalKizExpanded = new Set();
+async function loadPortalKiz(){
+  if(!portalToken) return;
+  const { data, error } = await sb.rpc('client_portal_kiz', { p_token: portalToken });
+  if(error){ console.error(error); return; }
+  portalKizGroups = data || [];
+  renderPortalKizList();
+}
+function togglePortalKizGroup(supplyId){
+  if(portalKizExpanded.has(supplyId)) portalKizExpanded.delete(supplyId);
+  else portalKizExpanded.add(supplyId);
+  renderPortalKizList();
+}
+function renderPortalKizList(){
+  const wrap = document.getElementById('portalKizListWrap');
+  if(!wrap) return;
+  if(!portalKizGroups.length){ wrap.innerHTML = `<div class="panel empty">По вашим отгрузкам пока нет отсканированных КИЗ</div>`; return; }
+  wrap.innerHTML = portalKizGroups.map(g=>{
+    const expanded = portalKizExpanded.has(g.supply_id);
+    return `
+    <div class="panel" style="padding:0;margin-bottom:10px;overflow:hidden">
+      <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;cursor:pointer" onclick="togglePortalKizGroup('${escapeHtml(g.supply_id)}')">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--ink-faint)">${expanded?'▼':'▶'}</span>
+          <div>
+            <div style="font-weight:600;font-size:14px">Поставка ${escapeHtml(g.supply_id)}</div>
+            <div style="font-size:12px;color:var(--ink-faint)">${new Date(g.max_created).toLocaleDateString('ru-RU')} · ${g.kiz_count} КИЗ</div>
+          </div>
+        </div>
+        <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="event.stopPropagation();downloadPortalKizExcel('${escapeHtml(g.supply_id)}')">📊 Скачать Excel</button>
+      </div>
+      ${expanded ? `
+        <div style="padding:0 20px 16px 20px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-soft);line-height:1.8">
+          ${g.items.map(it=>`<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <span>${escapeHtml(it.name||it.sku)}${it.size?' ('+escapeHtml(it.size)+')':''}</span>
+            <span class="mono">${escapeHtml(it.kizCode)}</span>
+          </div>`).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+  }).join('');
+}
+function downloadPortalKizExcel(supplyId){
+  const g = portalKizGroups.find(x=>x.supply_id===supplyId);
+  if(!g) return;
+  const data = [
+    [`КИЗ по поставке WB № ${supplyId}`],
+    [`Клиент: ${clientViewMode.name}`],
+    [],
+    ['№','Артикул','Размер','Наименование','КИЗ','Время'],
+    ...g.items.map((it,idx)=>[idx+1, it.sku, it.size||'—', it.name, it.kizCode, new Date(it.createdAt).toLocaleString('ru-RU')])
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:30},{wch:36},{wch:20}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'КИЗ');
+  XLSX.writeFile(wb, `KIZ_${supplyId}.xlsx`);
+}
+async function loadPortalSupplies(){
+  if(!portalToken) return;
+  const { data, error } = await sb.rpc('client_portal_supplies', { p_token: portalToken });
+  if(error){ console.error(error); return; }
+  if(!data) return;
+  portalCompany = data.company || {name:'', inn:''};
+  portalSuppliesList = data.supplies || [];
+  renderPortalSuppliesList();
+}
+let portalExpandedSupplyIds = new Set();
+function togglePortalSupply(id){
+  if(portalExpandedSupplyIds.has(id)) portalExpandedSupplyIds.delete(id);
+  else portalExpandedSupplyIds.add(id);
+  renderPortalSuppliesList();
+}
+function renderPortalSuppliesList(){
+  const wrap = document.getElementById('portalSuppliesListWrap');
+  if(!wrap) return;
+  if(!portalSuppliesList.length){ wrap.innerHTML = `<div class="panel empty">Заявок пока нет</div>`; return; }
+  const statusLabel = s => ({planned:'В работе', received:'Принята', shipped:'Отправлена'}[s] || s);
+  const statusClass = s => ({planned:'planned', received:'shipped', shipped:'shipped'}[s] || 'planned');
+  wrap.innerHTML = portalSuppliesList.map(s=>{
+    const totalPlan = s.items.reduce((a,it)=>a+it.qty,0);
+    const totalFact = s.items.reduce((a,it)=>a+(it.receivedQty||0),0);
+    const inProgress = s.status === 'planned';
+    const hasMismatch = !inProgress && totalFact !== totalPlan;
+    const expanded = portalExpandedSupplyIds.has(s.id);
+    return `
+    <div class="panel" style="padding:0;margin-bottom:10px;overflow:hidden">
+      <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;cursor:pointer" onclick="togglePortalSupply('${s.id}')">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--ink-faint)">${expanded?'▼':'▶'}</span>
+          <div>
+            <div style="font-weight:600;font-size:14px">${escapeHtml(s.id)}</div>
+            <div style="font-size:12px;color:var(--ink-faint)">${new Date(s.created_at).toLocaleDateString('ru-RU')} · ${s.items.length} SKU</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          ${hasMismatch ? `<span style="font-size:12px;font-weight:600;color:var(--warn)">Есть расхождения</span>` : ''}
+          <span style="font-weight:600;font-size:14px;${!inProgress && !hasMismatch ? 'color:var(--ok)' : ''}">${inProgress ? totalPlan : (hasMismatch ? `${totalFact} / ${totalPlan}` : totalFact)} шт</span>
+          <span class="status ${statusClass(s.status)}">${statusLabel(s.status)}</span>
+        </div>
+      </div>
+      ${expanded ? `
+        <div style="padding:0 20px 16px 20px;border-top:1px solid var(--line)">
+          <div style="font-size:13px;color:var(--ink-soft);line-height:1.8;margin-top:12px">
+            ${s.items.map(it=>{
+              const fact = it.receivedQty||0;
+              const defect = Math.min(it.defectQty||0, fact);
+              const mismatch = !inProgress && fact !== it.qty;
+              return `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                <span>${escapeHtml(it.name||it.sku)}${it.size?' ('+escapeHtml(it.size)+')':''}</span>
+                <span class="mono" style="${mismatch?'color:var(--warn);font-weight:600':(inProgress?'color:var(--ink-faint)':'color:var(--ok);font-weight:600')}">${inProgress ? it.qty : `${fact}/${it.qty}`} шт${!inProgress && defect>0 ? `<span style="color:var(--warn);font-weight:600"> · из них брак ${defect}</span>` : ''}</span>
+              </div>`;
+            }).join('')}
+          </div>
+          ${s.status!=='planned' ? `
+            <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+              <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="event.stopPropagation();downloadPortalSupplyActPdf('${s.id}')">📄 Скачать акт приёмки</button>
+              <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="event.stopPropagation();downloadPortalSupplyActExcel('${s.id}')">📊 Скачать в Excel</button>
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
+    </div>
+  `;
+  }).join('');
+}
+function downloadPortalSupplyActExcel(supplyId){
+  const s = portalSuppliesList.find(x=>x.id===supplyId);
+  if(!s) return;
+  const actNumber = s.actNumber || s.act_number || s.id;
+  const today = new Date().toLocaleDateString('ru-RU');
+  const rows = s.items.map((it,idx)=>{
+    const fact = it.receivedQty||0;
+    const defect = Math.min(it.defectQty||0, fact);
+    const diff = fact - it.qty;
+    return [idx+1, it.sku, it.size||'', it.barcode||'', it.name, it.qty, fact, defect>0 ? defect : '—', diff!==0 ? (diff>0?'+':'')+diff : '—'];
+  });
+  const totalPlan = s.items.reduce((a,it)=>a+it.qty,0);
+  const totalFact = s.items.reduce((a,it)=>a+(it.receivedQty||0),0);
+  const totalDefect = s.items.reduce((a,it)=>a+Math.min(it.defectQty||0, it.receivedQty||0),0);
+  const mismatches = rows.filter(r=>r[8]!=='—').length;
+
+  const data = [
+    [`Акт приёмки № ${actNumber} от ${today}`],
+    [],
+    [`Исполнитель (склад): ${portalCompany.name||'—'}`, '', '', 'ИНН', portalCompany.inn||'—'],
+    [`Клиент: ${clientViewMode.name}`],
+    [`Поставка: ${s.id}`],
+    [],
+    ['№','Артикул','Размер','ШК товара','Наименование','План, шт','Принято, шт','в т.ч. брак, шт','Расхождение'],
+    ...rows,
+    [],
+    ['','','','','Итого:', totalPlan, totalFact, totalDefect || '—', mismatches ? `Расхождений: ${mismatches} поз.` : 'Без расхождений'],
+    ...(totalDefect ? [['','','','','Годного к продаже, шт:', totalFact - totalDefect], ['Брак размещён на отдельном складе «БРАК» и маркетплейсам не передаётся.']] : [])
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:4},{wch:14},{wch:10},{wch:18},{wch:32},{wch:10},{wch:12},{wch:15},{wch:18}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Акт приёмки');
+  XLSX.writeFile(wb, `Akt_priemki_${actNumber}.xlsx`);
+}
+function downloadPortalSupplyActPdf(supplyId){
+  const s = portalSuppliesList.find(x=>x.id===supplyId);
+  if(!s) return;
+  const actNumber = s.actNumber || s.act_number || s.id;
+  const rows = s.items.map((it,idx)=>{
+    const fact = it.receivedQty||0;
+    const defect = Math.min(it.defectQty||0, fact);
+    return { n: idx+1, sku: it.sku, size: it.size||'', barcode: '', name: it.name,
+      plan: it.qty, fact, defect, good: fact - defect, diff: fact - it.qty };
+  });
+  const summary = actSummary(rows);
+  const companyName = portalCompany.name || 'ТелеПак';
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('ru-RU', {day:'2-digit', month:'long', year:'numeric'});
+
+  const win = window.open('', '_blank');
+  if(!win){ toast('Браузер заблокировал открытие окна — разрешите всплывающие окна для этого сайта и попробуйте снова'); return; }
+  win.document.write(`
+    <!DOCTYPE html><html><head><meta charset="utf-8"><title>Акт приёмки ${actNumber}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+      :root{
+        --bg:#F0EEE6; --panel:#FFFFFF; --ink:#1C1B19; --ink-soft:#6B665C; --ink-faint:#A39C8C;
+        --accent:#FF5B1F; --accent-ink:#FFFFFF; --ok:#2F7D4F; --ok-bg:#E7F2EA;
+        --warn:#B5471B; --warn-bg:#FBE9E1; --line:#DCD6C6;
+      }
+      *{box-sizing:border-box}
+      body{margin:0;background:var(--panel);color:var(--ink);font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;padding:36px;max-width:860px;margin:0 auto}
+      .mono{font-family:'IBM Plex Mono',monospace}
+      .eyebrow{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;letter-spacing:0.08em;font-size:12px;color:var(--ink-faint);font-weight:600}
+      .head{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:20px;border-bottom:3px solid var(--accent);margin-bottom:22px}
+      .brand{display:flex;align-items:center;gap:10px}
+      .brand-badge{width:38px;height:38px;border-radius:9px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:18px}
+      .brand-name{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:20px;letter-spacing:0.01em}
+      h1{font-family:'Barlow Condensed',sans-serif;font-size:30px;font-weight:700;margin:0 0 4px 0;text-align:right}
+      .sub-date{text-align:right;color:var(--ink-soft);font-size:13px}
+      .cards{display:flex;gap:14px;margin-bottom:20px}
+      .card{flex:1;background:var(--bg);border-radius:12px;padding:14px 16px}
+      .card .eyebrow{margin-bottom:6px}
+      .card .name{font-weight:600;font-size:14px;margin-bottom:2px}
+      .card .detail{font-size:12px;color:var(--ink-soft);line-height:1.5}
+      table{width:100%;border-collapse:collapse;margin-top:4px;border-radius:10px;overflow:hidden}
+      th{background:var(--bg);color:var(--ink-soft);font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;letter-spacing:0.04em;font-size:11px;font-weight:600;text-align:left;padding:10px 10px;border-bottom:2px solid var(--line)}
+      td{padding:9px 10px;font-size:13px;border-bottom:1px solid var(--line)}
+      td.num,th.num{text-align:right}
+      tr.mismatch td{background:var(--warn-bg)}
+      tr.mismatch td:first-child{border-left:3px solid var(--warn)}
+      .diff-bad{color:var(--warn);font-weight:700}
+      .diff-ok{color:var(--ink-faint)}
+      .summary-row{display:flex;justify-content:space-between;align-items:center;margin-top:20px;padding:16px 18px;background:var(--bg);border-radius:12px}
+      .summary-nums{display:flex;gap:26px}
+      .summary-nums .stat .val{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:24px;line-height:1}
+      .summary-nums .stat .lbl{font-size:11px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:0.04em;margin-top:2px}
+      .status-pill{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:999px;font-size:12px;font-weight:600}
+      .status-pill.ok{background:var(--ok-bg);color:var(--ok)}
+      .status-pill.bad{background:var(--warn-bg);color:var(--warn)}
+      .sign{margin-top:56px;display:flex;justify-content:space-between;gap:40px}
+      .sign > div{width:100%}
+      .sign .role{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;letter-spacing:0.04em;font-size:12px;color:var(--ink-faint);margin-bottom:40px}
+      .line{border-bottom:1px solid var(--ink);margin-bottom:4px}
+      .small{font-size:11px;color:var(--ink-faint)}
+      .footer{margin-top:40px;text-align:center;font-size:11px;color:var(--ink-faint)}
+      @media print{
+        body{padding:16px}
+        .card{background:#F5F4EF !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        th{background:#F5F4EF !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .summary-row{background:#F5F4EF !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        tr.mismatch td{background:#FBE9E1 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .status-pill.ok{background:#E7F2EA !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .status-pill.bad{background:#FBE9E1 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .brand-badge{background:#FF5B1F !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .head{border-color:#FF5B1F !important}
+      }
+    </style></head><body>
+      <div class="head">
+        <div class="brand">
+          <div class="brand-badge">Т</div>
+          <div>
+            <div class="brand-name">${escapeHtml(companyName)}</div>
+            <div class="eyebrow" style="margin-top:2px">Акт приёмки товара</div>
+          </div>
+        </div>
+        <div>
+          <h1>№ ${escapeHtml(String(actNumber))}</h1>
+          <div class="sub-date">${dateStr}</div>
+        </div>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <div class="eyebrow">Исполнитель (склад)</div>
+          <div class="name">${escapeHtml(companyName)}</div>
+          <div class="detail">${portalCompany.inn?`ИНН ${escapeHtml(portalCompany.inn)}`:''}</div>
+        </div>
+        <div class="card">
+          <div class="eyebrow">Клиент</div>
+          <div class="name">${escapeHtml(clientViewMode.name)}</div>
+        </div>
+        <div class="card">
+          <div class="eyebrow">Поставка</div>
+          <div class="name mono">№ ${escapeHtml(s.id)}</div>
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>№</th><th>Артикул</th><th>Размер</th><th>Наименование</th><th class="num">План, шт</th><th class="num">Принято, шт</th><th class="num">в т.ч. брак, шт</th><th class="num">Расхождение</th></tr></thead>
+        <tbody>
+          ${rows.map(r=>`
+            <tr class="${(r.diff!==0 || r.defect>0)?'mismatch':''}">
+              <td class="mono">${r.n}</td><td class="mono">${escapeHtml(r.sku)}</td><td>${escapeHtml(r.size)}</td><td>${escapeHtml(r.name)}</td>
+              <td class="num">${r.plan}</td><td class="num">${r.fact}</td>
+              <td class="num ${r.defect>0?'diff-bad':'diff-ok'}">${r.defect>0 ? r.defect : '—'}</td>
+              <td class="num ${r.diff!==0?'diff-bad':'diff-ok'}">${r.diff!==0 ? (r.diff>0?'+':'')+r.diff : '—'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+
+      <div class="summary-row">
+        <div class="summary-nums">
+          <div class="stat"><div class="val">${summary.totalPlan}</div><div class="lbl">По плану, шт</div></div>
+          <div class="stat"><div class="val">${summary.totalFact}</div><div class="lbl">Принято, шт</div></div>
+          ${summary.totalDefect ? `<div class="stat"><div class="val" style="color:var(--warn)">${summary.totalDefect}</div><div class="lbl">в т.ч. брак, шт</div></div><div class="stat"><div class="val">${summary.totalGood}</div><div class="lbl">Годных, шт</div></div>` : ''}
+        </div>
+        ${actStatusPillsHtml(summary)}
+      </div>
+      ${actDefectNoteHtml(summary)}
+
+      <div class="sign">
+        <div><div class="role">Принял (склад)</div><div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
+        <div><div class="role">Сдал (поставщик)</div><div class="line"></div><span class="small">подпись / расшифровка подписи</span></div>
+      </div>
+      <div class="footer">Сформировано в ${escapeHtml(companyName)} · ${dateStr}</div>
+      <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 350); };<\/script>
+    </body></html>
+  `);
+  win.document.close();
+}
+// ---------- REALTIME ----------
+// Живое обновление данных: когда коллега (или фоновая синхронизация) меняет остатки или
+// заказы, у остальных открытых вкладок список обновляется сам, без перезагрузки страницы.
+// Этап 1: остатки, заказы WB, заказы Ozon. Работает только для вошедших сотрудников —
+// на этих таблицах доступ закрыт политикой is_active_staff(), так что анонимы событий не видят.
+let realtimeChannel = null;
+let realtimeWasDown = false;
+const realtimeTimers = {};
+const REALTIME_TABS = { inventory:'tab-inventory', wb:'tab-fbs', ozon:'tab-ozon' };
+
+function isTabActive(tabId){
+  const el = document.getElementById(tabId);
+  return !!(el && el.classList.contains('active'));
+}
+// Нельзя перерисовывать список, пока человек что-то вводит или идёт сборка/сканирование —
+// иначе введённое пропадёт посреди работы.
+function isUserBusyIn(kind){
+  if(kind==='inventory'){
+    if(editingSku || writeOffSku || deletingSku || allocatingSku || historySku) return true;
+    return isTypingInside('invBody');
+  }
+  if(kind==='wb'){
+    if(assemblyModeQueue.length || scanModeActive) return true;
+    return isTypingInside('fbsBody');
+  }
+  if(kind==='ozon'){
+    return isTypingInside('ozonBody');
+  }
+  return false;
+}
+// Курсор стоит в поле ввода внутри перерисовываемой области?
+function isTypingInside(containerId){
+  const body = document.getElementById(containerId);
+  const el = document.activeElement;
+  if(!body || !el) return false;
+  return body.contains(el) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+}
+function renderRealtimeKind(kind){
+  if(kind==='inventory') renderInventory();
+  else if(kind==='wb') renderFbsBody();
+  else if(kind==='ozon') renderOzonBody();
+}
+// Пока вкладка открыта, но человек занят — ждём и пробуем перерисовать позже.
+// Если вкладка не открыта — просто ничего не рисуем: при переключении на неё всё и так
+// отрисуется из свежих данных.
+function tryRealtimeRender(kind){
+  if(!isTabActive(REALTIME_TABS[kind])) return;
+  if(isUserBusyIn(kind)){
+    clearTimeout(realtimeTimers[kind+'_render']);
+    realtimeTimers[kind+'_render'] = setTimeout(()=>tryRealtimeRender(kind), 2500);
+    return;
+  }
+  try{ renderRealtimeKind(kind); }catch(e){ console.error(e); }
+}
+async function reloadRealtimeKind(kind){
+  try{
+    if(kind==='inventory') await loadInventory();
+    else if(kind==='wb') await loadFbsOrders();
+    else if(kind==='ozon') await loadOzonOrders();
+  }catch(e){ console.error('Realtime: не удалось обновить', kind, e); return; }
+  tryRealtimeRender(kind);
+}
+// Событий бывает пачкой (например, сборка нескольких заказов подряд) — собираем их в одно обновление.
+function scheduleRealtimeReload(kind){
+  clearTimeout(realtimeTimers[kind]);
+  realtimeTimers[kind] = setTimeout(()=>reloadRealtimeKind(kind), kind==='inventory' ? 800 : 1500);
+}
+function startRealtime(){
+  if(realtimeChannel || !sb) return;
+  realtimeChannel = sb.channel('staff-live')
+    .on('postgres_changes', { event:'*', schema:'public', table:'inventory' }, ()=>scheduleRealtimeReload('inventory'))
+    .on('postgres_changes', { event:'*', schema:'public', table:'wb_orders' }, ()=>scheduleRealtimeReload('wb'))
+    .on('postgres_changes', { event:'*', schema:'public', table:'ozon_orders' }, ()=>scheduleRealtimeReload('ozon'))
+    .subscribe((status)=>{
+      if(status==='SUBSCRIBED'){
+        // После обрыва связи события за время простоя потеряны — перезагружаем всё целиком.
+        if(realtimeWasDown){
+          realtimeWasDown = false;
+          ['inventory','wb','ozon'].forEach(reloadRealtimeKind);
+          toast('Связь восстановлена — данные обновлены');
+        }
+      } else if(status==='CHANNEL_ERROR' || status==='TIMED_OUT' || status==='CLOSED'){
+        realtimeWasDown = true;
+      }
+    });
+}
+function stopRealtime(){
+  if(realtimeChannel && sb){ try{ sb.removeChannel(realtimeChannel); }catch(e){} }
+  realtimeChannel = null;
+  realtimeWasDown = false;
+  Object.keys(realtimeTimers).forEach(k=>clearTimeout(realtimeTimers[k]));
+}
+
+async function loadStaffData(){
+  try{
+    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadBoxSizes(), loadKizScans(), loadFbsOrders(), loadOzonOrders(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes(), loadConsumables(), loadKitComponents(), loadReturns()]);
+  }catch(err){
+    console.error(err);
+  }
+  if(!inventory.length && !employees.length){
+    toast('Не удалось подключиться к базе данных — проверьте, что SQL-схема выполнена');
+  }
+  renderInventory();
+  await loadStorageHistory();
+  recordAllStorageSnapshots().then(()=>{
+    if(document.getElementById('tab-storage').classList.contains('active')) renderStorage();
+  });
+  let savedTab = null;
+  try{ savedTab = localStorage.getItem('sklad42_active_tab'); }catch(e){}
+  const validTabs = ['inventory','clients','storage','supplies','employees'];
+  if(savedTab && validTabs.includes(savedTab) && savedTab!=='inventory'){
+    switchTab(savedTab);
+  }
+  applyNavPermissions();
+  startRealtime();
+}
+async function initApp(){
+  if(!sb){
+    toast('Не удалось загрузить библиотеку базы данных. Проверьте интернет и обновите страницу (F5)');
+    showLoginForm();
+    return;
+  }
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const portalToken = urlParams.get('client');
+  if(portalToken){
+    const ok = await enterClientPortal(portalToken);
+    if(ok) return;
+    // токен неверный/устарел — продолжаем как обычный вход сотрудника
+  }
+
+  const { data: { session } } = await sb.auth.getSession();
+  if(session){
+    await resolveCurrentEmployeeAndEnter();
+  } else {
+    showLoginForm();
+  }
+}
+initApp();
+

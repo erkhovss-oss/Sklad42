@@ -1,4 +1,20 @@
 // ---------- LOAD FROM SUPABASE ----------
+// Загрузка всей таблицы постранично. Сервер отдаёт максимум 1000 строк за запрос — одним запросом «побольше» их не получить,
+// и новые строки молча терялись бы. Порядок должен быть однозначным (последним — первичный ключ), иначе строки
+// могут повторяться или пропадать на стыке страниц. Возвращает то же {data, error}, что и обычный запрос.
+async function selectAll(table, orders){
+  const PAGE = 1000;
+  let all = [];
+  for(let from = 0; from < 500000; from += PAGE){
+    let q = sb.from(table).select('*');
+    (orders || []).forEach(([col, asc])=>{ q = q.order(col, {ascending: asc}); });
+    const { data, error } = await q.range(from, from + PAGE - 1);
+    if(error) return { data: null, error };
+    all = all.concat(data || []);
+    if(!data || data.length < PAGE) break;
+  }
+  return { data: all, error: null };
+}
 function formatLogTime(iso){
   const d = new Date(iso);
   return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
@@ -20,12 +36,12 @@ async function loadEmployees(){
   employees = data.map(e=>({id:e.id, name:e.name, login:e.login, authUserId:e.auth_user_id||null, roleId:e.role_id, active:e.active, warehouseId:e.warehouse_id||null}));
 }
 async function loadInventory(){
-  const { data, error } = await sb.from('inventory').select('*').order('sku').limit(50000);
+  const { data, error } = await selectAll('inventory', [['sku',true],['client_name',true],['size',true],['warehouse_id',true]]);
   if(error){ console.error(error); return; }
   inventory = data.map(i=>({sku:i.sku, name:i.name, qty:i.qty, client:i.client_name, size:i.size||'', warehouseId:i.warehouse_id||'MAIN', vendorCode:i.vendor_code, barcode:i.barcode, dims:i.dims, cell:i.cell||null, requiresKiz:i.requires_kiz||false, color:i.color||'', isKit:i.is_kit||false, kitMode:i.kit_mode||null, wbAllocatedQty:i.wb_allocated_qty||0, ozonAllocatedQty:i.ozon_allocated_qty||0, safetyBuffer:i.safety_buffer||0}));
 }
 async function loadInventoryBarcodes(){
-  const { data, error } = await sb.from('inventory_barcodes').select('*').limit(50000);
+  const { data, error } = await selectAll('inventory_barcodes', [['barcode',true],['client_name',true]]);
   if(error){ console.error(error); return; }
   inventoryBarcodes = data.map(b=>({barcode:b.barcode, sku:b.sku, clientName:b.client_name, size:b.size||''}));
 }
@@ -92,14 +108,14 @@ async function loadClients(){
   }));
 }
 async function loadStorageHistory(){
-  const { data, error } = await sb.from('storage_history').select('*').order('day',{ascending:true}).limit(50000);
+  const { data, error } = await selectAll('storage_history', [['day',true],['id',true]]);
   if(error){ console.error(error); return; }
   storageHistoryRows = data;
 }
 async function loadSupplies(){
-  const { data: supplyRows, error: err1 } = await sb.from('supplies').select('*').order('created_at',{ascending:false}).limit(50000);
+  const { data: supplyRows, error: err1 } = await selectAll('supplies', [['created_at',false],['id',true]]);
   if(err1){ console.error(err1); return; }
-  const { data: itemRows, error: err2 } = await sb.from('supply_items').select('*').limit(50000);
+  const { data: itemRows, error: err2 } = await selectAll('supply_items', [['id',true]]);
   if(err2){ console.error(err2); return; }
   supplies = supplyRows.map(s=>({
     id: s.id,
@@ -117,9 +133,9 @@ async function loadSupplies(){
   }));
 }
 async function loadOutboundSupplies(){
-  const { data: rows, error: err1 } = await sb.from('outbound_supplies').select('*').order('created_at',{ascending:false}).limit(50000);
+  const { data: rows, error: err1 } = await selectAll('outbound_supplies', [['created_at',false],['id',true]]);
   if(err1){ console.error(err1); return; }
-  const { data: itemRows, error: err2 } = await sb.from('outbound_supply_items').select('*').limit(50000);
+  const { data: itemRows, error: err2 } = await selectAll('outbound_supply_items', [['id',true]]);
   if(err2){ console.error(err2); return; }
   outboundSupplies = rows.map(s=>({
     id: s.id,
@@ -133,7 +149,7 @@ async function loadOutboundSupplies(){
   }));
 }
 async function loadKizScans(){
-  const { data, error } = await sb.from('kiz_scans').select('*').order('created_at',{ascending:true}).limit(50000);
+  const { data, error } = await selectAll('kiz_scans', [['created_at',true],['id',true]]);
   if(error){ console.error(error); return; }
   kizScans = data.map(k=>({kizCode:k.kiz_code, supplyId:k.supply_id, sku:k.sku, name:k.name, size:k.size||'', clientName:k.client_name, time:k.created_at, employeeName:k.employee_name||'', isDefect:!!k.is_defect}));
 }
