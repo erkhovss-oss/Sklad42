@@ -632,3 +632,14 @@ async function initApp(){
 }
 initApp();
 
+
+// Мобильное меню: список пунктов прокручивается, а низ не прячется за панелью Safari на iPhone
+(function(){
+  if(document.getElementById('sidebarMobileFix')) return;
+  const st = document.createElement('style');
+  st.id = 'sidebarMobileFix';
+  st.textContent = `@media (max-width: 860px){
+    .sidebar{ overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; height:100vh; height:100dvh; bottom:auto; padding-bottom:calc(120px + env(safe-area-inset-bottom)); }
+  }`;
+  document.head.appendChild(st);
+})();
