@@ -297,6 +297,17 @@ function normalizeKizInput(raw){
   if(m) return {code: m[1]+GS_CHAR+m[2]+GS_CHAR+m[3], restored:true, gsCount:2};
   return {code, restored:false, gsCount:0};
 }
+// Если сканер «напечатал» код при включённой русской раскладке (*DbEFl55V → *Вии2зцНП), возвращаем латиницу:
+// каждая кириллическая буква заменяется на букву той же клавиши английской раскладки.
+const RU_TO_EN_MAP = (()=>{
+  const ru = 'йцукенгшщзхъфывапролджэячсмитьбюёЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮЁ';
+  const en = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>~";
+  const m = {}; for(let i=0;i<ru.length;i++) m[ru[i]] = en[i]; return m;
+})();
+function fromRuLayout(str){
+  const s = String(str==null?'':str);
+  return /[а-яёА-ЯЁ]/.test(s) ? s.replace(/[а-яёА-ЯЁ]/g, c=>RU_TO_EN_MAP[c]||c) : s;
+}
 function forceEnglishInput(input){
   if(!input || input.dataset.forceEnDone) return;
   input.dataset.forceEnDone = '1';
