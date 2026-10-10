@@ -924,6 +924,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
             <div style="font-size:12px;color:var(--ink-faint)">${g.orders.length} заказ(ов)${isDelivered && fbsGroupSummary(g.orders) ? ' · ' + fbsGroupSummary(g.orders) : ''}${missingKizInGroup?` · ⚠ КИЗ не привязан: ${missingKizInGroup}`:''}${outOfStockInGroup?` · ❌ нет на складе: ${outOfStockInGroup}`:''}</div>
           </div>
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadSupplyBarcode('${escapeHtml(g.supplyId)}','${escapeHtml(g.orders[0].clientId)}')">📥 QR поставки</button>` : ''}
+          ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="event.stopPropagation();printSupplyBoxQr('${escapeHtml(g.supplyId)}','${escapeHtml(g.orders[0].clientId)}')">🖨 QR грузомест</button>` : ''}
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadFbsKizExcel('${escapeHtml(g.supplyId)}','${escapeHtml(g.clientName)}')">📊 КИЗ (Excel)</button>` : ''}
           ${!isDelivered ? `<button class="btn btn-accent" style="padding:6px 12px" onclick="event.stopPropagation();closeFbsSupply('${escapeHtml(g.orders[0].clientId)}')">📦 Отгрузка поставки</button>` : ''}
           <span style="font-size:18px;color:var(--ink-faint);cursor:pointer" onclick="toggleFbsSupplyGroup('${escapeHtml(key)}')">${isExpanded?'▾':'▸'}</span>
@@ -2049,7 +2050,19 @@ async function shipPrintStickers(clientId, ids){
   let data;
   try{ data = await supplyCall(clientId, 'box_stickers', {trbxIds: ids, stickerType:'svg'}); }
   catch(e){ toast('WB: ' + e.message); return; }
-  const stickers = data.stickers || [];
+  printBoxStickerWindow(ids, data.stickers || []);
+}
+// QR грузомест уже отгруженной поставки (вкладка «В доставке»): открытой поставки у клиента может уже не быть
+async function printSupplyBoxQr(supplyId, clientId){
+  toast('Запрашиваем грузоместа поставки у WB…');
+  const { data, error } = await sb.functions.invoke('wb-supply-boxes-ts', { body: { clientId, supplyId } });
+  if(error){ toast('WB: ' + await extractFnErrorMessage(error)); return; }
+  if(data && data.error){ toast(data.error); return; }
+  const ids = ((data && data.trbxes) || []).map(t=>t.id);
+  if(!ids.length){ toast('У этой поставки нет грузомест — для отгрузки в ПВЗ они создаются до передачи в доставку'); return; }
+  printBoxStickerWindow(ids, data.stickers || []);
+}
+function printBoxStickerWindow(ids, stickers){
   const win = window.open('', '_blank');
   if(!win){ toast('Браузер заблокировал окно печати — разрешите всплывающие окна для сайта'); return; }
   // в стикере от WB нет номера короба, только закодированное значение (…:номер) — сопоставляем по нему, иначе по порядку
