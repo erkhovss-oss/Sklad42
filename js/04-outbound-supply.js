@@ -486,7 +486,7 @@ function saveOutboundEdit(id){
   changes.forEach(({it, newQty, diff, inv})=>{
     if(inv){
       inv.qty -= diff;
-      logMovement(inv.sku, inv.name, -diff, `Корректировка поставки на склад: ${newDest}`, inv.client, inv.size);
+      logMovement(inv.sku, inv.name, -diff, `Корректировка поставки на склад: ${newDest}`, inv.client, inv.size, inv.warehouseId||'MAIN');
     }
     it.qty = newQty;
   });
@@ -516,7 +516,7 @@ function confirmDeleteOutbound(id){
     const inv = resolveDraftItem(it, s.clientName, s.sourceWarehouseId);
     if(inv){
       inv.qty += it.qty;
-      logMovement(inv.sku, inv.name, it.qty, `Отмена поставки на склад: ${s.destination}`, inv.client, inv.size);
+      logMovement(inv.sku, inv.name, it.qty, `Отмена поставки на склад: ${s.destination}`, inv.client, inv.size, inv.warehouseId||'MAIN');
     }
   });
   outboundSupplies = outboundSupplies.filter(x=>x.id!==id);

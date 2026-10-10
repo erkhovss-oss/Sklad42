@@ -2019,7 +2019,7 @@ async function cancelFbsOrder(orderId){
     // физически не было, восстановление тут создало бы фантомный остаток.
     if(wasConfirmed && !order.outOfStock){
       const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
-      if(inv) logMovement(inv.sku, inv.name, 1, `Возврат остатка — отмена собранного заказа FBS №${orderId}`, inv.client, inv.size);
+      if(inv) logMovement(inv.sku, inv.name, 1, `Возврат остатка — отмена собранного заказа FBS №${orderId}`, inv.client, inv.size, inv.warehouseId||'MAIN');
     }
     order.supplierStatus = 'cancel';
     fbsOrders = fbsOrders.filter(o=>o.orderId!==orderId);
@@ -3378,7 +3378,7 @@ function cancelOzonOrder(postingNumber){
       if(error || (data && data.error)){ toast('Ozon: ' + (data?.error || error.message)); return; }
       if(wasShipped && !order.outOfStock){
         const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
-        if(inv) logMovement(inv.sku, inv.name, order.qty||1, `Возврат остатка — отмена отправления Ozon ${postingNumber}`, inv.client, inv.size);
+        if(inv) logMovement(inv.sku, inv.name, order.qty||1, `Возврат остатка — отмена отправления Ozon ${postingNumber}`, inv.client, inv.size, inv.warehouseId||'MAIN');
       }
       order.status = 'cancelled';
       toast('Отправление отменено' + (wasShipped && !order.outOfStock ? ' — остаток возвращён на склад' : ''));

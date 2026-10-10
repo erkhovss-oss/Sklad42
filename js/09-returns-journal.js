@@ -59,7 +59,7 @@ function submitReturn(resolution){
   });
   if(resolution==='restock'){
     item.qty += qty;
-    logMovement(item.sku, item.name, qty, 'Возврат на склад' + (reason?(': '+reason):''), item.client, item.size);
+    logMovement(item.sku, item.name, qty, 'Возврат на склад' + (reason?(': '+reason):''), item.client, item.size, item.warehouseId||'MAIN');
     toast(`Возврат оформлен: +${qty} шт на склад`);
   } else {
     // Товар физически возвращается на склад, но не для продажи — отдельным

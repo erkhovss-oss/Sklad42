@@ -386,7 +386,7 @@ function adjustQty(key, delta){
   if(!item) return;
   const actualDelta = Math.max(0, item.qty + delta) - item.qty;
   item.qty = Math.max(0, item.qty + delta);
-  if(actualDelta!==0) logMovement(sku, item.name, actualDelta, 'Ручная корректировка', item.client, item.size);
+  if(actualDelta!==0) logMovement(sku, item.name, actualDelta, 'Ручная корректировка', item.client, item.size, item.warehouseId||'MAIN');
   renderInventory();
   const cl = clients.find(c=>c.name===item.client);
   if(cl && actualDelta!==0) recordStorageSnapshot(cl);
@@ -448,7 +448,7 @@ async function saveEdit(key){
   }
   syncInventoryRow(item.sku, item.client, item.size, item.warehouseId);
   if(isKit) await saveKitComponents(item, draftKitComponentRows());
-  if(qtyDelta!==0 && !(isKit && kitMode!=='assembled')) logMovement(item.sku, name, qtyDelta, 'Изменение карточки', item.client, item.size);
+  if(qtyDelta!==0 && !(isKit && kitMode!=='assembled')) logMovement(item.sku, name, qtyDelta, 'Изменение карточки', item.client, item.size, item.warehouseId||'MAIN');
   editingSku = null;
   toast('Изменения сохранены');
   renderInventory();
@@ -492,21 +492,21 @@ function confirmWriteOff(key){
   const reason = document.getElementById('woReason-'+key).value;
   if(qty > item.qty){ toast('Нельзя списать больше, чем есть на складе'); return; }
   item.qty -= qty;
-  logWriteOff(item.sku, item.name, qty, reason, item.client, item.size);
+  logWriteOff(item.sku, item.name, qty, reason, item.client, item.size, item.warehouseId||'MAIN');
   toast(`Списано: ${item.name} −${qty} шт (${reason})`);
   writeOffSku = null;
   renderInventory();
   const cl = clients.find(c=>c.name===item.client);
   if(cl) recordStorageSnapshot(cl);
 }
-function logWriteOff(sku, name, qty, reason, client, size){
+function logWriteOff(sku, name, qty, reason, client, size, warehouseId){
   const now = new Date();
   const time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   const dd = now.getDate().toString().padStart(2,'0');
   const mm = (now.getMonth()+1).toString().padStart(2,'0');
   writeOffLog.push({sku, name, qty, reason, time: `${dd}.${mm} ${time}`, employeeName: currentUser?currentUser.name:''});
   sb.from('write_off_log').insert({sku, name, qty, reason, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
-  logMovement(sku, name, -qty, 'Списание: '+reason, client, size);
+  logMovement(sku, name, -qty, 'Списание: '+reason, client, size, warehouseId);
 }
 function openDelete(key){ deletingSku = key; editingSku = null; writeOffSku = null; historySku = null; renderInventory(); }
 function cancelDelete(){ deletingSku = null; renderInventory(); }

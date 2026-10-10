@@ -38,11 +38,11 @@ function deductStockForShipment(item, qty, reasonText){
       if(!compItem) return;
       const deduct = c.qtyNeeded * qty;
       compItem.qty = Math.max(0, compItem.qty - deduct);
-      logMovement(compItem.sku, compItem.name, -deduct, `${reasonText} (составляющая набора «${item.name}»)`, compItem.client, compItem.size);
+      logMovement(compItem.sku, compItem.name, -deduct, `${reasonText} (составляющая набора «${item.name}»)`, compItem.client, compItem.size, compItem.warehouseId||'MAIN');
     });
   } else {
     item.qty = Math.max(0, item.qty - qty);
-    logMovement(item.sku, item.name, -qty, reasonText, item.client, item.size);
+    logMovement(item.sku, item.name, -qty, reasonText, item.client, item.size, item.warehouseId||'MAIN');
   }
 }
 function draftKitComponentRows(){
