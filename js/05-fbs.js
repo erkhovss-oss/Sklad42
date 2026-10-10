@@ -1183,7 +1183,7 @@ function renderScanModeScreen(msg, msgIsError){
       </div>
     </div>
   `;
-  setTimeout(()=>{ const el = document.getElementById('orderScanInput'); if(el) el.focus(); }, 50);
+  setTimeout(()=>{ const el = document.getElementById('orderScanInput'); if(el){ forceEnglishInput(el); el.focus(); } }, 50);
 }
 // Код стикера заказа WB — то, что зашито в штрихкод на этикетке (например «*DbEFl55V»). Это поле barcode из ответа WB
 // про стикеры; в самом заказе его нет, поэтому при первом скане запрашиваем стикеры заказов «На сборке» у WB и запоминаем.
@@ -1242,7 +1242,7 @@ function findOrderForScan(raw, pool){
   return null;
 }
 async function handleOrderScan(inputEl){
-  const raw = inputEl.value.trim();
+  const raw = fromRuLayout(inputEl.value.trim());
   inputEl.value = '';
   if(!raw) return;
   if(raw===NEXT_ORDER_QR_CODE){ renderScanModeScreen('Код «Следующий заказ» здесь не нужен — отсканируйте стикер заказа', true); return; }
@@ -1380,7 +1380,7 @@ function jumpToOrderInWizard(targetOrder){
 }
 async function wizardFindByCode(inputEl){
   if(scanModeActive) return handleOrderScan(inputEl); // в режиме поиска ищем среди всех заказов «На сборке», как на экране поиска
-  const raw = inputEl.value.trim();
+  const raw = fromRuLayout(inputEl.value.trim());
   inputEl.value = '';
   if(!raw) return;
   if(raw===NEXT_ORDER_QR_CODE){ wizardNextOrder(); return; }
@@ -1495,15 +1495,17 @@ function renderAssemblyModeStepContent(order, requiresKiz){
     </div>
   `;
   const findInput = document.getElementById('wizardFindByCodeInput');
+  forceEnglishInput(findInput);
   findInput.addEventListener('keydown', (e)=>{
     if(e.key!=='Enter') return;
     wizardFindByCode(findInput);
   });
   const bcInput = document.getElementById('wizardBarcodeInput');
+  forceEnglishInput(bcInput);
   bcInput.focus();
   bcInput.addEventListener('keydown', (e)=>{
     if(e.key!=='Enter') return;
-    const code = bcInput.value.trim();
+    const code = fromRuLayout(bcInput.value.trim());
     bcInput.value='';
     if(!code) return;
     if(code===NEXT_ORDER_QR_CODE){ wizardNextOrder(); return; }
