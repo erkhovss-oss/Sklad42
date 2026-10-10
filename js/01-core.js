@@ -1,7 +1,3 @@
-
-
-
-
 // ---------- SUPABASE ----------
 const SUPABASE_URL = 'https://mixsvqjlrifkcoeuuydc.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1peHN2cWpscmlma2NvZXV1eWRjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MTYyNzEsImV4cCI6MjEwMzA5MjI3MX0.qIdelCgVkSDMc20f5X1parpfx2njHB5Pe3xk3ogbCr4';
@@ -369,21 +365,27 @@ function playBeep(type){
     const ctx = getAudioCtx();
     if(!ctx) return;
     if(ctx.state==='suspended') ctx.resume();
-    const [freq, dur, vol] = type==='error' ? [220, 0.22, 0.16] : type==='warn' ? [440, 0.14, 0.16] : [900, 0.09, 0.14];
-    const t0 = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = freq;
-    // короткие нарастание и спад громкости — без щелчков в начале и конце сигнала
-    gain.gain.setValueAtTime(0, t0);
-    gain.gain.linearRampToValueAtTime(vol, t0+0.004);
-    gain.gain.setValueAtTime(vol, t0+dur-0.012);
-    gain.gain.linearRampToValueAtTime(0, t0+dur);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(t0);
-    osc.stop(t0+dur+0.01);
+    // ошибка — в 5 раз громче обычного сигнала (0.16 → 0.8), прямоугольная волна и двойной гудок:
+    // такой тембр слышно в шумном цеху лучше, чем мягкий синус
+    const [freq, dur, vol] = type==='error' ? [330, 0.22, 0.8] : type==='warn' ? [440, 0.14, 0.16] : [900, 0.09, 0.14];
+    const wave = type==='error' ? 'square' : 'sine';
+    const starts = type==='error' ? [0, 0.30] : [0];
+    starts.forEach(off=>{
+      const t0 = ctx.currentTime + off;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = wave;
+      osc.frequency.value = freq;
+      // короткие нарастание и спад громкости — без щелчков в начале и конце сигнала
+      gain.gain.setValueAtTime(0, t0);
+      gain.gain.linearRampToValueAtTime(vol, t0+0.004);
+      gain.gain.setValueAtTime(vol, t0+dur-0.012);
+      gain.gain.linearRampToValueAtTime(0, t0+dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0+dur+0.01);
+    });
   }catch(e){ /* звук недоступен в этом браузере — не критично */ }
 }
 
