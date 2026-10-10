@@ -101,7 +101,7 @@ function handleStocktakeScan(countId){
     if(!code) return;
     const c = stocktakes.find(x=>x.id===countId);
     const scope = stocktakeScopeItems(c);
-    const item = scope.find(i=>i.barcode===code);
+    const item = scope.find(i=>i.barcode===code) || scope.find(i=>itemAllBarcodes(i).has(String(code)));
     if(!item){
       playBeep('error');
       toast(`Штрихкод ${code} не найден среди товаров этой области`);
