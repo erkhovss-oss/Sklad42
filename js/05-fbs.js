@@ -1882,11 +1882,17 @@ async function bulkAssembleSelectedFbsOrders(){
     return;
   }
   toast(`Собираем ${withoutKiz.length} заказ(ов)…`);
-  for(const order of withoutKiz){
-    try{ await finishAssembleOrder(order, null, true); }
-    catch(e){ console.error(e); toast(`Ошибка при сборке заказа №${order.orderId}: ${e.message||e}`); }
-    await new Promise(resolve=>setTimeout(resolve, 300));
-  }
+  // Раньше заказы отправлялись строго по одному с паузой 300 мс (30 заказов ≈ минута).
+  // Теперь по 5 одновременно: WB спокойно выдерживает, а время сборки партии сокращается в разы.
+  let nextIdx = 0;
+  const worker = async ()=>{
+    while(nextIdx < withoutKiz.length){
+      const order = withoutKiz[nextIdx++];
+      try{ await finishAssembleOrder(order, null, true); }
+      catch(e){ console.error(e); toast(`Ошибка при сборке заказа №${order.orderId}: ${e.message||e}`); }
+    }
+  };
+  await Promise.all(Array.from({length: Math.min(5, withoutKiz.length)}, worker));
   fbsSelectedOrders = withKiz.map(o=>o.orderId);
   if(withKiz.length){
     toast(`Готово. Осталось собрать с КИЗ вручную: ${withKiz.length}`);
