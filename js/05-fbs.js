@@ -1717,8 +1717,18 @@ function wireWizardKizInput(order){
 }
 function wizardAttachKiz(order, kizCode, norm){
   toast(`Отправляем КИЗ на WB… (${kizCode.length} симв., разделителей GS: ${norm ? norm.gsCount : '?'}${norm && norm.restored ? ', восстановлены автоматически' : ''})`);
+  // Не ждём ответа WB: сразу открываем поиск следующего заказа, проверку КИЗ ведём в фоне.
+  // Если WB потом отвергнет код — громко сообщим и вернём этот заказ на экран.
+  const wasCurrent = assemblyModeQueue[assemblyModeIndex] === order;
+  let movedOn = false;
+  if(wasCurrent){ movedOn = true; wizardOrderDone(order); }
+  const backToOrder = (msg)=>{
+    playBeep('error');
+    toast(msg);
+    if(movedOn){ assemblyDoneIds.delete(order.orderId); order.pickedAt=null; sb.from('wb_orders').update({picked_at:null, picked_by:null}).eq('order_id', order.orderId).then(()=>{}); try{ openOrderInWizard(order, false); }catch(e){} }
+  };
   sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'attach_kiz', orderId: order.orderId, kizCode } }).then(({data, error})=>{
-    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    if(error || (data && data.error)){ backToOrder('⚠ Заказ №' + order.orderId + ': WB — ' + (data && data.error ? data.error : (error?error.message:'ошибка')) + '. КИЗ не принят, отсканируйте заново'); return; }
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus;
     order.kizDecision = data.decision || null;
@@ -1738,12 +1748,12 @@ function wizardAttachKiz(order, kizCode, norm){
       toast('⏳ КИЗ отправлен, WB ещё проверяет — можно продолжать сборку, статус обновится сам');
       watchPendingKiz(order);
     }
-    else { playBeep('warn'); toast('⚠ WB не подтвердил КИЗ — ' + (data.warning||'проверьте вручную')); }
+    else { backToOrder('⚠ Заказ №' + order.orderId + ': WB не подтвердил КИЗ — ' + (data.warning||'проверьте вручную')); }
     const statusDiv = document.getElementById('wizardKizStatus');
     if(statusDiv) statusDiv.innerHTML = renderKizStatusLabel(order);
     // КИЗ принят (или WB ещё проверяет — досмотрим сами): заказ готов, открываем поиск следующего.
     // Если WB КИЗ не принял — остаёмся на заказе, чтобы сразу отсканировать другой код.
-    if(data.kizStatus !== 'verify_failed' && assemblyModeQueue[assemblyModeIndex] === order) wizardOrderDone(order);
+    if(data.kizStatus !== 'verify_failed' && !movedOn && assemblyModeQueue[assemblyModeIndex] === order) wizardOrderDone(order);
   });
 }
 async function wizardNextOrder(){
@@ -2147,6 +2157,7 @@ async function openSupplyShipment(clientId, orders){
     if(data.supply.shippingType) st.shippingType = data.supply.shippingType;
     if(data.supply.shippingDt && data.supply.shippingDt >= shipDateStr(new Date())) st.shippingDt = data.supply.shippingDt;
     if(data.supply.shippingPointId) st.pointId = data.supply.shippingPointId;
+    else { const d = shipGetDefault(); if(d){ st.pointId = d.id; if(d.city) st.city = d.city; } } // пункт по умолчанию — сразу выбран
     st.amount = Math.min(Math.max(1, shipRoom()), 1);
     shipRender();
     shipLoadPoints();
@@ -2306,9 +2317,29 @@ function shipFilteredPoints(){
   const typeRank = {pp:0, sw:1, sc:2};
   return list.sort((a,b)=> rank(a)-rank(b) || (typeRank[a.officeType]??9)-(typeRank[b.officeType]??9) || String(a.address).localeCompare(String(b.address), 'ru'));
 }
+// Пункт отгрузки «по умолчанию»: запоминается на этом компьютере и подставляется при каждой новой отгрузке
+function shipGetDefault(){
+  try{ const d = JSON.parse(localStorage.getItem('sklad42_ship_default_point')||'null'); return d && d.id ? d : null; }catch(e){ return null; }
+}
+function shipSetDefault(id){
+  const st = shipState; if(!st) return;
+  const p = (st.points||[]).find(x=>x.id===id);
+  if(!p){ toast('Пункт не найден в списке города'); return; }
+  try{ localStorage.setItem('sklad42_ship_default_point', JSON.stringify({id:p.id, address:p.address, name:p.name||'', officeType:p.officeType, fulfillment:!!p.fulfillment, city:(st.city||'').trim()})); }catch(e){}
+  toast('Пункт по умолчанию: ' + p.address);
+  shipRenderPoints();
+}
+function shipClearDefault(){
+  try{ localStorage.removeItem('sklad42_ship_default_point'); }catch(e){}
+  toast('Пункт по умолчанию сброшен');
+  shipRenderPoints();
+}
 function shipPoint(){
   const st = shipState;
-  return (st && st.points) ? st.points.find(p=>p.id===st.pointId) || null : null;
+  const found = (st && st.points) ? st.points.find(p=>p.id===st.pointId) || null : null;
+  if(found || !st) return found;
+  const d = shipGetDefault();
+  return (d && d.id===st.pointId) ? {id:d.id, address:d.address, name:d.name, officeType:d.officeType, fulfillment:d.fulfillment} : null;
 }
 function shipPickPoint(id){
   const st = shipState; if(!st) return;
@@ -2328,6 +2359,10 @@ function shipRenderPoints(){
     selEl.innerHTML = st.pointId
       ? `Выбрано: ${p ? `<b>${SHIP_POINT_TYPES[p.officeType]||p.officeType}</b> · ${escapeHtml(p.address)} <span class="mono" style="color:var(--ink-faint)">№${p.id}</span>` : `<b>пункт №${st.pointId}</b> <span style="color:var(--ink-faint)">(из текущих параметров поставки; в списке выбранного города его нет)</span>`}`
       : `<span style="color:var(--ink-faint)">Пункт отгрузки не выбран</span>`;
+    const dflt = shipGetDefault();
+    if(st.pointId && dflt && dflt.id===st.pointId) selEl.innerHTML += ` <span style="color:var(--accent);font-weight:700">⭐ по умолчанию</span> <span class="inv-act" style="cursor:pointer;color:var(--ink-faint);font-size:12px" onclick="shipClearDefault()">сбросить</span>`;
+    else if(st.pointId && (st.points||[]).some(x=>x.id===st.pointId)) selEl.innerHTML += ` <span style="cursor:pointer;color:var(--accent);font-size:12px" onclick="shipSetDefault(${st.pointId})">⭐ сделать пунктом по умолчанию</span>`;
+    if(dflt && dflt.id!==st.pointId) selEl.innerHTML += `<div style="margin-top:4px;font-size:12px">⭐ По умолчанию: ${escapeHtml(dflt.address)} <span style="cursor:pointer;color:var(--accent);font-weight:700" onclick="shipPickPoint(${dflt.id})">выбрать</span></div>`;
   }
   if(st.pointsLoading){ listEl.innerHTML = `<div style="padding:14px;font-size:13px;color:var(--ink-soft)">⏳ Загружаю пункты отгрузки…</div>`; return; }
   if(st.pointsError){ listEl.innerHTML = `<div style="padding:14px;font-size:13px;color:var(--warn)">${escapeHtml(st.pointsError)}</div>`; return; }
@@ -2339,7 +2374,7 @@ function shipRenderPoints(){
       <label style="display:flex;gap:10px;align-items:flex-start;padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer;${p.id===st.pointId?'background:var(--bg,#F3F0E8)':''}">
         <input type="radio" name="shipPoint" ${p.id===st.pointId?'checked':''} onchange="shipPickPoint(${p.id})">
         <div style="flex:1">
-          <div style="font-size:13px;font-weight:600">${escapeHtml(p.address)}</div>
+          <div style="font-size:13px;font-weight:600">${(d=>d&&d.id===p.id?'⭐ ':'')(shipGetDefault())}${escapeHtml(p.address)}</div>
           <div style="font-size:11px;color:var(--ink-faint)">${SHIP_POINT_TYPES[p.officeType]||escapeHtml(p.officeType)} · №${p.id}${p.fulfillment?' · фулфилмент в СЦ':''}${p.id===rec?' · <span style="color:var(--accent);font-weight:700">★ рекомендует WB для этой поставки</span>':''}</div>
         </div>
       </label>`).join('') : `<div style="padding:14px;font-size:13px;color:var(--ink-faint)">Ничего не найдено — измените запрос, тип пункта или город.</div>`)
