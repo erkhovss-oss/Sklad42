@@ -1558,10 +1558,28 @@ function printNextOrderQrCard(){
   `);
   win.document.close();
 }
+// Нажали «Этому товару нужен КИЗ» — запоминаем сразу, не дожидаясь ответа WB:
+//  1) товар в «Остатках» помечается как требующий КИЗ (следующие сканы этого товара сразу просят КИЗ);
+//  2) все остальные незавершённые заказы этого же товара у клиента тоже помечаются.
+function rememberProductRequiresKiz(order){
+  const invItem = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : null;
+  if(invItem && !invItem.requiresKiz){
+    invItem.requiresKiz = true;
+    syncInventoryRow(invItem.sku, invItem.client, invItem.size, invItem.warehouseId);
+  }
+  if(order.barcode){
+    const same = fbsOrders.filter(o=>o.clientId===order.clientId && o.barcode===order.barcode && (o.supplierStatus==='new'||o.supplierStatus==='confirm') && !o.requiresKiz);
+    same.forEach(o=>{ o.requiresKiz = true; });
+    sb.from('wb_orders').update({requires_kiz:true}).eq('client_id', order.clientId).eq('barcode', order.barcode).in('supplier_status',['new','confirm'])
+      .then(({error})=>{ if(error) console.error(error); });
+    toast(`Запомнил: «${(invItem&&invItem.name)||order.name||order.article}» — всегда с КИЗ${same.length>1?` (отмечено заказов: ${same.length})`:''}. Отключить можно в «Остатках» → Изменить`);
+  }
+}
 function forceShowWizardKiz(orderId){
   const order = assemblyModeQueue[assemblyModeIndex];
   if(!order || order.orderId!==orderId) return;
   order.requiresKiz = true;
+  rememberProductRequiresKiz(order);
   const blockEl = document.getElementById('wizardKizBlock');
   blockEl.innerHTML = `
     <div class="eyebrow" style="margin-bottom:6px">КИЗ (Честный Знак)</div>
