@@ -937,6 +937,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
                 <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                   ${!isDelivered && clientId ? renderTrbxAssignControl(o) : ''}
                   ${isDelivered ? fbsStatusBadge(o) : ''}
+                  ${!isDelivered && o.kizStatus!=='attached' && o.kizStatus!=='pending' ? `<button class="btn btn-ghost" style="padding:6px 12px;color:var(--accent)" onclick="openKizForOrder(${o.orderId})">🏷 Внести КИЗ</button>` : ''}
                   <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
                 </div>
               </div>
@@ -1760,6 +1761,24 @@ async function markOrderOutOfStock(orderId){
   });
   assemblyModeIndex++;
   renderAssemblyModeStep();
+}
+// Вернуться к уже собранному заказу и внести КИЗ (забыли отметить «нужен КИЗ» при сборке)
+function openKizForOrder(orderId){
+  const order = fbsOrders.find(o=>o.orderId===orderId);
+  if(!order){ toast('Заказ не найден'); return; }
+  openOrderInWizard(order, false); // ШК повторно не нужен для КИЗ, но и «к следующему» заказу сами не прыгаем
+  // экран может дорисоваться не сразу (если тип товара уточняется у WB) — ждём блок КИЗ
+  let tries = 0;
+  const t = setInterval(()=>{
+    tries++;
+    const block = document.getElementById('wizardKizBlock');
+    if(block){
+      clearInterval(t);
+      if(!document.getElementById('wizardKizInput')) forceShowWizardKiz(orderId);
+      const el = document.getElementById('wizardKizInput');
+      if(el){ el.disabled = false; el.focus(); }
+    } else if(tries > 30) clearInterval(t);
+  }, 100);
 }
 function exitAssemblyMode(){
   scanModeActive = false;
