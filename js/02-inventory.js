@@ -518,7 +518,7 @@ function confirmDelete(key){
   if(item){
     sb.from('movement_log').insert({sku, name:item.name, delta:-item.qty, type:'Удаление карточки', client_name:item.client||null, size:item.size||null, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{ if(error) console.error(error); });
   }
-  sb.from('inventory').delete().eq('sku', sku).eq('client_name', client||'').eq('size', size||'').then(({error})=>{ if(error){ console.error(error); toast('Не удалось удалить в базе'); } });
+  sb.from('inventory').delete().eq('sku', sku).eq('client_name', client||'').eq('size', size||'').eq('warehouse_id', (item&&item.warehouseId)||warehouseId||'MAIN').then(({error})=>{ if(error){ console.error(error); toast('Не удалось удалить в базе'); } });
   toast(`Карточка «${item ? item.name : sku}» удалена`);
   renderInventory();
   const cl = item && clients.find(c=>c.name===item.client);
