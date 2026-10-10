@@ -66,6 +66,30 @@ function changeInvPageSize(val){
   invPage = 1;
   renderInventory();
 }
+// ---------- РЕЗЕРВ ПОД НОВЫЕ ЗАКАЗЫ ----------
+// Те же правила, что на сервере (get_available_stock): WB — новые заказы по штрихкоду,
+// Ozon — отправления «ожидает сборки» по артикулу. Само списание со склада происходит при сборке.
+function buildReserveMap(){
+  const wb = new Map(), oz = new Map();
+  fbsOrders.forEach(o=>{
+    if(o.supplierStatus!=='new' || !o.barcode) return;
+    const k = o.clientName+'|'+o.barcode; wb.set(k, (wb.get(k)||0)+1);
+  });
+  ozonOrders.forEach(o=>{
+    if(o.status!=='awaiting_packaging' || !o.article) return;
+    const k = o.clientName+'|'+o.article; oz.set(k, (oz.get(k)||0)+(o.qty||1));
+  });
+  return {wb, oz};
+}
+function reserveHtml(i, m){
+  if(i.isKit || i.warehouseId==='BRAK') return '';
+  const w = i.barcode ? (m.wb.get(i.client+'|'+i.barcode)||0) : 0;
+  const o = m.oz.get(i.client+'|'+i.sku)||0;
+  if(!w && !o) return '';
+  const parts = [w?`WB ${w}`:'', o?`Ozon ${o}`:''].filter(Boolean).join(' · ');
+  const free = Math.max(0, i.qty - w - o);
+  return `<div style="font-size:11px;margin-top:2px;color:var(--oz,#7a5af8);font-weight:600" title="Заказы пришли, но ещё не собраны: товар лежит на складе, но на площадках уже не показывается. Списание с остатка — при сборке.">🔒 в резерве: ${w+o} (${parts}) · доступно: ${free}</div>`;
+}
 function renderInventory(){
   const q = (document.getElementById('invSearch').value || '').toLowerCase();
   const pageSizeSelect = document.getElementById('invPageSize');
@@ -124,6 +148,7 @@ function renderInventory(){
   if(invPage < 1) invPage = 1;
   const pageRows = rows.slice((invPage-1)*invPageSize, invPage*invPageSize);
 
+  const reserveMap = readOnly ? null : buildReserveMap();
   const splitModeClients = new Set(clients.filter(c=>c.stockAllocationMode==='split').map(c=>c.name));
 
   body.innerHTML = pageRows.map(i => {
@@ -287,7 +312,7 @@ function renderInventory(){
         i.isKit && i.kitMode!=='assembled'
           ? (()=>{ const av=computeKitAvailability(i); return `${av.available} шт <span style="font-size:10px;color:var(--accent)">🧩 виртуальный</span>${av.bottleneck?`<div style="color:var(--ink-faint);font-size:10px">лимит: ${escapeHtml(av.bottleneck.name)} (${av.bottleneck.have} шт)</div>`:''}`; })()
           : `${i.qty} шт${i.isKit?' <span style="font-size:10px;color:var(--accent)">🧩 собран</span>':''}${i.dims&&i.dims.l&&i.dims.w&&i.dims.h ? `<span style="color:var(--ink-faint);font-size:11px"> · ${((i.dims.l*i.dims.w*i.dims.h/1000)*i.qty).toFixed(1)} л</span>` : ''}`
-      }${splitModeClients.has(i.client) ? `
+      }${reserveMap ? reserveHtml(i, reserveMap) : ''}${splitModeClients.has(i.client) ? `
         <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">
           WB: ${i.wbAllocatedQty||0} · Ozon: ${i.ozonAllocatedQty||0}${(i.wbAllocatedQty||0)+(i.ozonAllocatedQty||0)<i.qty ? ` · <span title="Физически лежит на складе, но пока не выделено ни под одну площадку — не видно ни на WB, ни на Ozon, пока не распределите">в запасе: ${i.qty-(i.wbAllocatedQty||0)-(i.ozonAllocatedQty||0)}</span>` : ''}${i.safetyBuffer?` · <span title="Всегда придерживается про запас, не показывается ни на одной площадке — защита на случай, если синхронизация не успеет">резерв: ${i.safetyBuffer}</span>`:''}
           ${!readOnly ? `<span class="inv-act" style="cursor:pointer;color:var(--accent)" data-act="openAllocate" data-key="${escapeHtml(key)}"> · распределить</span>` : ''}
