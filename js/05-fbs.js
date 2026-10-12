@@ -1900,6 +1900,8 @@ function renderKizStatusLabel(o){
   // «pending» — штатное «идёт проверка», его пугающим английским словом не показываем; прочие ответы WB — как есть
   const why = (o.kizDecision && o.kizDecision!=='pending') ? ` <span style="font-weight:400;font-size:11px">(WB: ${escapeHtml(o.kizDecision)})</span>` : '';
   if(o.kizStatus==='attached') return ' · <span style="color:var(--ok);font-weight:700">✅ КИЗ подтверждён WB</span>';
+  // «filled» — WB уже принял и записал код на заказ; в оборот (sgtinIntroduced) его вводят позже, обычно при передаче поставки в доставку. Это не ошибка и не «проверка».
+  if(o.kizStatus==='pending' && o.kizDecision==='filled') return ' · <span style="color:var(--ok);font-weight:700">✔ КИЗ записан у WB</span> <span style="font-weight:400;font-size:11px;color:var(--ink-soft)">(в оборот введётся при передаче в доставку)</span>';
   if(o.kizStatus==='pending') return ` · <span style="color:var(--ink-soft)">⏳ WB проверяет маркировку…${why}</span>`;
   if(o.kizStatus==='verify_failed') return ` · <span style="color:var(--warn);font-weight:700">⚠ WB не подтвердил КИЗ${why}</span>`;
   if(o.kizCode) return ' · КИЗ отправлен, статус не проверен';
