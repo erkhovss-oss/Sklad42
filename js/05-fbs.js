@@ -1441,6 +1441,90 @@ function renderAssemblyModeStep(){
     renderAssemblyModeStepContent(order, order.requiresKiz);
   });
 }
+// ===== Штрихкод товара на экране и на печать (если на товаре не наклеен ШК) =====
+// ШК рисуем сами из номера: EAN-13/EAN-8 (если контрольная цифра верна), иначе Code128 — сканер в любом случае читает те же цифры.
+function barcodeCanvasFor(code, targetPx, barHeightMm){
+  code = String(code).trim();
+  const kinds = [];
+  if(/^\d{13}$/.test(code)) kinds.push('ean13');
+  else if(/^\d{8}$/.test(code)) kinds.push('ean8');
+  kinds.push('code128');
+  let lastErr = null;
+  for(const bcid of kinds){
+    try{
+      const base = { bcid, text: code, backgroundcolor:'FFFFFF', paddingwidth:6, paddingheight:2 };
+      const c = document.createElement('canvas');
+      window.bwipjs.toCanvas(c, Object.assign({scale:1, height:10}, base));
+      const scale = Math.max(1, Math.floor(targetPx / c.width));
+      // высота полос в мм при 203 dpi: bwip считает 1 «пункт» = 1/72 дюйма на единицу масштаба
+      const heightOpt = Math.max(5, barHeightMm * 203 / (72 * scale));
+      window.bwipjs.toCanvas(c, Object.assign({scale, height:heightOpt}, base));
+      return { url: c.toDataURL('image/png'), px: c.width, py: c.height, bcid };
+    }catch(e){ lastErr = e; }
+  }
+  throw lastErr || new Error('Не удалось построить штрихкод');
+}
+function wizardCurrentOrder(){ return assemblyModeQueue[assemblyModeIndex] || null; }
+async function wizardShowBarcode(){
+  const order = wizardCurrentOrder();
+  const box = document.getElementById('wizardBarcodeBox');
+  if(!order || !box) return;
+  if(!order.barcode){ toast('У этого заказа нет штрихкода'); return; }
+  if(box.dataset.open === '1'){ box.dataset.open = ''; box.innerHTML = ''; return; }
+  try{ await kizDupLoadLib(); }catch(e){ toast(e.message); return; }
+  try{
+    // крупный ШК для сканирования с монитора: 4 пикселя на модуль, высокие полосы
+    const b = barcodeCanvasFor(order.barcode, 420, 28);
+    box.dataset.open = '1';
+    box.innerHTML = `<div style="display:inline-block;background:#fff;border:1px solid var(--line,#ddd);border-radius:10px;padding:12px 16px;text-align:center">
+      <img src="${b.url}" style="image-rendering:pixelated;max-width:100%" />
+      <div class="mono" style="font-size:18px;font-weight:700;letter-spacing:2px;margin-top:4px">${escapeHtml(order.barcode)}</div>
+      <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">Наведите сканер на экран — код попадёт в поле «Штрихкод товара»</div>
+    </div>`;
+    const inp = document.getElementById('wizardBarcodeInput');
+    if(inp) inp.focus();
+  }catch(e){ console.error(e); toast('Не удалось построить штрихкод: ' + e.message); }
+}
+function wizardBarcodeLabelHtml(order, info, u, b, wMm){
+  const lines = [info.name, [order.article, info.color, order.size].filter(Boolean).join(' · ')].filter(Boolean);
+  return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;padding:${u(2)};box-sizing:border-box;background:#fff;font-family:Arial,sans-serif;color:#000;text-align:center">
+    <img src="${b.url}" style="width:${u(b.px/203*25.4)};height:${u(b.py/203*25.4)};image-rendering:pixelated;flex:none" />
+    <div style="font-family:'Courier New',monospace;font-weight:700;font-size:${u(3.6)};letter-spacing:${u(0.3)};margin-top:${u(1)}">${escapeHtml(order.barcode)}</div>
+    <div style="width:100%;margin-top:${u(1.5)};font-size:${u(2.6)};line-height:1.2;overflow:hidden;word-break:break-word">${lines.map(l=>`<div>${escapeHtml(l)}</div>`).join('')}</div>
+  </div>`;
+}
+async function wizardPrintBarcode(copies){
+  const order = wizardCurrentOrder();
+  if(!order) return;
+  if(!order.barcode){ toast('У этого заказа нет штрихкода'); return; }
+  copies = copies || 1;
+  try{ await kizDupLoadLib(); }catch(e){ toast(e.message); return; }
+  const info = findLocalProductInfo(order);
+  const g = kizDupGeom(true);          // размеры и поворот — те же, что у «Дубля КИЗ» (Настройки печати)
+  const ls = g.ls;
+  try{
+    const mode = kizDupSettings().mode;
+    if(mode === 'qz'){
+      const ok = await connectThermalPrinter();
+      if(!ok) return;
+      const mm2px = (mm)=> Math.round(mm / 25.4 * 203) + 'px';
+      const b = barcodeCanvasFor(order.barcode, Math.round((g.boxW - 4) / 25.4 * 203), Math.min(22, g.boxH * 0.4));
+      const bitmap = await htmlToMonoBitmap(wizardBarcodeLabelHtml(order, info, mm2px, b), ls.widthMm, ls.heightMm, g.rot);
+      for(let i=0;i<copies;i++){
+        const done = await printBitmapOnThermalPrinter(ls.widthMm, ls.heightMm, bitmap);
+        if(!done){ toast('Печать остановлена — проблема с принтером'); return; }
+      }
+      toast('🖨 Штрихкод отправлен на печать');
+    } else {
+      const b = barcodeCanvasFor(order.barcode, Math.round((g.boxW - 4) / 25.4 * 203), Math.min(22, g.boxH * 0.4));
+      const label = wizardBarcodeLabelHtml(order, info, (mm)=>mm+'mm', b);
+      const win = window.open('', '_blank');
+      if(!win){ toast('Браузер заблокировал окно печати — разрешите всплывающие окна для сайта'); return; }
+      win.document.write(`<html><head><title>Штрихкод</title><style>@page{size:${g.boxW}mm ${g.boxH}mm;margin:0} html,body{margin:0;padding:0} .l{width:${g.boxW}mm;height:${g.boxH}mm;overflow:hidden;page-break-after:always}</style></head><body>${Array.from({length:copies}, ()=>`<div class="l">${label}</div>`).join('')}<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
+      win.document.close();
+    }
+  }catch(e){ console.error(e); toast('Не удалось напечатать штрихкод: ' + e.message); }
+}
 function renderAssemblyModeStepContent(order, requiresKiz){
   const body = document.getElementById('fbsBody');
   const pi = findLocalProductInfo(order);
@@ -1476,7 +1560,9 @@ function renderAssemblyModeStepContent(order, requiresKiz){
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Заказ №</td><td class="mono">${order.orderId}</td></tr>
       </table>
       <div class="eyebrow" style="margin-bottom:6px">Штрихкод товара</div>
-      <input class="search" id="wizardBarcodeInput" placeholder="Отсканируйте штрихкод, чтобы подтвердить товар…" style="width:100%;max-width:420px;margin-bottom:14px" autocomplete="off">
+      <input class="search" id="wizardBarcodeInput" placeholder="Отсканируйте штрихкод, чтобы подтвердить товар…" style="width:100%;max-width:420px;margin-bottom:8px" autocomplete="off">
+      ${order.barcode ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:0"><button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="wizardShowBarcode()">▦ Показать ШК на экране</button><button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="wizardPrintBarcode()">🖨 Напечатать ШК</button></div><div id="wizardBarcodeBox" style="margin:8px 0 6px"></div>` : ''}
+      <div style="height:8px"></div>
       <div id="wizardKizBlock">
         ${requiresKiz ? `
           <div class="eyebrow" style="margin-bottom:6px">КИЗ (Честный Знак)</div>
@@ -1952,6 +2038,8 @@ async function hideOrdersFromOtherWarehouse(clientId){
 }
 function renderKizStatusLabel(o){
   if(!o.requiresKiz && !o.kizCode) return '';
+  // Код ещё не отсканирован — никакого статуса WB показывать нельзя (раньше мог всплыть устаревший статус из памяти)
+  if(!o.kizCode) return o.requiresKiz ? ' · <span style="color:var(--ink-soft)">КИЗ ещё не отсканирован</span>' : '';
   // «pending» — штатное «идёт проверка», его пугающим английским словом не показываем; прочие ответы WB — как есть
   const why = (o.kizDecision && o.kizDecision!=='pending') ? ` <span style="font-weight:400;font-size:11px">(WB: ${escapeHtml(o.kizDecision)})</span>` : '';
   if(o.kizStatus==='attached') return ' · <span style="color:var(--ok);font-weight:700">✅ КИЗ подтверждён WB</span>';
