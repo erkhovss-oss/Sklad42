@@ -538,6 +538,17 @@ function kizDupReadable(kiz){
   }
   return out;
 }
+// Размеры этикетки «как вёрстка»: содержимое верстается альбомно (ширина = высота этикетки в настройках, высота = ширина)
+function kizDupGeom(){
+  const ls = (typeof getLabelSettings==='function') ? getLabelSettings() : {widthMm:40, heightMm:58};
+  const rot = ((ls.textRotation||0) % 360 + 360) % 360;
+  const swap = (rot === 90 || rot === 270);   // при 90°/270° этикетка верстается с обменом сторон
+  const boxW = Math.max(20, (swap ? ls.heightMm : ls.widthMm) || 58), boxH = Math.max(15, (swap ? ls.widthMm : ls.heightMm) || 40);
+  let want = 34;
+  try{ want = parseFloat(localStorage.getItem('kizdup_matrix_mm')) || 34; }catch(e){}
+  const size = Math.max(10, Math.min(want, boxH - 4, boxW - 14));
+  return { ls, boxW, boxH, size };
+}
 function kizDupSettings(){
   let mode = null, auto = null;
   try{ mode = localStorage.getItem('kizdup_mode'); auto = localStorage.getItem('kizdup_auto'); }catch(e){}
@@ -545,10 +556,11 @@ function kizDupSettings(){
 }
 function kizDupSet(key, val){ try{ localStorage.setItem(key, val); }catch(e){} }
 // u(мм) → единицы вёрстки: px для растра термопринтера (203 dpi) или мм для окна печати
-function kizDupLabelHtml(kiz, note, u, matrix){
+function kizDupLabelHtml(kiz, note, u, matrix, sizeMm){
+  sizeMm = sizeMm || 34;
   const lines = kizDupReadable(kiz).map(l=>`<div>${escapeHtml(l)}</div>`).join('');
   return `<div style="display:flex;align-items:center;gap:${u(1.5)};width:100%;height:100%;padding:${u(2)};box-sizing:border-box;background:#fff;font-family:Arial,sans-serif;color:#000">
-    <img src="${matrix.url}" style="width:${u(34)};height:${u(34)};image-rendering:pixelated;flex:none" />
+    <img src="${matrix.url}" style="width:${u(sizeMm)};height:${u(sizeMm)};image-rendering:pixelated;flex:none" />
     <div style="flex:1;min-width:0;overflow:hidden">
       <div style="font-size:${u(2.6)};font-weight:700;margin-bottom:${u(1)}">ЧЗ · дубль</div>
       <div style="font-family:'Courier New',monospace;font-size:${u(2.2)};line-height:1.25;word-break:break-all">${lines}</div>
@@ -562,10 +574,10 @@ async function kizDupPrint(kiz, copies, note){
   if(st.mode === 'qz'){
     const ok = await connectThermalPrinter();
     if(!ok) return false;
-    const ls = getLabelSettings();
+    const g = kizDupGeom(), ls = g.ls;
     const mm2px = (mm)=> Math.round(mm / 25.4 * 203) + 'px';
-    const matrix = kizDupMatrix(kiz, Math.round(34 / 25.4 * 203));
-    const bitmap = await htmlToMonoBitmap(kizDupLabelHtml(kiz, note, mm2px, matrix), ls.widthMm, ls.heightMm);
+    const matrix = kizDupMatrix(kiz, Math.round(g.size / 25.4 * 203));
+    const bitmap = await htmlToMonoBitmap(kizDupLabelHtml(kiz, note, mm2px, matrix, g.size), ls.widthMm, ls.heightMm);
     for(let i=0;i<copies;i++){
       const done = await printBitmapOnThermalPrinter(ls.widthMm, ls.heightMm, bitmap);
       if(!done){ toast('Печать остановлена — проблема с принтером'); return false; }
@@ -573,11 +585,12 @@ async function kizDupPrint(kiz, copies, note){
     return true;
   }
   const mmU = (mm)=> mm + 'mm';
-  const matrix = kizDupMatrix(kiz, 272);
-  const label = kizDupLabelHtml(kiz, note, mmU, matrix);
+  const g = kizDupGeom();
+  const matrix = kizDupMatrix(kiz, Math.round(g.size / 25.4 * 203));
+  const label = kizDupLabelHtml(kiz, note, mmU, matrix, g.size);
   const win = window.open('', '_blank');
   if(!win){ toast('Браузер заблокировал окно печати — разрешите всплывающие окна для сайта'); return false; }
-  win.document.write(`<html><head><title>Дубль КИЗ</title><style>@page{size:58mm 40mm;margin:0} html,body{margin:0;padding:0} .l{width:58mm;height:40mm;overflow:hidden;page-break-after:always}</style></head><body>${Array.from({length:copies}, ()=>`<div class="l">${label}</div>`).join('')}<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
+  win.document.write(`<html><head><title>Дубль КИЗ</title><style>@page{size:${g.boxW}mm ${g.boxH}mm;margin:0} html,body{margin:0;padding:0} .l{width:${g.boxW}mm;height:${g.boxH}mm;overflow:hidden;page-break-after:always}</style></head><body>${Array.from({length:copies}, ()=>`<div class="l">${label}</div>`).join('')}<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
   win.document.close();
   return true;
 }
@@ -654,9 +667,10 @@ function kizDupRenderPreview(){
   const box = document.getElementById('kizDupPreview');
   if(!box || !kizDupLast) return;
   const { kiz, note, gs, restored } = kizDupLast;
-  const matrix = kizDupMatrix(kiz, 272);
+  const g = kizDupGeom();
+  const matrix = kizDupMatrix(kiz, Math.round(g.size / 25.4 * 203));
   box.innerHTML = `<div class="eyebrow" style="margin-bottom:8px">Предпросмотр этикетки</div>
-    <div style="display:inline-block;border:1px dashed var(--line);background:#fff;width:58mm;height:40mm;max-width:100%">${kizDupLabelHtml(kiz, note, (mm)=>mm+'mm', matrix)}</div>
+    <div style="display:inline-block;border:1px dashed var(--line);background:#fff;width:${g.boxW}mm;height:${g.boxH}mm;max-width:100%">${kizDupLabelHtml(kiz, note, (mm)=>mm+'mm', matrix, g.size)}</div>
     <div style="font-size:12px;color:var(--ink-faint);margin-top:6px">Разделителей GS в коде: ${gs}${restored ? ' (восстановлены автоматически)' : ''}</div>
     ${document.getElementById('kizDupAuto').checked ? '' : `<div style="margin-top:10px"><button class="btn btn-accent" onclick="kizDupPrintLast()">🖨 Печать</button></div>`}`;
 }
@@ -780,3 +794,144 @@ function helpInjectDom(){
   after.after(s);
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', helpInjectDom); else helpInjectDom();
+
+// ==================== НАСТРОЙКИ ПЕЧАТИ (раздел «Настройки») ====================
+// Все параметры печати в одном месте. Хранятся в этом браузере (на каждом компьютере свои).
+function prSettingsInjectDom(){
+  if(document.getElementById('tab-prsettings')) return;
+  const after = document.getElementById('tab-help') || document.getElementById('tab-kizdup') || document.getElementById('tab-packing');
+  if(!after) return;
+  const navAfter = document.querySelector('.nav-item[data-tab="help"]') || document.querySelector('.nav-item[data-tab="kizdup"]') || document.querySelector('.nav-item[data-tab="packing"]');
+  if(navAfter){
+    const el = document.createElement('div');
+    el.className = 'nav-item'; el.dataset.tab = 'prsettings';
+    el.innerHTML = '<span class="num">⚙</span>Настройки печати';
+    el.addEventListener('click', ()=>{ switchTab('prsettings'); closeMobileSidebar(); });
+    navAfter.after(el);
+  }
+  const s = document.createElement('section');
+  s.className = 'section'; s.id = 'tab-prsettings';
+  s.innerHTML = `<div class="page-head"><div><h1>Настройки печати</h1><p>Принтер, размер этикетки и повороты. Настройки хранятся в этом браузере — на каждом компьютере задаются отдельно.</p></div></div><div id="prSettingsBody" style="max-width:760px"></div>`;
+  after.after(s);
+}
+function prSettingsRender(){
+  prSettingsInjectDom();
+  const box = document.getElementById('prSettingsBody');
+  if(!box) return;
+  const s = getLabelSettings();
+  let printer = '', matrixMm = 34, mode = 'qz', auto = true, shipDef = null;
+  try{ printer = localStorage.getItem('teleshop_qz_printer_name') || ''; }catch(e){}
+  try{ matrixMm = parseFloat(localStorage.getItem('kizdup_matrix_mm')) || 34; }catch(e){}
+  const kst = kizDupSettings(); mode = kst.mode; auto = kst.auto;
+  try{ shipDef = shipGetDefault(); }catch(e){}
+  const lbl = (t)=>`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">${t}</div>`;
+  const rotOpts = (cur)=>[0,90,180,270].map(d=>`<option value="${d}" ${cur===d?'selected':''}>${d}°</option>`).join('');
+  box.innerHTML = `
+    <div class="panel" style="padding:20px;margin-bottom:16px">
+      <div class="eyebrow" style="margin-bottom:10px">Принтер (QZ Tray)</div>
+      <div style="font-size:14px;margin-bottom:10px">Выбран: <b id="prPrinterName">${printer ? escapeHtml(printer) : 'не выбран'}</b></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="prChoosePrinter()">Выбрать принтер</button>
+        <button class="btn btn-ghost" onclick="prForgetPrinter()">Сбросить выбор</button>
+      </div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-top:8px">Для выбора должен быть запущен QZ Tray. Инструкция по установке — в разделе «Справочник».</div>
+    </div>
+
+    <div class="panel" style="padding:20px;margin-bottom:16px">
+      <div class="eyebrow" style="margin-bottom:10px">Этикетка</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="flex:1;min-width:140px">${lbl('Ширина рулона, мм')}<input class="search" type="number" step="0.5" id="prWidth" value="${s.widthMm}" style="width:100%"></div>
+        <div style="flex:1;min-width:140px">${lbl('Длина этикетки (по ходу печати), мм')}<input class="search" type="number" step="0.5" id="prHeight" value="${s.heightMm}" style="width:100%"></div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="flex:1;min-width:140px">${lbl('Поворот QR-этикетки WB')}<select class="search" id="prQrRot" style="width:100%">${rotOpts(s.qrRotation)}</select></div>
+        <div style="flex:1;min-width:140px">${lbl('Поворот текстовых этикеток (карточка товара, дубль КИЗ)')}<select class="search" id="prTextRot" style="width:100%">${rotOpts(s.textRotation)}</select></div>
+      </div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-bottom:12px;line-height:1.5">Ширина — поперёк рулона, высота — длина этикетки по ходу печати. Для рулона 58 мм с этикетками 58×40: ширина 58, высота 40, оба поворота 0°. Если текст вверх ногами — поставьте 180°. Повороты 90°/270° нужны, только если этикетка в принтере лежит боком. Если печатает «на две этикетки» — длина (высота) указана больше реальной: сверьте с рулоном и откалибруйте принтер (удерживайте кнопку подачи).</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="prSaveLabel()">Сохранить</button>
+        <button class="btn btn-ghost" onclick="prTestPrint()">🖨 Пробная этикетка с рамкой</button>
+        <button class="btn btn-ghost" onclick="prResetLabel()">Вернуть стандартные</button>
+      </div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-top:8px">«Пробная этикетка» печатает рамку по краям: сразу видно, ровно ли ложится печать и не уходит ли на соседнюю этикетку. Кнопка сначала сохраняет настройки.</div>
+    </div>
+
+    <div class="panel" style="padding:20px;margin-bottom:16px">
+      <div class="eyebrow" style="margin-bottom:10px">Дубль КИЗ</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;align-items:end">
+        <div style="min-width:160px">${lbl('Размер матрицы DataMatrix, мм')}<input class="search" type="number" step="1" min="10" max="60" id="prMatrixMm" value="${matrixMm}" style="width:100%"></div>
+        <div style="min-width:220px">${lbl('Куда печатать')}<select class="search" id="prKizMode" style="width:100%"><option value="qz" ${mode==='qz'?'selected':''}>Термопринтер (QZ Tray)</option><option value="browser" ${mode==='browser'?'selected':''}>Окно печати браузера</option></select></div>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer;margin-bottom:12px"><input type="checkbox" id="prKizAuto" ${auto?'checked':''}> Печатать сразу после скана</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="prSaveKiz()">Сохранить</button>
+        <button class="btn btn-ghost" onclick="prTestKiz()">🖨 Пробный дубль КИЗ</button>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:20px;margin-bottom:16px">
+      <div class="eyebrow" style="margin-bottom:10px">Отгрузка FBS</div>
+      <div style="font-size:14px;margin-bottom:10px">Точка отгрузки по умолчанию: <b>${shipDef ? escapeHtml(shipDef.address || shipDef.name || shipDef.id) : 'не задана'}</b></div>
+      ${shipDef ? `<button class="btn btn-ghost" onclick="shipClearDefault();prSettingsRender()">Сбросить</button>` : `<div style="font-size:12px;color:var(--ink-faint)">Задаётся в окне «Отгрузка поставки» — звёздочкой у нужного пункта.</div>`}
+    </div>`;
+}
+function prReadLabel(){
+  return {
+    widthMm: parseFloat(document.getElementById('prWidth').value) || 40,
+    heightMm: parseFloat(document.getElementById('prHeight').value) || 58,
+    qrRotation: parseInt(document.getElementById('prQrRot').value) || 0,
+    textRotation: parseInt(document.getElementById('prTextRot').value) || 0,
+  };
+}
+function prSaveLabel(){ saveLabelSettings(prReadLabel()); toast('Настройки этикетки сохранены'); }
+function prResetLabel(){
+  try{ localStorage.removeItem('teleshop_label_settings'); }catch(e){}
+  prSettingsRender(); toast('Возвращены стандартные настройки этикетки');
+}
+async function prChoosePrinter(){
+  try{ localStorage.removeItem('teleshop_qz_printer_name'); }catch(e){}
+  if(!await connectThermalPrinter()) return;
+  const name = await getQzPrinterName();
+  if(name) toast('Принтер выбран: ' + name);
+  prSettingsRender();
+}
+function prForgetPrinter(){
+  try{ localStorage.removeItem('teleshop_qz_printer_name'); }catch(e){}
+  toast('Выбор принтера сброшен');
+  prSettingsRender();
+}
+function prSaveKiz(){
+  const mm = Math.max(10, Math.min(60, parseFloat(document.getElementById('prMatrixMm').value) || 34));
+  kizDupSet('kizdup_matrix_mm', String(mm));
+  kizDupSet('kizdup_mode', document.getElementById('prKizMode').value);
+  kizDupSet('kizdup_auto', document.getElementById('prKizAuto').checked ? '1' : '0');
+  toast('Настройки дубля КИЗ сохранены');
+  // если раздел «Дубль КИЗ» уже построен — синхронизируем его элементы
+  const m = document.getElementById('kizDupMode'); if(m) m.value = document.getElementById('prKizMode').value;
+  const a = document.getElementById('kizDupAuto'); if(a) a.checked = document.getElementById('prKizAuto').checked;
+}
+async function prTestPrint(){
+  const t = prReadLabel();
+  saveLabelSettings(t);
+  if(!await connectThermalPrinter()) return;
+  const mmPx = (mm)=> Math.round(mm / 25.4 * 203);
+  const html = `<div style="width:100%;height:100%;box-sizing:border-box;border:${mmPx(0.8)}px solid #000;padding:${mmPx(2)}px;font-family:Arial,sans-serif;position:relative">
+      <div style="font-size:${mmPx(4)}px;font-weight:700">ТЕСТ ${t.widthMm}×${t.heightMm} мм · пов. ${t.textRotation}°</div>
+      <div style="font-size:${mmPx(3)}px;margin-top:${mmPx(1)}px">Рамка по краям этикетки. Стрелка → направление печати</div>
+      <div style="position:absolute;right:${mmPx(2)}px;bottom:${mmPx(1)}px;font-size:${mmPx(7)}px;font-weight:700">→</div>
+      <div style="position:absolute;left:${mmPx(2)}px;bottom:${mmPx(1)}px;font-size:${mmPx(3)}px">нижний левый угол</div>
+    </div>`;
+  try{
+    const bitmap = await htmlToMonoBitmap(html, t.widthMm, t.heightMm);
+    const ok = await printBitmapOnThermalPrinter(t.widthMm, t.heightMm, bitmap);
+    if(!ok) toast('Печать не удалась — проверьте принтер');
+  }catch(e){ console.error(e); toast('Не удалось подготовить пробную этикетку'); }
+}
+async function prTestKiz(){
+  prSaveKiz();
+  try{ await kizDupLoadLib(); }catch(e){ toast(e.message); return; }
+  const gs = String.fromCharCode(29);
+  const demo = '0104650123456787' + '21abcDEF12345' + gs + '91EE06' + gs + '92' + 'A'.repeat(44);
+  await kizDupPrint(demo, 1, 'ТЕСТ');
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', prSettingsInjectDom); else prSettingsInjectDom();
