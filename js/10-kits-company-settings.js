@@ -539,15 +539,21 @@ function kizDupReadable(kiz){
   return out;
 }
 // Размеры этикетки «как вёрстка»: содержимое верстается альбомно (ширина = высота этикетки в настройках, высота = ширина)
+function kizDupRotation(){
+  let r = 0;
+  try{ const v = localStorage.getItem('kizdup_rot'); if(v!==null && v!=='') r = parseInt(v)||0; }catch(e){}
+  return [0,90,180,270].includes(r) ? r : 0;
+}
 function kizDupGeom(){
   const ls = (typeof getLabelSettings==='function') ? getLabelSettings() : {widthMm:40, heightMm:58};
-  const rot = ((ls.textRotation||0) % 360 + 360) % 360;
-  const swap = (rot === 90 || rot === 270);   // при 90°/270° этикетка верстается с обменом сторон
-  const boxW = Math.max(20, (swap ? ls.heightMm : ls.widthMm) || 58), boxH = Math.max(15, (swap ? ls.widthMm : ls.heightMm) || 40);
-  let want = 34;
-  try{ want = parseFloat(localStorage.getItem('kizdup_matrix_mm')) || 34; }catch(e){}
-  const size = Math.max(10, Math.min(want, boxH - 4, boxW - 14));
-  return { ls, boxW, boxH, size };
+  const rot = kizDupRotation();
+  const swap = (rot === 90 || rot === 270);   // при 90°/270° макет верстается лёжа (с обменом сторон)
+  const boxW = Math.max(20, (swap ? ls.heightMm : ls.widthMm) || 40), boxH = Math.max(15, (swap ? ls.widthMm : ls.heightMm) || 58);
+  const vertical = boxH > boxW;               // высокая этикетка: матрица сверху, текст снизу
+  let want = 30;
+  try{ want = parseFloat(localStorage.getItem('kizdup_matrix_mm')) || 30; }catch(e){}
+  const size = Math.max(10, vertical ? Math.min(want, boxW - 4, boxH - 16) : Math.min(want, boxH - 4, boxW - 14));
+  return { ls, rot, boxW, boxH, size, vertical };
 }
 function kizDupSettings(){
   let mode = null, auto = null;
@@ -556,15 +562,26 @@ function kizDupSettings(){
 }
 function kizDupSet(key, val){ try{ localStorage.setItem(key, val); }catch(e){} }
 // u(мм) → единицы вёрстки: px для растра термопринтера (203 dpi) или мм для окна печати
-function kizDupLabelHtml(kiz, note, u, matrix, sizeMm){
-  sizeMm = sizeMm || 34;
+function kizDupLabelHtml(kiz, note, u, matrix, sizeMm, vertical){
+  sizeMm = sizeMm || 30;
   const lines = kizDupReadable(kiz).map(l=>`<div>${escapeHtml(l)}</div>`).join('');
+  const img = `<img src="${matrix.url}" style="width:${u(sizeMm)};height:${u(sizeMm)};image-rendering:pixelated;flex:none" />`;
+  const noteHtml = note ? `<div style="font-size:${u(2.4)};font-weight:700;margin-top:${u(1)};line-height:1.2">${escapeHtml(note)}</div>` : '';
+  if(vertical){
+    return `<div style="display:flex;flex-direction:column;align-items:center;width:100%;height:100%;padding:${u(2)};box-sizing:border-box;background:#fff;font-family:Arial,sans-serif;color:#000">
+      ${img}
+      <div style="width:100%;margin-top:${u(1.5)};overflow:hidden">
+        <div style="font-family:'Courier New',monospace;font-size:${u(2.1)};line-height:1.2;word-break:break-all">${lines}</div>
+        ${noteHtml}
+      </div>
+    </div>`;
+  }
   return `<div style="display:flex;align-items:center;gap:${u(1.5)};width:100%;height:100%;padding:${u(2)};box-sizing:border-box;background:#fff;font-family:Arial,sans-serif;color:#000">
-    <img src="${matrix.url}" style="width:${u(sizeMm)};height:${u(sizeMm)};image-rendering:pixelated;flex:none" />
+    ${img}
     <div style="flex:1;min-width:0;overflow:hidden">
       <div style="font-size:${u(2.6)};font-weight:700;margin-bottom:${u(1)}">ЧЗ · дубль</div>
       <div style="font-family:'Courier New',monospace;font-size:${u(2.2)};line-height:1.25;word-break:break-all">${lines}</div>
-      ${note ? `<div style="font-size:${u(2.4)};font-weight:700;margin-top:${u(1.2)};line-height:1.2">${escapeHtml(note)}</div>` : ''}
+      ${noteHtml}
     </div>
   </div>`;
 }
@@ -577,7 +594,7 @@ async function kizDupPrint(kiz, copies, note){
     const g = kizDupGeom(), ls = g.ls;
     const mm2px = (mm)=> Math.round(mm / 25.4 * 203) + 'px';
     const matrix = kizDupMatrix(kiz, Math.round(g.size / 25.4 * 203));
-    const bitmap = await htmlToMonoBitmap(kizDupLabelHtml(kiz, note, mm2px, matrix, g.size), ls.widthMm, ls.heightMm);
+    const bitmap = await htmlToMonoBitmap(kizDupLabelHtml(kiz, note, mm2px, matrix, g.size, g.vertical), ls.widthMm, ls.heightMm, g.rot);
     for(let i=0;i<copies;i++){
       const done = await printBitmapOnThermalPrinter(ls.widthMm, ls.heightMm, bitmap);
       if(!done){ toast('Печать остановлена — проблема с принтером'); return false; }
@@ -587,7 +604,7 @@ async function kizDupPrint(kiz, copies, note){
   const mmU = (mm)=> mm + 'mm';
   const g = kizDupGeom();
   const matrix = kizDupMatrix(kiz, Math.round(g.size / 25.4 * 203));
-  const label = kizDupLabelHtml(kiz, note, mmU, matrix, g.size);
+  const label = kizDupLabelHtml(kiz, note, mmU, matrix, g.size, g.vertical);
   const win = window.open('', '_blank');
   if(!win){ toast('Браузер заблокировал окно печати — разрешите всплывающие окна для сайта'); return false; }
   win.document.write(`<html><head><title>Дубль КИЗ</title><style>@page{size:${g.boxW}mm ${g.boxH}mm;margin:0} html,body{margin:0;padding:0} .l{width:${g.boxW}mm;height:${g.boxH}mm;overflow:hidden;page-break-after:always}</style></head><body>${Array.from({length:copies}, ()=>`<div class="l">${label}</div>`).join('')}<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
@@ -670,7 +687,7 @@ function kizDupRenderPreview(){
   const g = kizDupGeom();
   const matrix = kizDupMatrix(kiz, Math.round(g.size / 25.4 * 203));
   box.innerHTML = `<div class="eyebrow" style="margin-bottom:8px">Предпросмотр этикетки</div>
-    <div style="display:inline-block;border:1px dashed var(--line);background:#fff;width:${g.boxW}mm;height:${g.boxH}mm;max-width:100%">${kizDupLabelHtml(kiz, note, (mm)=>mm+'mm', matrix, g.size)}</div>
+    <div style="display:inline-block;border:1px dashed var(--line);background:#fff;width:${g.boxW}mm;height:${g.boxH}mm;max-width:100%">${kizDupLabelHtml(kiz, note, (mm)=>mm+'mm', matrix, g.size, g.vertical)}</div>
     <div style="font-size:12px;color:var(--ink-faint);margin-top:6px">Разделителей GS в коде: ${gs}${restored ? ' (восстановлены автоматически)' : ''}</div>
     ${document.getElementById('kizDupAuto').checked ? '' : `<div style="margin-top:10px"><button class="btn btn-accent" onclick="kizDupPrintLast()">🖨 Печать</button></div>`}`;
 }
@@ -819,9 +836,9 @@ function prSettingsRender(){
   const box = document.getElementById('prSettingsBody');
   if(!box) return;
   const s = getLabelSettings();
-  let printer = '', matrixMm = 34, mode = 'qz', auto = true, shipDef = null;
+  let printer = '', matrixMm = 30, mode = 'qz', auto = true, shipDef = null;
   try{ printer = localStorage.getItem('teleshop_qz_printer_name') || ''; }catch(e){}
-  try{ matrixMm = parseFloat(localStorage.getItem('kizdup_matrix_mm')) || 34; }catch(e){}
+  try{ matrixMm = parseFloat(localStorage.getItem('kizdup_matrix_mm')) || 30; }catch(e){}
   const kst = kizDupSettings(); mode = kst.mode; auto = kst.auto;
   try{ shipDef = shipGetDefault(); }catch(e){}
   const lbl = (t)=>`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">${t}</div>`;
@@ -847,7 +864,7 @@ function prSettingsRender(){
         <div style="flex:1;min-width:140px">${lbl('Поворот QR-этикетки WB')}<select class="search" id="prQrRot" style="width:100%">${rotOpts(s.qrRotation)}</select></div>
         <div style="flex:1;min-width:140px">${lbl('Поворот текстовых этикеток (карточка товара, дубль КИЗ)')}<select class="search" id="prTextRot" style="width:100%">${rotOpts(s.textRotation)}</select></div>
       </div>
-      <div style="font-size:12px;color:var(--ink-faint);margin-bottom:12px;line-height:1.5">Ширина — поперёк рулона, высота — длина этикетки по ходу печати. Для рулона 58 мм с этикетками 58×40: ширина 58, высота 40, оба поворота 0°. Если текст вверх ногами — поставьте 180°. Повороты 90°/270° нужны, только если этикетка в принтере лежит боком. Если печатает «на две этикетки» — длина (высота) указана больше реальной: сверьте с рулоном и откалибруйте принтер (удерживайте кнопку подачи).</div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-bottom:12px;line-height:1.5">Ширина — поперёк рулона, высота — длина этикетки по ходу печати. Для наших этикеток 40×58 мм: ширина 40, высота 58, повороты 90° (макет верстается лежа и поворачивается на этикетку). Если текст получился вверх ногами — 270°. Если печатает «на две этикетки» или обрезает край — размер указан неверно: сверьте с рулоном и откалибруйте принтер (удерживайте кнопку подачи).</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="prSaveLabel()">Сохранить</button>
         <button class="btn btn-ghost" onclick="prTestPrint()">🖨 Пробная этикетка с рамкой</button>
@@ -860,6 +877,7 @@ function prSettingsRender(){
       <div class="eyebrow" style="margin-bottom:10px">Дубль КИЗ</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;align-items:end">
         <div style="min-width:160px">${lbl('Размер матрицы DataMatrix, мм')}<input class="search" type="number" step="1" min="10" max="60" id="prMatrixMm" value="${matrixMm}" style="width:100%"></div>
+        <div style="min-width:240px">${lbl('Положение макета на этикетке')}<select class="search" id="prKizRot" style="width:100%">${[[0,'Вертикально: матрица сверху, текст снизу (0°)'],[180,'Вертикально, вверх ногами (180°)'],[90,'Лёжа, как QR WB (90°)'],[270,'Лёжа, наоборот (270°)']].map(([d,t])=>`<option value="${d}" ${kizDupRotation()===d?'selected':''}>${t}</option>`).join('')}</select></div>
         <div style="min-width:220px">${lbl('Куда печатать')}<select class="search" id="prKizMode" style="width:100%"><option value="qz" ${mode==='qz'?'selected':''}>Термопринтер (QZ Tray)</option><option value="browser" ${mode==='browser'?'selected':''}>Окно печати браузера</option></select></div>
       </div>
       <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer;margin-bottom:12px"><input type="checkbox" id="prKizAuto" ${auto?'checked':''}> Печатать сразу после скана</label>
@@ -901,7 +919,8 @@ function prForgetPrinter(){
   prSettingsRender();
 }
 function prSaveKiz(){
-  const mm = Math.max(10, Math.min(60, parseFloat(document.getElementById('prMatrixMm').value) || 34));
+  const mm = Math.max(10, Math.min(60, parseFloat(document.getElementById('prMatrixMm').value) || 30));
+  kizDupSet('kizdup_rot', document.getElementById('prKizRot').value);
   kizDupSet('kizdup_matrix_mm', String(mm));
   kizDupSet('kizdup_mode', document.getElementById('prKizMode').value);
   kizDupSet('kizdup_auto', document.getElementById('prKizAuto').checked ? '1' : '0');
