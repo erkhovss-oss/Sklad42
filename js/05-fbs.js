@@ -1900,8 +1900,8 @@ function renderKizStatusLabel(o){
   // «pending» — штатное «идёт проверка», его пугающим английским словом не показываем; прочие ответы WB — как есть
   const why = (o.kizDecision && o.kizDecision!=='pending') ? ` <span style="font-weight:400;font-size:11px">(WB: ${escapeHtml(o.kizDecision)})</span>` : '';
   if(o.kizStatus==='attached') return ' · <span style="color:var(--ok);font-weight:700">✅ КИЗ подтверждён WB</span>';
-  // «filled» — WB уже принял и записал код на заказ; в оборот (sgtinIntroduced) его вводят позже, обычно при передаче поставки в доставку. Это не ошибка и не «проверка».
-  if(o.kizStatus==='pending' && o.kizDecision==='filled') return ' · <span style="color:var(--ok);font-weight:700">✔ КИЗ записан у WB</span> <span style="font-weight:400;font-size:11px;color:var(--ink-soft)">(в оборот введётся при передаче в доставку)</span>';
+  // «filled» — в кабинете WB это «Добавили маркировку без проверки»: код записан на заказ, проверка и ввод в оборот позже; в оборот (sgtinIntroduced) его вводят позже, обычно при передаче поставки в доставку. Это не ошибка и не «проверка».
+  if(o.kizStatus==='pending' && o.kizDecision==='filled') return ' · <span style="color:var(--ok);font-weight:700">✔ КИЗ добавлен у WB — «маркировка без проверки»</span> <span style="font-weight:400;font-size:11px;color:var(--ink-soft)">(WB проверит и введёт в оборот позже)</span>';
   if(o.kizStatus==='pending') return ` · <span style="color:var(--ink-soft)">⏳ WB проверяет маркировку…${why}</span>`;
   if(o.kizStatus==='verify_failed') return ` · <span style="color:var(--warn);font-weight:700">⚠ WB не подтвердил КИЗ${why}</span>`;
   if(o.kizCode) return ' · КИЗ отправлен, статус не проверен';
@@ -2457,8 +2457,10 @@ async function closeFbsSupply(explicitClientId){
     const names = missingKiz.slice(0,5).map(o=>`«${o.name||o.article}» (заказ №${o.orderId})`).join(', ');
     const more = missingKiz.length>5 ? ` и ещё ${missingKiz.length-5}` : '';
     if(!await customConfirm(`⚠ У ${missingKiz.length} заказ(ов) не привязан КИЗ, хотя он требуется: ${names}${more}.\n\nОтгружать без КИЗ рискованно — WB может отклонить поставку или заблокировать продажу. Всё равно продолжить?`)) return;
-  } else if(isPartial){
-    if(!await customConfirm(`Отгрузить ${toClose.length} из ${allConfirmed.length} заказов клиента «${client?client.name:''}»? Остальные ${toHold.length} останутся в отдельной поставке до следующего раза.`)) return;
+  }
+  // Частичная отгрузка (отмечены галочками не все заказы) — всегда спрашиваем отдельно: остальные заказы WB перенесёт в другую поставку.
+  if(isPartial){
+    if(!await customConfirm(`⚠ Отмечены галочками не все заказы: отгружается ${toClose.length} из ${allConfirmed.length} («${client?client.name:''}»).\n\nОстальные ${toHold.length} будут перенесены в ОТДЕЛЬНУЮ поставку у WB и останутся на сборке.\n\nЕсли хотите отгрузить всё — нажмите «Отмена», снимите галочки (кнопка «Выбрать все» два раза) и повторите.`)) return;
   }
 
   if(isPartial){
