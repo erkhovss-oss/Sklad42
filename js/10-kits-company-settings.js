@@ -544,7 +544,7 @@ function kizDupRotation(){
   try{ const v = localStorage.getItem('kizdup_rot'); if(v!==null && v!=='') r = parseInt(v)||0; }catch(e){}
   return [0,90,180,270].includes(r) ? r : 0;
 }
-function kizDupGeom(){
+function kizDupGeom(hasNote){
   const ls = (typeof getLabelSettings==='function') ? getLabelSettings() : {widthMm:40, heightMm:58};
   const rot = kizDupRotation();
   const swap = (rot === 90 || rot === 270);   // при 90°/270° макет верстается лёжа (с обменом сторон)
@@ -552,7 +552,7 @@ function kizDupGeom(){
   const vertical = boxH > boxW;               // высокая этикетка: матрица сверху, текст снизу
   let want = 30;
   try{ want = parseFloat(localStorage.getItem('kizdup_matrix_mm')) || 30; }catch(e){}
-  const size = Math.max(10, vertical ? Math.min(want, boxW - 4, boxH - 16) : Math.min(want, boxH - 4, boxW - 14));
+  const size = Math.max(10, Math.min(want, boxW - 4, boxH - (hasNote ? 21 : 17)));
   return { ls, rot, boxW, boxH, size, vertical };
 }
 function kizDupSettings(){
@@ -562,25 +562,15 @@ function kizDupSettings(){
 }
 function kizDupSet(key, val){ try{ localStorage.setItem(key, val); }catch(e){} }
 // u(мм) → единицы вёрстки: px для растра термопринтера (203 dpi) или мм для окна печати
-function kizDupLabelHtml(kiz, note, u, matrix, sizeMm, vertical){
+function kizDupLabelHtml(kiz, note, u, matrix, sizeMm){
   sizeMm = sizeMm || 30;
   const lines = kizDupReadable(kiz).map(l=>`<div>${escapeHtml(l)}</div>`).join('');
-  const img = `<img src="${matrix.url}" style="width:${u(sizeMm)};height:${u(sizeMm)};image-rendering:pixelated;flex:none" />`;
   const noteHtml = note ? `<div style="font-size:${u(2.4)};font-weight:700;margin-top:${u(1)};line-height:1.2">${escapeHtml(note)}</div>` : '';
-  if(vertical){
-    return `<div style="display:flex;flex-direction:column;align-items:center;width:100%;height:100%;padding:${u(2)};box-sizing:border-box;background:#fff;font-family:Arial,sans-serif;color:#000">
-      ${img}
-      <div style="width:100%;margin-top:${u(1.5)};overflow:hidden">
-        <div style="font-family:'Courier New',monospace;font-size:${u(2.1)};line-height:1.2;word-break:break-all">${lines}</div>
-        ${noteHtml}
-      </div>
-    </div>`;
-  }
-  return `<div style="display:flex;align-items:center;gap:${u(1.5)};width:100%;height:100%;padding:${u(2)};box-sizing:border-box;background:#fff;font-family:Arial,sans-serif;color:#000">
-    ${img}
-    <div style="flex:1;min-width:0;overflow:hidden">
-      <div style="font-size:${u(2.6)};font-weight:700;margin-bottom:${u(1)}">ЧЗ · дубль</div>
-      <div style="font-family:'Courier New',monospace;font-size:${u(2.2)};line-height:1.25;word-break:break-all">${lines}</div>
+  // матрица сверху, под ней текст кода (и необязательная подпись)
+  return `<div style="display:flex;flex-direction:column;align-items:center;width:100%;height:100%;padding:${u(2)};box-sizing:border-box;background:#fff;font-family:Arial,sans-serif;color:#000">
+    <img src="${matrix.url}" style="width:${u(sizeMm)};height:${u(sizeMm)};image-rendering:pixelated;flex:none" />
+    <div style="width:100%;margin-top:${u(1.5)};overflow:hidden">
+      <div style="font-family:'Courier New',monospace;font-size:${u(2.1)};line-height:1.2;word-break:break-all">${lines}</div>
       ${noteHtml}
     </div>
   </div>`;
@@ -591,10 +581,10 @@ async function kizDupPrint(kiz, copies, note){
   if(st.mode === 'qz'){
     const ok = await connectThermalPrinter();
     if(!ok) return false;
-    const g = kizDupGeom(), ls = g.ls;
+    const g = kizDupGeom(!!note), ls = g.ls;
     const mm2px = (mm)=> Math.round(mm / 25.4 * 203) + 'px';
     const matrix = kizDupMatrix(kiz, Math.round(g.size / 25.4 * 203));
-    const bitmap = await htmlToMonoBitmap(kizDupLabelHtml(kiz, note, mm2px, matrix, g.size, g.vertical), ls.widthMm, ls.heightMm, g.rot);
+    const bitmap = await htmlToMonoBitmap(kizDupLabelHtml(kiz, note, mm2px, matrix, g.size), ls.widthMm, ls.heightMm, g.rot);
     for(let i=0;i<copies;i++){
       const done = await printBitmapOnThermalPrinter(ls.widthMm, ls.heightMm, bitmap);
       if(!done){ toast('Печать остановлена — проблема с принтером'); return false; }
@@ -602,9 +592,9 @@ async function kizDupPrint(kiz, copies, note){
     return true;
   }
   const mmU = (mm)=> mm + 'mm';
-  const g = kizDupGeom();
+  const g = kizDupGeom(!!note);
   const matrix = kizDupMatrix(kiz, Math.round(g.size / 25.4 * 203));
-  const label = kizDupLabelHtml(kiz, note, mmU, matrix, g.size, g.vertical);
+  const label = kizDupLabelHtml(kiz, note, mmU, matrix, g.size);
   const win = window.open('', '_blank');
   if(!win){ toast('Браузер заблокировал окно печати — разрешите всплывающие окна для сайта'); return false; }
   win.document.write(`<html><head><title>Дубль КИЗ</title><style>@page{size:${g.boxW}mm ${g.boxH}mm;margin:0} html,body{margin:0;padding:0} .l{width:${g.boxW}mm;height:${g.boxH}mm;overflow:hidden;page-break-after:always}</style></head><body>${Array.from({length:copies}, ()=>`<div class="l">${label}</div>`).join('')}<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
@@ -684,10 +674,10 @@ function kizDupRenderPreview(){
   const box = document.getElementById('kizDupPreview');
   if(!box || !kizDupLast) return;
   const { kiz, note, gs, restored } = kizDupLast;
-  const g = kizDupGeom();
+  const g = kizDupGeom(!!note);
   const matrix = kizDupMatrix(kiz, Math.round(g.size / 25.4 * 203));
   box.innerHTML = `<div class="eyebrow" style="margin-bottom:8px">Предпросмотр этикетки</div>
-    <div style="display:inline-block;border:1px dashed var(--line);background:#fff;width:${g.boxW}mm;height:${g.boxH}mm;max-width:100%">${kizDupLabelHtml(kiz, note, (mm)=>mm+'mm', matrix, g.size, g.vertical)}</div>
+    <div style="display:inline-block;border:1px dashed var(--line);background:#fff;width:${g.boxW}mm;height:${g.boxH}mm;max-width:100%">${kizDupLabelHtml(kiz, note, (mm)=>mm+'mm', matrix, g.size)}</div>
     <div style="font-size:12px;color:var(--ink-faint);margin-top:6px">Разделителей GS в коде: ${gs}${restored ? ' (восстановлены автоматически)' : ''}</div>
     ${document.getElementById('kizDupAuto').checked ? '' : `<div style="margin-top:10px"><button class="btn btn-accent" onclick="kizDupPrintLast()">🖨 Печать</button></div>`}`;
 }
