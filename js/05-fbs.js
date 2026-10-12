@@ -1026,6 +1026,7 @@ function renderFbsBody(){
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="openLabelSettingsModal()">⚙️ Настройки этикетки</button>
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="forgetQzPrinter()" title="Выбрать другой принтер при следующей печати">⚙️ Сменить принтер</button>
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="previewThermalInfoCard()" title="Посмотреть, что именно генерируется для принтера">👁 Предпросмотр растра</button>
+          ${rows.length ? `<button class="btn btn-ghost" onclick="moveSelectedOrders()" title="Отметьте галочками заказы, затем перенесите их в другую поставку">🔀 Перенести заказы${fbsCloseSelectedOrders.length?` (${fbsCloseSelectedOrders.length})`:''}</button>` : ''}
           <button class="btn btn-accent" onclick="closeFbsSupply()">📦 ${partialSelection ? `Закрыть выбранные (${fbsCloseSelectedOrders.length})` : 'Отгрузка поставки…'}</button>
         </div>
       </div>
@@ -1769,6 +1770,60 @@ async function wizardNextOrder(){
 function wizardSkipOrder(){
   assemblyModeIndex++;
   renderAssemblyModeStep();
+}
+function askMoveTarget(count, clientName){
+  return new Promise((resolve)=>{
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:24px;max-width:440px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.2)">
+        <div style="font-size:15px;font-weight:700;margin-bottom:6px">Перенести заказы: ${count} шт</div>
+        <div style="font-size:13px;color:var(--ink-soft);margin-bottom:16px">Клиент «${escapeHtml(clientName||'')}». Куда перенести выбранные заказы?</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button class="btn btn-primary" id="mvMain">📦 В основную поставку</button>
+          <button class="btn btn-ghost" id="mvHold">🕓 В отдельную (отложенную) поставку</button>
+          <button class="btn btn-ghost" id="mvCancel">Отмена</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const done = (v)=>{ overlay.remove(); resolve(v); };
+    overlay.querySelector('#mvMain').onclick = ()=>done('main');
+    overlay.querySelector('#mvHold').onclick = ()=>done('hold');
+    overlay.querySelector('#mvCancel').onclick = ()=>done(null);
+    overlay.addEventListener('click', (e)=>{ if(e.target===overlay) done(null); });
+  });
+}
+async function moveSelectedOrders(){
+  const sel = fbsOrders.filter(o=>o.supplierStatus==='confirm' && fbsCloseSelectedOrders.includes(o.orderId));
+  if(!sel.length){ toast('Отметьте галочками слева заказы, которые нужно перенести'); return; }
+  const clientIds = [...new Set(sel.map(o=>o.clientId))];
+  if(clientIds.length>1){ toast('Выбраны заказы разных клиентов — переносите по одному клиенту'); return; }
+  const clientId = clientIds[0];
+  const target = await askMoveTarget(sel.length, sel[0].clientName);
+  if(!target) return;
+  toast('Переносим заказы…');
+  if(target==='main'){
+    const { data, error } = await sb.functions.invoke('wb-supply-return-ts', { body: { clientId, orderIds: sel.map(o=>o.orderId) } });
+    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    if(!data.total){ toast(data.message || 'Нечего переносить'); return; }
+    fbsCloseSelectedOrders = [];
+    await loadFbsOrders();
+    renderFbsBody();
+    const bad = (data.failed||[]).length;
+    toast(`Перенесено в основную поставку ${data.mainSupplyId}: ${data.moved} из ${data.total}${bad?` · не удалось: ${bad}`:''}`);
+  } else {
+    let ok = 0;
+    for(const o of sel){
+      const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'move_to_holding_supply', orderId: o.orderId } });
+      if(error || (data && data.error)){
+        toast('WB: не удалось перенести заказ №' + o.orderId + ' — ' + (data && data.error ? data.error : (error?error.message:'ошибка')));
+        break;
+      }
+      o.wbSupplyId = data.holdingSupplyId; ok++;
+      sb.from('wb_orders').update({wb_supply_id:data.holdingSupplyId}).eq('order_id', o.orderId).then(()=>{});
+    }
+    if(ok){ fbsCloseSelectedOrders = []; renderFbsBody(); toast(`Перенесено в отдельную поставку: ${ok} из ${sel.length}`); }
+  }
 }
 function moveFbsOrderToHolding(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
