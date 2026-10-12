@@ -3030,7 +3030,7 @@ function forgetQzPrinter(){
   toast('Принтер сброшен — при следующей печати выбор появится заново');
 }
 function getLabelSettings(){
-  const defaults = { widthMm: 40, heightMm: 58, qrRotation: 90, textRotation: 180 };
+  const defaults = { widthMm: 40, heightMm: 58, qrRotation: 90, textRotation: 90 };
   try{
     const stored = localStorage.getItem('teleshop_label_settings');
     if(stored) return Object.assign({}, defaults, JSON.parse(stored));
@@ -3131,12 +3131,12 @@ async function sendRawToPrinter(bytes){
   }
 }
 // Рендерит DOM-узел (например, HTML-разметку этикетки) в чёрно-белый растр под 203 DPI
-async function htmlToMonoBitmap(html, widthMm, heightMm){
+async function htmlToMonoBitmap(html, widthMm, heightMm, rotationOverride){
   const dpi = 203;
   // Содержимое вёрстаем как альбомное (ширина и высота меняются местами), затем весь
   // холст поворачивается на 90° при растеризации — так же, как и с QR-картинкой от WB.
   // При повороте 0° и 180° этикетка верстается как есть (ширина × высота); при 90° и 270° — с обменом сторон.
-  const rot = ((getLabelSettings().textRotation||0) % 360 + 360) % 360;
+  const rot = (((rotationOverride!=null ? rotationOverride : getLabelSettings().textRotation)||0) % 360 + 360) % 360;
   const swap = (rot === 90 || rot === 270);
   const contentWidthPx = Math.round((swap ? heightMm : widthMm) / 25.4 * dpi);
   const contentHeightPx = Math.round((swap ? widthMm : heightMm) / 25.4 * dpi);
@@ -3150,7 +3150,7 @@ async function htmlToMonoBitmap(html, widthMm, heightMm){
   const svgBase64 = btoa(unescape(encodeURIComponent(svgWrapped)));
   const finalWidthPx = Math.round(widthMm / 25.4 * dpi);
   const finalHeightPx = Math.round(heightMm / 25.4 * dpi);
-  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', finalWidthPx, finalHeightPx, getLabelSettings().textRotation);
+  return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', finalWidthPx, finalHeightPx, rotationOverride!=null ? rotationOverride : getLabelSettings().textRotation);
 }
 async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotationDeg){
   rotationDeg = ((rotationDeg||0) % 360 + 360) % 360;
