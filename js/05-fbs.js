@@ -1465,25 +1465,19 @@ function barcodeCanvasFor(code, targetPx, barHeightMm){
   throw lastErr || new Error('Не удалось построить штрихкод');
 }
 function wizardCurrentOrder(){ return assemblyModeQueue[assemblyModeIndex] || null; }
-async function wizardShowBarcode(){
-  const order = wizardCurrentOrder();
+// ШК товара рисуется сразу при открытии заказа — справа от поля скана, чтобы сканировать с монитора
+async function wizardRenderBarcode(order){
   const box = document.getElementById('wizardBarcodeBox');
-  if(!order || !box) return;
-  if(!order.barcode){ toast('У этого заказа нет штрихкода'); return; }
-  if(box.dataset.open === '1'){ box.dataset.open = ''; box.innerHTML = ''; return; }
-  try{ await kizDupLoadLib(); }catch(e){ toast(e.message); return; }
+  if(!order || !box || !order.barcode) return;
+  try{ await kizDupLoadLib(); }catch(e){ box.innerHTML = `<span style="font-size:12px;color:var(--warn)">${escapeHtml(e.message)}</span>`; return; }
+  if(wizardCurrentOrder() !== order || document.getElementById('wizardBarcodeBox') !== box) return;   // пока грузилась библиотека, экран сменился
   try{
-    // крупный ШК для сканирования с монитора: 4 пикселя на модуль, высокие полосы
-    const b = barcodeCanvasFor(order.barcode, 420, 28);
-    box.dataset.open = '1';
-    box.innerHTML = `<div style="display:inline-block;background:#fff;border:1px solid var(--line,#ddd);border-radius:10px;padding:12px 16px;text-align:center">
+    const b = barcodeCanvasFor(order.barcode, 420, 26);
+    box.innerHTML = `<div style="display:inline-block;background:#fff;border:1px solid var(--line,#ddd);border-radius:10px;padding:10px 14px;text-align:center">
       <img src="${b.url}" style="image-rendering:pixelated;max-width:100%" />
-      <div class="mono" style="font-size:18px;font-weight:700;letter-spacing:2px;margin-top:4px">${escapeHtml(order.barcode)}</div>
-      <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">Наведите сканер на экран — код попадёт в поле «Штрихкод товара»</div>
+      <div class="mono" style="font-size:16px;font-weight:700;letter-spacing:2px;margin-top:2px">${escapeHtml(order.barcode)}</div>
     </div>`;
-    const inp = document.getElementById('wizardBarcodeInput');
-    if(inp) inp.focus();
-  }catch(e){ console.error(e); toast('Не удалось построить штрихкод: ' + e.message); }
+  }catch(e){ console.error(e); box.innerHTML = `<span style="font-size:12px;color:var(--warn)">Не удалось построить штрихкод</span>`; }
 }
 function wizardBarcodeLabelHtml(order, info, u, b, wMm){
   const lines = [info.name, [order.article, info.color, order.size].filter(Boolean).join(' · ')].filter(Boolean);
@@ -1560,9 +1554,13 @@ function renderAssemblyModeStepContent(order, requiresKiz){
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Заказ №</td><td class="mono">${order.orderId}</td></tr>
       </table>
       <div class="eyebrow" style="margin-bottom:6px">Штрихкод товара</div>
-      <input class="search" id="wizardBarcodeInput" placeholder="Отсканируйте штрихкод, чтобы подтвердить товар…" style="width:100%;max-width:420px;margin-bottom:8px" autocomplete="off">
-      ${order.barcode ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:0"><button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="wizardShowBarcode()">▦ Показать ШК на экране</button><button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="wizardPrintBarcode()">🖨 Напечатать ШК</button></div><div id="wizardBarcodeBox" style="margin:8px 0 6px"></div>` : ''}
-      <div style="height:8px"></div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;margin-bottom:14px">
+        <div style="flex:1 1 320px;max-width:420px">
+          <input class="search" id="wizardBarcodeInput" placeholder="Отсканируйте штрихкод, чтобы подтвердить товар…" style="width:100%;margin-bottom:8px" autocomplete="off">
+          ${order.barcode ? `<button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="wizardPrintBarcode()">🖨 Напечатать ШК</button>` : ''}
+        </div>
+        ${order.barcode ? `<div id="wizardBarcodeBox" style="flex:0 1 auto"></div>` : ''}
+      </div>
       <div id="wizardKizBlock">
         ${requiresKiz ? `
           <div class="eyebrow" style="margin-bottom:6px">КИЗ (Честный Знак)</div>
@@ -1590,6 +1588,7 @@ function renderAssemblyModeStepContent(order, requiresKiz){
     if(e.key!=='Enter') return;
     wizardFindByCode(findInput);
   });
+  wizardRenderBarcode(order);
   const bcInput = document.getElementById('wizardBarcodeInput');
   forceEnglishInput(bcInput);
   bcInput.focus();
