@@ -914,7 +914,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
   return `<div>${pageOrder.map(key=>{
     const g = groups[key];
     const isExpanded = !!expandedFbsSupplyIds[key];
-    const missingKizInGroup = g.orders.filter(o=>o.requiresKiz && o.kizStatus!=='attached').length;
+    const missingKizInGroup = g.orders.filter(kizIsMissing).length;
     const outOfStockInGroup = g.orders.filter(o=>o.outOfStock).length;
     return `
       <div class="panel" style="margin-bottom:10px">
@@ -1002,7 +1002,7 @@ function renderFbsBody(){
       </div>
     `).join('')}</div>`;
   } else if(fbsView==='confirm'){
-    const missingKizCount = rows.filter(o=>o.requiresKiz && o.kizStatus!=='attached').length;
+    const missingKizCount = rows.filter(kizIsMissing).length;
     const outOfStockOrders = rows.filter(o=>o.outOfStock);
     const visibleIds = rows.map(o=>o.orderId);
     fbsCloseSelectedOrders = fbsCloseSelectedOrders.filter(id=>visibleIds.includes(id));
@@ -2035,6 +2035,7 @@ async function hideOrdersFromOtherWarehouse(clientId){
     if(error){ console.error(error); toast('Не удалось удалить часть заказов в базе'); }
   });
 }
+function kizIsMissing(o){ return !!o.requiresKiz && (!o.kizCode || o.kizStatus==='verify_failed'); }
 function renderKizStatusLabel(o){
   if(!o.requiresKiz && !o.kizCode) return '';
   // Код ещё не отсканирован — никакого статуса WB показывать нельзя (раньше мог всплыть устаревший статус из памяти)
@@ -2594,7 +2595,12 @@ async function closeFbsSupply(explicitClientId){
     const names = unpicked.slice(0,5).map(o=>`«${o.name||o.article}» (заказ №${o.orderId})`).join(', ');
     if(!await customConfirm(`⚠ Собрано ${toClose.length-unpicked.length} из ${toClose.length}. Не отсканировано заказов: ${unpicked.length} — ${names}${unpicked.length>5?` и ещё ${unpicked.length-5}`:''}.\n\nОтгружать всё равно?`)) return;
   }
-  const missingKiz = toClose.filter(o=>o.requiresKiz && o.kizStatus!=='attached');
+  // «Не привязан» — только если кода нет или WB его отверг. «filled» («маркировка без проверки») и «pending» — код у WB уже есть.
+  const missingKiz = toClose.filter(kizIsMissing);
+  const checkingKiz = toClose.filter(o=>o.requiresKiz && o.kizCode && o.kizStatus==='pending' && o.kizDecision!=='filled');
+  if(!missingKiz.length && checkingKiz.length){
+    if(!await customConfirm(`⏳ У ${checkingKiz.length} заказ(ов) WB ещё проверяет КИЗ (${checkingKiz.slice(0,5).map(o=>'№'+o.orderId).join(', ')}). Обычно это занимает несколько минут.\n\nОтгружать, не дожидаясь проверки?`)) return;
+  }
   if(missingKiz.length){
     const names = missingKiz.slice(0,5).map(o=>`«${o.name||o.article}» (заказ №${o.orderId})`).join(', ');
     const more = missingKiz.length>5 ? ` и ещё ${missingKiz.length-5}` : '';
