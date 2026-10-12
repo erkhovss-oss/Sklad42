@@ -548,7 +548,7 @@ function kizDupSet(key, val){ try{ localStorage.setItem(key, val); }catch(e){} }
 function kizDupLabelHtml(kiz, note, u, matrix){
   const lines = kizDupReadable(kiz).map(l=>`<div>${escapeHtml(l)}</div>`).join('');
   return `<div style="display:flex;align-items:center;gap:${u(1.5)};width:100%;height:100%;padding:${u(2)};box-sizing:border-box;background:#fff;font-family:Arial,sans-serif;color:#000">
-    <img src="${matrix.url}" style="width:${u(34)};height:${u(34)};image-rendering:pixelated;flex:none">
+    <img src="${matrix.url}" style="width:${u(34)};height:${u(34)};image-rendering:pixelated;flex:none" />
     <div style="flex:1;min-width:0;overflow:hidden">
       <div style="font-size:${u(2.6)};font-weight:700;margin-bottom:${u(1)}">ЧЗ · дубль</div>
       <div style="font-family:'Courier New',monospace;font-size:${u(2.2)};line-height:1.25;word-break:break-all">${lines}</div>
@@ -683,3 +683,100 @@ function kizDupRenderHistory(){
     </div>`).join('');
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', kizDupInjectDom); else kizDupInjectDom();
+
+// ==================== СПРАВОЧНИК ====================
+// Инструкции для сотрудников: настройка рабочего места, печать, частые вопросы. Статьи — просто список ниже, новые добавляются сюда.
+const HELP_ARTICLES = [
+  { id:'qz', title:'🖨 Печать на термопринтер: установка и настройка QZ Tray', html: `
+    <p>QZ Tray — небольшая программа, которая позволяет сайту печатать этикетки прямо на термопринтер. Ставится на каждый компьютер, где печатаете.</p>
+    <h4>Что понадобится</h4>
+    <ul><li>Термопринтер с поддержкой TSPL (TSC, Xprinter и похожие), подключённый к компьютеру, и его драйвер.</li><li>Браузер Chrome, Edge или Firefox. В Safari на Mac печать через QZ Tray не работает.</li></ul>
+    <h4>Установка</h4>
+    <ol>
+      <li>Скачайте QZ Tray с официального сайта: <a href="https://qz.io/download/" target="_blank" rel="noopener">qz.io/download</a>. Версия 2.2.x под вашу систему (Windows / macOS / Linux). Java отдельно ставить не нужно.</li>
+      <li>Установите и запустите. Рядом с часами появится значок QZ Tray — программа должна быть запущена всё время, пока печатаете.</li>
+      <li>Убедитесь, что принтер виден в системе («Принтеры и сканеры») и печатает тестовую страницу.</li>
+    </ol>
+    <h4>Первое подключение</h4>
+    <ol>
+      <li>Откройте нашу программу и нажмите печать на принтер (например, «🖨 На принтер (QZ Tray)» в Заказах FBS или разделе «Дубль КИЗ»).</li>
+      <li>Появится окно QZ Tray с вопросом, разрешить ли сайту печатать (в Windows оно может открыться позади браузера — посмотрите на панели задач). Поставьте галочку <b>Remember this decision</b> и нажмите <b>Allow</b>. Больше на этом компьютере вопрос не появится.</li>
+      <li>Программа предложит выбрать принтер — выберите нужный. Выбор запомнится на этом компьютере. Сменить: «⚙️ Сменить принтер» в Заказах FBS.</li>
+      <li>В «⚙️ Настройки этикетки» проверьте размер и повороты, если печать идёт повёрнутой или со сдвигом. Настройки хранятся отдельно на каждом компьютере.</li>
+    </ol>
+    <h4>Сертификат ТелеПак</h4>
+    <p>Программа подписывает запросы к QZ Tray собственным сертификатом. Если вопрос «Разрешить?» появляется постоянно, откройте QZ Tray (правый клик по значку → Advanced → Site Manager) и добавьте этот сертификат как доверенный:</p>
+    <p><button class="btn btn-ghost" onclick="helpDownloadQzCert()">⬇ Скачать сертификат teleshop-qz.crt</button></p>
+    <h4>Если не работает</h4>
+    <ul><li><b>«Не удалось подключиться к QZ Tray»</b> — QZ Tray не запущен. Запустите из меню «Пуск» и обновите страницу (Ctrl+F5).</li><li>Нет окна разрешения — проверьте панель задач, оно могло открыться позади браузера.</li><li>Печатать с телефона через QZ Tray нельзя — только с компьютера, где он установлен.</li></ul>` },
+  { id:'kizdup', title:'▦ Дубль КИЗ: как напечатать этикетку-дубль', html: `
+    <p>Дубль нужен, чтобы клеить код «Честного знака» снаружи упаковки: склад маркетплейса считает его, не вскрывая товар.</p>
+    <ol>
+      <li>Откройте раздел «Дубль КИЗ» в меню.</li>
+      <li>Отсканируйте КИЗ с товара. Раскладка ввода переключится на английскую сама; Caps Lock должен быть выключен.</li>
+      <li>Если включено «Печатать сразу после скана» — этикетка напечатается сама. Если выключено — проверьте предпросмотр и нажмите «🖨 Печать».</li>
+    </ol>
+    <ul><li>Число копий и дополнительный текст (артикул, название) задаются над предпросмотром.</li><li>Печать: термопринтер через QZ Tray (см. статью выше) или окно печати браузера.</li><li>Последние 10 напечатанных этикеток видны в списке, их можно напечатать «Ещё раз». Коды хранятся только пока страница открыта.</li></ul>` },
+  { id:'assembly', title:'🚀 Сборка FBS: режим сборки, КИЗ и отгрузка', html: `
+    <ol>
+      <li><b>Новые → На сборке.</b> Заказ уходит на сборку, и товар сразу списывается с остатка.</li>
+      <li><b>Режим сборки</b> или <b>«Найти заказ по скану»</b> — сканируйте штрихкод товара, затем КИЗ, если он нужен. Если забыли отметить, что товару нужен КИЗ, откройте «🏷 Внести КИЗ» у заказа в поставке.</li>
+      <li><b>Статус КИЗ у WB:</b> «КИЗ добавлен — маркировка без проверки» (filled) — нормально, WB проверит и введёт код в оборот позже. Ошибкой считается только «WB не подтвердил КИЗ».</li>
+      <li><b>Отгрузка поставки:</b> нажмите «Отгрузка поставки…», выберите пункт и дату, при необходимости создайте грузоместа и передайте в доставку.</li>
+    </ol>
+    <h4>Перенос заказов между поставками</h4>
+    <p>Отметьте галочками заказы одного клиента и нажмите «🔀 Перенести заказы» — в основную или в отдельную (отложенную) поставку.</p>
+    <p><b>Внимание:</b> если перед отгрузкой отмечены галочками не все заказы, остальные будут перенесены в отдельную поставку. Программа об этом спросит. Чтобы отгрузить всё, снимите галочки («Выбрать все» два раза).</p>` },
+  { id:'stock', title:'📦 Остатки, склады и инвентаризация', html: `
+    <ul>
+      <li>Кнопки «−» и «+» в Остатках меняют количество именно той строки (склада), на которой нажаты.</li>
+      <li>«Удалить» удаляет карточку только на выбранном складе.</li>
+      <li>В Остатках у товара показано «в резерве» (заказы WB/Ozon, ещё не собранные) и «доступно».</li>
+      <li>В инвентаризации сканер принимает и основной, и дополнительные штрихкоды товара.</li>
+      <li>На WB уходит: физический остаток минус резерв под новые заказы минус страховой запас. После нового заказа остаток обновляется сразу.</li>
+    </ul>` },
+  { id:'faq', title:'❓ Частые вопросы', html: `
+    <ul>
+      <li><b>Не вижу изменений после обновления файлов.</b> Нажмите Ctrl+F5. Файлы должны лежать в папке <code>js</code> на GitHub, а не в корне.</li>
+      <li><b>Режим сборки «вылетает».</b> Обновите страницу и убедитесь, что загружен свежий <code>05-fbs.js</code>.</li>
+      <li><b>В меню на iPhone не видно нижних пунктов.</b> Список меню прокручивается пальцем.</li>
+    </ul>` },
+];
+function helpDownloadQzCert(){
+  try{
+    const blob = new Blob([QZ_CERT_PEM.trim() + '\n'], {type:'application/x-x509-ca-cert'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'teleshop-qz.crt';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+  }catch(e){ toast('Не удалось скачать сертификат'); }
+}
+function helpInjectDom(){
+  if(document.getElementById('tab-help')) return;
+  const after = document.getElementById('tab-kizdup') || document.getElementById('tab-packing');
+  if(!after) return;
+  const navAfter = document.querySelector('.nav-item[data-tab="kizdup"]') || document.querySelector('.nav-item[data-tab="packing"]');
+  if(navAfter){
+    const el = document.createElement('div');
+    el.className = 'nav-item'; el.dataset.tab = 'help';
+    el.innerHTML = '<span class="num">?</span>Справочник';
+    el.addEventListener('click', ()=>{ switchTab('help'); closeMobileSidebar(); });
+    navAfter.after(el);
+  }
+  const s = document.createElement('section');
+  s.className = 'section'; s.id = 'tab-help';
+  s.innerHTML = `<div class="page-head"><div><h1>Справочник</h1><p>Инструкции по настройке рабочего места и работе в программе.</p></div></div>
+    <style>
+      #helpBody details{background:#fff;border:1px solid var(--line);border-radius:12px;margin-bottom:10px;max-width:860px}
+      #helpBody summary{cursor:pointer;padding:14px 18px;font-weight:600;font-size:15px;list-style:none}
+      #helpBody summary::-webkit-details-marker{display:none}
+      #helpBody .help-c{padding:0 18px 16px;font-size:14px;line-height:1.6}
+      #helpBody .help-c h4{margin:16px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft)}
+      #helpBody .help-c ol,#helpBody .help-c ul{margin:6px 0 6px 20px;padding:0}
+      #helpBody .help-c li{margin-bottom:5px}
+      #helpBody .help-c code{background:var(--paper,#f1ede4);padding:1px 5px;border-radius:4px}
+    </style>
+    <div id="helpBody">${HELP_ARTICLES.map((a,i)=>`<details ${i===0?'open':''}><summary>${a.title}</summary><div class="help-c">${a.html}</div></details>`).join('')}</div>`;
+  after.after(s);
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', helpInjectDom); else helpInjectDom();
