@@ -3135,8 +3135,11 @@ async function htmlToMonoBitmap(html, widthMm, heightMm){
   const dpi = 203;
   // Содержимое вёрстаем как альбомное (ширина и высота меняются местами), затем весь
   // холст поворачивается на 90° при растеризации — так же, как и с QR-картинкой от WB.
-  const contentWidthPx = Math.round(heightMm / 25.4 * dpi);
-  const contentHeightPx = Math.round(widthMm / 25.4 * dpi);
+  // При повороте 0° и 180° этикетка верстается как есть (ширина × высота); при 90° и 270° — с обменом сторон.
+  const rot = ((getLabelSettings().textRotation||0) % 360 + 360) % 360;
+  const swap = (rot === 90 || rot === 270);
+  const contentWidthPx = Math.round((swap ? heightMm : widthMm) / 25.4 * dpi);
+  const contentHeightPx = Math.round((swap ? widthMm : heightMm) / 25.4 * dpi);
   const svgWrapped = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${contentWidthPx}" height="${contentHeightPx}">
       <foreignObject width="100%" height="100%">
