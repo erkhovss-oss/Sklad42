@@ -819,7 +819,7 @@ async function fetchNewFbsOrders(silent){
     if(errors.length) toast(`Ошибки у ${errors.length} клиент(ов): ${errors.join(' | ')}`);
     else toast(`Проверено — новых заказов: ${totalFetched}`);
   }
-  if(assemblyModeQueue.length === 0) renderFbsBody();
+  if(!fbsAssemblyScreenOpen()) renderFbsBody();
 }
 async function backfillFbsSupplyIds(){
   const clientId = document.getElementById('fbsClientSelect').value;
@@ -1061,6 +1061,8 @@ function renderFbsBody(){
   }
 }
 let scanModeActive = false;
+// Открыт экран режима сборки / поиска заказа по скану — фоновые обновления не должны перерисовывать вкладку поверх него
+function fbsAssemblyScreenOpen(){ return scanModeActive || (typeof assemblyModeQueue!=='undefined' && assemblyModeQueue.length>0); }
 let assemblyDoneIds = new Set(); // заказы, обработанные в текущем сеансе сканирования: одинаковые товары идут по очереди, повторы видны
 let assemblyResume = null;       // откуда вернуться к очереди «Режима сборки» после поиска заказа
 let assemblyPreconfirm = null;   // заказ найден по штрихкоду товара — ШК уже отсканирован, повторно не просим
@@ -1675,7 +1677,7 @@ function watchPendingKiz(order){
           if(statusDiv) statusDiv.innerHTML = renderKizStatusLabel(order);
           if(data.kiz_status === 'attached'){ playBeep('ok'); toast(`✅ Заказ №${order.orderId}: КИЗ подтверждён WB`); }
           else if(data.kiz_status === 'verify_failed'){ playBeep('warn'); toast(`⚠ Заказ №${order.orderId}: WB не подтвердил КИЗ${data.kiz_decision ? ' ('+data.kiz_decision+')' : ''}`); }
-          if(!scanModeActive) renderFbsBody();
+          if(!fbsAssemblyScreenOpen()) renderFbsBody();
         }
       }catch(e){ /* сеть моргнула — следующая попытка или фоновая задача по расписанию */ }
     }
