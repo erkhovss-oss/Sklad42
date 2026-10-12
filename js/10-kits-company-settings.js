@@ -495,3 +495,191 @@ async function packCancelPortal(id){
   if(error || !data){ toast('Отменить нельзя — задание уже взято в работу'); }
   await packLoadPortal();
 }
+
+// ==================== ДУБЛЬ КИЗ ====================
+// Этикетка-дубль «Честного знака» для наружной допупаковки: сканируем КИЗ — печатаем DataMatrix с тем же кодом,
+// чтобы склад маркетплейса мог считать его, не вскрывая упаковку. Размер по настройкам этикетки (по умолчанию 58×40 мм).
+const KIZDUP_LIB_URL = 'https://cdn.jsdelivr.net/npm/bwip-js@4.5.1/dist/bwip-js-min.js';
+let kizDupLibPromise = null;
+let kizDupHistory = [];   // только в памяти страницы: коды в браузере не храним
+let kizDupLast = null;
+function kizDupLoadLib(){
+  if(window.bwipjs) return Promise.resolve();
+  if(!kizDupLibPromise){
+    kizDupLibPromise = new Promise((resolve, reject)=>{
+      const s = document.createElement('script');
+      s.src = KIZDUP_LIB_URL;
+      s.onload = ()=>resolve();
+      s.onerror = ()=>{ kizDupLibPromise = null; reject(new Error('Не загрузилась библиотека DataMatrix — проверьте интернет и повторите')); };
+      document.head.appendChild(s);
+    });
+  }
+  return kizDupLibPromise;
+}
+// Квадрат DataMatrix с целым числом пикселей на модуль (чёткий для термопринтера). Разделители GS кодируются как FNC1 — как в оригинальном коде.
+function kizDupMatrix(kiz, targetPx){
+  const text = '^FNC1' + String(kiz).replace(/\^/g, '^094').split(GS_CHAR).join('^FNC1');
+  const c = document.createElement('canvas');
+  window.bwipjs.toCanvas(c, { bcid:'datamatrix', text, parsefnc:true, scale:1, backgroundcolor:'FFFFFF' });
+  const modules = c.width;
+  const scale = Math.max(1, Math.floor(targetPx / modules));
+  window.bwipjs.toCanvas(c, { bcid:'datamatrix', text, parsefnc:true, scale, backgroundcolor:'FFFFFF' });
+  return { url: c.toDataURL('image/png'), px: c.width };
+}
+function kizDupReadable(kiz){
+  const parts = String(kiz).split(GS_CHAR);
+  const out = [];
+  const m = parts[0].match(/^01(\d{14})21(.+)$/);
+  if(m){ out.push('(01)'+m[1], '(21)'+m[2]); }
+  else out.push(parts[0]);
+  for(let i=1;i<parts.length;i++){
+    if(parts[i].length>2) out.push('('+parts[i].slice(0,2)+')'+parts[i].slice(2));
+    else out.push(parts[i]);
+  }
+  return out;
+}
+function kizDupSettings(){
+  let mode = null, auto = null;
+  try{ mode = localStorage.getItem('kizdup_mode'); auto = localStorage.getItem('kizdup_auto'); }catch(e){}
+  return { mode: mode || (window.qz ? 'qz' : 'browser'), auto: auto !== '0' };
+}
+function kizDupSet(key, val){ try{ localStorage.setItem(key, val); }catch(e){} }
+// u(мм) → единицы вёрстки: px для растра термопринтера (203 dpi) или мм для окна печати
+function kizDupLabelHtml(kiz, note, u, matrix){
+  const lines = kizDupReadable(kiz).map(l=>`<div>${escapeHtml(l)}</div>`).join('');
+  return `<div style="display:flex;align-items:center;gap:${u(1.5)};width:100%;height:100%;padding:${u(2)};box-sizing:border-box;background:#fff;font-family:Arial,sans-serif;color:#000">
+    <img src="${matrix.url}" style="width:${u(34)};height:${u(34)};image-rendering:pixelated;flex:none">
+    <div style="flex:1;min-width:0;overflow:hidden">
+      <div style="font-size:${u(2.6)};font-weight:700;margin-bottom:${u(1)}">ЧЗ · дубль</div>
+      <div style="font-family:'Courier New',monospace;font-size:${u(2.2)};line-height:1.25;word-break:break-all">${lines}</div>
+      ${note ? `<div style="font-size:${u(2.4)};font-weight:700;margin-top:${u(1.2)};line-height:1.2">${escapeHtml(note)}</div>` : ''}
+    </div>
+  </div>`;
+}
+async function kizDupPrint(kiz, copies, note){
+  try{ await kizDupLoadLib(); }catch(e){ toast(e.message); return false; }
+  const st = kizDupSettings();
+  if(st.mode === 'qz'){
+    const ok = await connectThermalPrinter();
+    if(!ok) return false;
+    const ls = getLabelSettings();
+    const mm2px = (mm)=> Math.round(mm / 25.4 * 203) + 'px';
+    const matrix = kizDupMatrix(kiz, Math.round(34 / 25.4 * 203));
+    const bitmap = await htmlToMonoBitmap(kizDupLabelHtml(kiz, note, mm2px, matrix), ls.widthMm, ls.heightMm);
+    for(let i=0;i<copies;i++){
+      const done = await printBitmapOnThermalPrinter(ls.widthMm, ls.heightMm, bitmap);
+      if(!done){ toast('Печать остановлена — проблема с принтером'); return false; }
+    }
+    return true;
+  }
+  const mmU = (mm)=> mm + 'mm';
+  const matrix = kizDupMatrix(kiz, 272);
+  const label = kizDupLabelHtml(kiz, note, mmU, matrix);
+  const win = window.open('', '_blank');
+  if(!win){ toast('Браузер заблокировал окно печати — разрешите всплывающие окна для сайта'); return false; }
+  win.document.write(`<html><head><title>Дубль КИЗ</title><style>@page{size:58mm 40mm;margin:0} html,body{margin:0;padding:0} .l{width:58mm;height:40mm;overflow:hidden;page-break-after:always}</style></head><body>${Array.from({length:copies}, ()=>`<div class="l">${label}</div>`).join('')}<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
+  win.document.close();
+  return true;
+}
+function kizDupInjectDom(){
+  if(document.getElementById('tab-kizdup')) return;
+  const after = document.getElementById('tab-packing');
+  if(!after) return;
+  const navAfter = document.querySelector('.nav-item[data-tab="packing"]') || document.querySelector('.nav-item[data-tab="ozon"]');
+  if(navAfter){
+    const el = document.createElement('div');
+    el.className = 'nav-item'; el.dataset.tab = 'kizdup';
+    el.innerHTML = '<span class="num">▦</span>Дубль КИЗ';
+    el.addEventListener('click', ()=>{ switchTab('kizdup'); closeMobileSidebar(); });
+    navAfter.after(el);
+  }
+  const s = document.createElement('section');
+  s.className = 'section'; s.id = 'tab-kizdup';
+  s.innerHTML = `<div class="page-head"><div><h1>Дубль КИЗ</h1><p>Отсканируйте код «Честного знака» — напечатается этикетка-дубль с тем же DataMatrix для наружной упаковки.</p></div></div>
+    <div class="panel" style="padding:20px;margin-bottom:18px;max-width:760px">
+      <div class="eyebrow" style="margin-bottom:8px">Сканер</div>
+      <input class="search" id="kizDupInput" style="width:100%;font-size:16px" placeholder="Отсканируйте КИЗ…" autocomplete="off">
+      <div style="font-size:12px;color:var(--ink-faint);margin-top:6px">Раскладка ввода переключается на английскую сама. Caps Lock должен быть выключен.</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px;align-items:end">
+        <div><div class="eyebrow" style="margin-bottom:4px">Копий</div><input class="search" id="kizDupCopies" type="number" min="1" max="50" value="1" style="width:80px"></div>
+        <div style="flex:1;min-width:180px"><div class="eyebrow" style="margin-bottom:4px">Текст на этикетке (необязательно)</div><input class="search" id="kizDupNote" style="width:100%" placeholder="Например: артикул или название"></div>
+        <div><div class="eyebrow" style="margin-bottom:4px">Печать</div><select class="search" id="kizDupMode" onchange="kizDupSet('kizdup_mode', this.value)"><option value="qz">Термопринтер (QZ Tray)</option><option value="browser">Окно печати браузера</option></select></div>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:14px;font-size:13px;cursor:pointer"><input type="checkbox" id="kizDupAuto" onchange="kizDupSet('kizdup_auto', this.checked?'1':'0')"> Печатать сразу после скана</label>
+    </div>
+    <div id="kizDupPreview" style="margin-bottom:18px"></div>
+    <div id="kizDupHistory"></div>`;
+  after.after(s);
+  const input = document.getElementById('kizDupInput');
+  forceEnglishInput(input);
+  input.addEventListener('keydown', (e)=>{
+    if(e.key !== 'Enter') return;
+    e.preventDefault();
+    // сканер дописывает последний символ чуть позже — читаем значение после паузы
+    setTimeout(()=>{ const raw = input.value; input.value = ''; kizDupHandleScan(raw); }, 0);
+  });
+  const st = kizDupSettings();
+  document.getElementById('kizDupMode').value = st.mode;
+  document.getElementById('kizDupAuto').checked = st.auto;
+}
+function kizDupFocus(){
+  kizDupInjectDom();
+  setTimeout(()=>{ const el = document.getElementById('kizDupInput'); if(el) el.focus(); }, 50);
+}
+async function kizDupHandleScan(raw){
+  const norm = normalizeKizInput(fromRuLayout(raw));
+  const kiz = norm.code;
+  if(!kiz) return;
+  if(kiz.length < MIN_KIZ_LENGTH){ playBeep('error'); toast(`Код слишком короткий (${kiz.length} симв.) — отсканируйте ещё раз`); return; }
+  const copies = Math.max(1, Math.min(50, parseInt(document.getElementById('kizDupCopies').value)||1));
+  const note = document.getElementById('kizDupNote').value.trim();
+  kizDupLast = { kiz, copies, note, gs: norm.gsCount, restored: norm.restored };
+  try{ await kizDupLoadLib(); }catch(e){ toast(e.message); return; }
+  kizDupRenderPreview();
+  if(document.getElementById('kizDupAuto').checked){
+    const ok = await kizDupPrint(kiz, copies, note);
+    if(ok){ playBeep('ok'); kizDupAddHistory(kiz, note); }
+    else playBeep('error');
+  } else {
+    playBeep('ok');
+  }
+  const el = document.getElementById('kizDupInput'); if(el) el.focus();
+}
+function kizDupAddHistory(kiz, note){
+  kizDupHistory.unshift({ kiz, note, time: new Date().toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}) });
+  kizDupHistory = kizDupHistory.slice(0, 10);
+  kizDupRenderHistory();
+}
+function kizDupRenderPreview(){
+  const box = document.getElementById('kizDupPreview');
+  if(!box || !kizDupLast) return;
+  const { kiz, note, gs, restored } = kizDupLast;
+  const matrix = kizDupMatrix(kiz, 272);
+  box.innerHTML = `<div class="eyebrow" style="margin-bottom:8px">Предпросмотр этикетки</div>
+    <div style="display:inline-block;border:1px dashed var(--line);background:#fff;width:58mm;height:40mm;max-width:100%">${kizDupLabelHtml(kiz, note, (mm)=>mm+'mm', matrix)}</div>
+    <div style="font-size:12px;color:var(--ink-faint);margin-top:6px">Разделителей GS в коде: ${gs}${restored ? ' (восстановлены автоматически)' : ''}</div>
+    ${document.getElementById('kizDupAuto').checked ? '' : `<div style="margin-top:10px"><button class="btn btn-accent" onclick="kizDupPrintLast()">🖨 Печать</button></div>`}`;
+}
+async function kizDupPrintLast(){
+  if(!kizDupLast) return;
+  const copies = Math.max(1, Math.min(50, parseInt(document.getElementById('kizDupCopies').value)||1));
+  const note = document.getElementById('kizDupNote').value.trim();
+  const ok = await kizDupPrint(kizDupLast.kiz, copies, note);
+  if(ok){ playBeep('ok'); kizDupAddHistory(kizDupLast.kiz, note); }
+}
+async function kizDupReprint(i){
+  const h = kizDupHistory[i]; if(!h) return;
+  const copies = Math.max(1, Math.min(50, parseInt(document.getElementById('kizDupCopies').value)||1));
+  await kizDupPrint(h.kiz, copies, h.note);
+}
+function kizDupRenderHistory(){
+  const box = document.getElementById('kizDupHistory');
+  if(!box) return;
+  if(!kizDupHistory.length){ box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="eyebrow" style="margin-bottom:8px">Напечатано в этом сеансе</div>` + kizDupHistory.map((h,i)=>`
+    <div class="panel" style="padding:10px 14px;margin-bottom:6px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+      <div style="min-width:0"><div class="mono" style="font-size:12px;word-break:break-all">${escapeHtml(kizDupReadable(h.kiz).join(' '))}</div><div style="font-size:11px;color:var(--ink-faint)">${h.time}${h.note ? ' · ' + escapeHtml(h.note) : ''}</div></div>
+      <button class="btn btn-ghost" style="padding:5px 12px" onclick="kizDupReprint(${i})">🖨 Ещё раз</button>
+    </div>`).join('');
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', kizDupInjectDom); else kizDupInjectDom();
