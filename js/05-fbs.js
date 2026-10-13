@@ -2276,7 +2276,33 @@ async function printSupplyBoxQr(supplyId, clientId){
   if(!ids.length){ toast('У этой поставки нет грузомест — для отгрузки в ПВЗ они создаются до передачи в доставку'); return; }
   printBoxStickerWindow(ids, data.stickers || []);
 }
-function printBoxStickerWindow(ids, stickers){
+// QR грузомест: сначала на термопринтер через QZ Tray (как этикетки заказов), если не вышло — окно печати браузера
+async function printBoxStickerWindow(ids, stickers){
+  const okStickers = (ids||[]).map((id, i)=>{
+    const no = shipBoxNo(id);
+    return stickers.find(x=>String(x.barcode||'').split(':').pop()===no) || stickers[i];
+  });
+  const haveAll = okStickers.length && okStickers.every(s=>s && s.file);
+  let mode = 'qz';
+  try{ if(typeof kizDupSettings==='function') mode = kizDupSettings().mode; else mode = window.qz ? 'qz' : 'browser'; }catch(e){}
+  if(mode === 'qz' && window.qz && haveAll){
+    try{
+      const connected = await connectThermalPrinter();
+      if(connected){
+        const ls = getLabelSettings();
+        toast(`Печатаем QR грузомест на принтере: ${okStickers.length}…`);
+        for(let i=0;i<okStickers.length;i++){
+          const done = await printSvgOnThermalPrinter(okStickers[i].file, ls.widthMm, ls.heightMm);
+          if(!done){ toast('Печать остановлена — проблема с принтером'); return; }
+        }
+        toast(`🖨 QR грузомест отправлены на принтер (${okStickers.length})`);
+        return;
+      }
+    }catch(e){ console.error(e); toast('Не удалось напечатать через QZ Tray — открываю окно печати'); }
+  }
+  printBoxStickerBrowserWindow(ids, stickers);
+}
+function printBoxStickerBrowserWindow(ids, stickers){
   const win = window.open('', '_blank');
   if(!win){ toast('Браузер заблокировал окно печати — разрешите всплывающие окна для сайта'); return; }
   // в стикере от WB нет номера короба, только закодированное значение (…:номер) — сопоставляем по нему, иначе по порядку
