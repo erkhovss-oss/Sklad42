@@ -2079,18 +2079,26 @@ async function bulkAssembleSelectedFbsOrders(){
     toast('Все выбранные заказы требуют КИЗ — соберите их по одному кнопкой «Собрать»');
     return;
   }
+  if(window.__bulkAssembling){ toast('Сборка уже идёт — дождитесь окончания'); return; }
+  window.__bulkAssembling = true;
   toast(`Собираем ${withoutKiz.length} заказ(ов)…`);
   // Раньше заказы отправлялись строго по одному с паузой 300 мс (30 заказов ≈ минута).
   // Теперь по 5 одновременно: WB спокойно выдерживает, а время сборки партии сокращается в разы.
-  let nextIdx = 0;
-  const worker = async ()=>{
-    while(nextIdx < withoutKiz.length){
-      const order = withoutKiz[nextIdx++];
-      try{ await finishAssembleOrder(order, null, true); }
-      catch(e){ console.error(e); toast(`Ошибка при сборке заказа №${order.orderId}: ${e.message||e}`); }
-    }
+  // Первый заказ каждого клиента идёт отдельно (он создаёт поставку у WB — параллельно это даёт лишние поставки и лимит запросов 429),
+  // остальные — по 3 одновременно.
+  const firstDone = new Set();
+  const firstOrders = withoutKiz.filter(o=>{ if(firstDone.has(o.clientId)) return false; firstDone.add(o.clientId); return true; });
+  const restOrders = withoutKiz.filter(o=>!firstOrders.includes(o));
+  const runOne = async (order)=>{
+    try{ await finishAssembleOrder(order, null, true); }
+    catch(e){ console.error(e); toast(`Ошибка при сборке заказа №${order.orderId}: ${e.message||e}`); }
   };
-  await Promise.all(Array.from({length: Math.min(5, withoutKiz.length)}, worker));
+  try{
+    for(const o of firstOrders) await runOne(o);
+    let nextIdx = 0;
+    const worker = async ()=>{ while(nextIdx < restOrders.length) await runOne(restOrders[nextIdx++]); };
+    await Promise.all(Array.from({length: Math.min(3, restOrders.length)}, worker));
+  } finally { window.__bulkAssembling = false; }
   fbsSelectedOrders = withKiz.map(o=>o.orderId);
   if(withKiz.length){
     toast(`Готово. Осталось собрать с КИЗ вручную: ${withKiz.length}`);
@@ -2107,7 +2115,32 @@ async function extractEdgeFunctionError(data, error, fallback){
   }
   return msg;
 }
+const assemblingInFlight = new Set();   // заказы, которые прямо сейчас отправляются на сборку (защита от повторного списания остатка)
+// Откат списания, если WB заказ не принял: возвращаем остаток и убираем начисление за отгрузку
+function undoAssembleDeduction(inv, order, ddsCreated){
+  try{
+    if(inv.isKit && inv.kitMode==='virtual'){
+      getKitComponents(inv).forEach(c=>{
+        const compItem = findInventoryItem(c.componentSku, inv.client, c.componentSize, inv.warehouseId);
+        if(!compItem) return;
+        const back = c.qtyNeeded;
+        compItem.qty += back;
+        logMovement(compItem.sku, compItem.name, back, `Возврат: заказ FBS №${order.orderId} не принят WB (составляющая набора «${inv.name}»)`, compItem.client, compItem.size, compItem.warehouseId||'MAIN');
+      });
+    } else {
+      inv.qty += 1;
+      logMovement(inv.sku, inv.name, 1, `Возврат: заказ FBS №${order.orderId} не принят WB`, inv.client, inv.size, inv.warehouseId||'MAIN');
+    }
+    if(ddsCreated){
+      const idx = ddsEntries.findIndex(d=>d.id===ddsCreated);
+      if(idx>=0) ddsEntries.splice(idx,1);
+      sb.from('dds_entries').delete().eq('id', ddsCreated).then(({error})=>{ if(error) console.error(error); });
+    }
+  }catch(e){ console.error(e); }
+}
 function finishAssembleOrder(order, kizCode, skipViewSwitch){
+  if(assemblingInFlight.has(order.orderId)){ toast(`Заказ №${order.orderId} уже отправляется на сборку — подождите`); return; }
+  if(order.supplierStatus && order.supplierStatus!=='new'){ return; }
   const client = clients.find(c=>c.id===order.clientId);
   const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
   const available = inv ? (inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty) : 0;
@@ -2115,6 +2148,8 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
     toast(`Недостаточно на складе «${order.name||order.article}» — нет в остатках`);
     return;
   }
+  assemblingInFlight.add(order.orderId);
+  let ddsCreatedId = null;
   deductStockForShipment(inv, 1, `Сборка заказа FBS №${order.orderId}`);
   if(inv.dims && inv.dims.l && inv.dims.w && inv.dims.h){
     const liters = (inv.dims.l * inv.dims.w * inv.dims.h) / 1000;
@@ -2125,6 +2160,7 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
         const description = `Отгрузка FBS №${order.orderId} · ${liters.toFixed(2)} л`;
         const entry = {id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, clientId:order.clientId, clientName:order.clientName, date:new Date().toISOString().slice(0,10), warehouseId: inv.warehouseId||'MAIN', createdAt:new Date().toISOString()};
         ddsEntries.unshift(entry);
+        ddsCreatedId = ddsId;
         sb.from('dds_entries').insert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, client_id:order.clientId, client_name:order.clientName, date:entry.date, warehouse_id: inv.warehouseId||'MAIN', employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
           if(error) console.error(error);
         });
@@ -2135,10 +2171,25 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
   toast(`Заказ №${order.orderId} отправлен на сборку`);
   renderFbsBody();
 
-  return sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'assemble', orderId: order.orderId, kizCode } }).then(async ({data, error})=>{
+  // WB иногда отвечает 429 «Too Many Requests» (лимит запросов) — это не отказ по заказу: ждём и повторяем до 4 раз, и только потом откатываем
+  const invokeAssemble = async ()=>{
+    let res = null;
+    for(let attempt=0; attempt<4; attempt++){
+      res = await sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'assemble', orderId: order.orderId, kizCode } });
+      if(!(res.error || (res.data && res.data.error))) return res;
+      const m = await extractEdgeFunctionError(res.data, res.error);
+      if(!/429|Too Many Requests|rate limit/i.test(String(m))) return res;
+      await new Promise(r=>setTimeout(r, 2500 + attempt*2500 + Math.random()*1000));
+    }
+    return res;
+  };
+  return invokeAssemble().then(async ({data, error})=>{
+    assemblingInFlight.delete(order.orderId);
     if(error || (data && data.error)){
       const msg = await extractEdgeFunctionError(data, error);
-      toast('WB (сборка): ' + msg);
+      undoAssembleDeduction(inv, order, ddsCreatedId);
+      toast(`WB (сборка заказа №${order.orderId}): ${msg}. Остаток возвращён — заказ остался в «Новых», повторите позже`);
+      renderFbsBody();
       return;
     }
     order.supplierStatus = 'confirm';
@@ -2152,6 +2203,11 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
     if(skipViewSwitch) renderFbsBody();
     else if(fbsView!=='confirm') setFbsView('confirm');
     else renderFbsBody();
+  }).catch(e=>{
+    assemblingInFlight.delete(order.orderId);
+    undoAssembleDeduction(inv, order, ddsCreatedId);
+    toast(`Сборка заказа №${order.orderId}: ${e.message||e}. Остаток возвращён`);
+    renderFbsBody();
   });
 }
 async function cancelFbsOrder(orderId){
