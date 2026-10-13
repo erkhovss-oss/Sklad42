@@ -1759,8 +1759,9 @@ function watchPendingKiz(order){
           if(data.kiz_code) order.kizCode = data.kiz_code;
           const twin = fbsOrders.find(o=>o.orderId===order.orderId);
           if(twin && twin!==order){ twin.kizStatus = order.kizStatus; twin.kizDecision = order.kizDecision; if(order.kizCode) twin.kizCode = order.kizCode; }
+          // статус рисуем только если на экране сейчас именно этот заказ (иначе статус прошлого заказа попадал на экран следующего)
           const statusDiv = document.getElementById('wizardKizStatus');
-          if(statusDiv) statusDiv.innerHTML = renderKizStatusLabel(order);
+          if(statusDiv && assemblyModeQueue[assemblyModeIndex] === order) statusDiv.innerHTML = renderKizStatusLabel(order);
           if(data.kiz_status === 'attached'){ playBeep('ok'); toast(`✅ Заказ №${order.orderId}: КИЗ подтверждён WB`); }
           else if(data.kiz_status === 'verify_failed'){ playBeep('warn'); toast(`⚠ Заказ №${order.orderId}: WB не подтвердил КИЗ${data.kiz_decision ? ' ('+data.kiz_decision+')' : ''}`); }
           if(!fbsAssemblyScreenOpen()) renderFbsBody();
@@ -1838,7 +1839,7 @@ function wizardAttachKiz(order, kizCode, norm){
     }
     else { backToOrder('⚠ Заказ №' + order.orderId + ': WB не подтвердил КИЗ — ' + (data.warning||'проверьте вручную')); }
     const statusDiv = document.getElementById('wizardKizStatus');
-    if(statusDiv) statusDiv.innerHTML = renderKizStatusLabel(order);
+    if(statusDiv && assemblyModeQueue[assemblyModeIndex] === order) statusDiv.innerHTML = renderKizStatusLabel(order);
     // КИЗ принят (или WB ещё проверяет — досмотрим сами): заказ готов, открываем поиск следующего.
     // Если WB КИЗ не принял — остаёмся на заказе, чтобы сразу отсканировать другой код.
     if(data.kizStatus !== 'verify_failed' && !movedOn && assemblyModeQueue[assemblyModeIndex] === order) wizardOrderDone(order);
