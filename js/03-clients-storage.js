@@ -406,8 +406,8 @@ async function loadWbProducts(clientId){
     });
     client.wbProducts = products;
     const pending = planWbBarcodeSync(client);
-    const newCodes = pending.setMain.length + pending.addExtras.length;
-    toast(`Получено карточек: ${cards.length} (позиций с учётом размеров: ${products.length})${newCodes ? ` · новых штрихкодов у существующих товаров: ${newCodes} — нажмите «Обновить штрихкоды»` : ''}`);
+    const newCodes = pending.setMain.length + pending.addExtras.length + pending.dims.length;
+    toast(`Получено карточек: ${cards.length} (позиций с учётом размеров: ${products.length})${newCodes ? ` · новых штрихкодов/габаритов у существующих товаров: ${newCodes} — нажмите «Обновить штрихкоды»` : ''}`);
     renderClients();
     return true;
   }catch(e){
@@ -441,9 +441,18 @@ function itemAllBarcodes(item){
 //  addExtras — у товара есть штрихкод, а в WB добавили ещё: добавить как дополнительные
 //  conflicts — штрихкод из WB уже числится у ДРУГОГО товара этого клиента: не трогаем, показываем
 function planWbBarcodeSync(client){
-  const plan = {setMain:[], addExtras:[], conflicts:[], unmatched:0};
+  const plan = {setMain:[], addExtras:[], conflicts:[], unmatched:0, dims:[]};
   const seen = new Set();
+  const dimsSeen = new Set();
   (client.wbProducts||[]).forEach(p=>{
+    // габариты из карточки WB — только туда, где у нас они не заполнены (заполненные вручную не перезаписываем)
+    if(p.dims && p.dims.l && p.dims.w && p.dims.h){
+      const it = findInventoryItemForWb(p.vendorCode || ('WB-'+p.nmId), client.name, p.size||'');
+      if(it && !(it.dims && it.dims.l && it.dims.w && it.dims.h)){
+        const k = it.sku+'~~'+(it.size||'');
+        if(!dimsSeen.has(k)){ dimsSeen.add(k); plan.dims.push({item:it, dims:p.dims}); }
+      }
+    }
     const codes = (p.barcodes && p.barcodes.length ? p.barcodes : (p.barcode ? [p.barcode] : [])).map(String);
     if(!codes.length) return;
     const item = findInventoryItemForWb(p.vendorCode || ('WB-'+p.nmId), client.name, p.size||'');
@@ -480,9 +489,9 @@ function openWbBarcodePreview(clientId){
   const client = clients.find(c=>c.id===clientId);
   if(!client) return;
   const plan = planWbBarcodeSync(client);
-  const total = plan.setMain.length + plan.addExtras.length;
+  const total = plan.setMain.length + plan.addExtras.length + plan.dims.length;
   if(!total && !plan.conflicts.length){
-    toast(`Все штрихкоды из WB уже есть в системе${plan.unmatched ? ` (карточек WB без товара в остатках: ${plan.unmatched} — они добавляются кнопкой «Добавить в остатки»)` : ''}`);
+    toast(`Штрихкоды и габариты из WB уже есть в системе${plan.unmatched ? ` (карточек WB без товара в остатках: ${plan.unmatched} — они добавляются кнопкой «Добавить в остатки»)` : ''}`);
     return;
   }
   closeWbBarcodePreview();
@@ -501,8 +510,9 @@ function openWbBarcodePreview(clientId){
     <div style="background:#fff;border-radius:14px;padding:22px;max-width:680px;width:100%;max-height:90vh;display:flex;flex-direction:column">
       <h3 style="margin:0 0 6px 0;font-size:18px">Обновление штрихкодов из WB</h3>
       <p style="font-size:13px;color:var(--ink-soft);line-height:1.6;margin:0 0 12px 0">
-        ${client.name}: ${total ? `будет добавлено штрихкодов — <b>${total}</b> (у товаров: <b>${groups.length}</b>)${plan.setMain.length ? `, из них основным у ${plan.setMain.length} товаров, где штрихкода не было` : ''}.` : 'добавлять нечего.'}
-        Названия, габариты и остатки не меняются. Существующие штрихкоды не удаляются.
+        ${client.name}: ${(plan.setMain.length+plan.addExtras.length) ? `будет добавлено штрихкодов — <b>${plan.setMain.length+plan.addExtras.length}</b> (у товаров: <b>${groups.length}</b>)${plan.setMain.length ? `, из них основным у ${plan.setMain.length} товаров, где штрихкода не было` : ''}.` : 'новых штрихкодов нет.'}
+        ${plan.dims.length ? `Габариты из карточек WB будут проставлены у <b>${plan.dims.length}</b> товаров, где они не заполнены.` : ''}
+        Названия и остатки не меняются, уже заполненные габариты не перезаписываются. Существующие штрихкоды не удаляются.
       </p>
       <div style="overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:4px 12px;margin-bottom:12px;flex:1;min-height:60px">
         ${shown.map(g=>`
@@ -511,6 +521,8 @@ function openWbBarcodePreview(clientId){
             <div class="mono" style="font-size:11px;color:var(--ok)">＋ ${g.codes.map(escapeHtml).join(' · ')}${g.main ? ' (основной)' : ''}</div>
           </div>`).join('')}
         ${groups.length>shown.length ? `<div style="padding:8px 0;font-size:12px;color:var(--ink-faint)">…и ещё ${groups.length-shown.length} товаров</div>` : ''}
+        ${plan.dims.slice(0,40).map(x=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><div style="font-size:13px;font-weight:600">${escapeHtml(x.item.name||x.item.sku)}${x.item.size?` · ${escapeHtml(x.item.size)}`:''} <span class="mono" style="font-weight:400;font-size:11px;color:var(--ink-faint)">${escapeHtml(x.item.sku)}</span></div><div class="mono" style="font-size:11px;color:var(--ok)">＋ габариты ${x.dims.l}×${x.dims.w}×${x.dims.h} см</div></div>`).join('')}
+        ${plan.dims.length>40 ? `<div style="padding:8px 0;font-size:12px;color:var(--ink-faint)">…и габариты ещё у ${plan.dims.length-40} товаров</div>` : ''}
         ${plan.conflicts.length ? `
           <div style="padding:10px 0 6px 0;font-size:12px;font-weight:700;color:var(--warn)">Не будут добавлены (штрихкод уже числится за другим товаром): ${plan.conflicts.length}</div>
           ${plan.conflicts.slice(0,15).map(x=>`<div style="padding:4px 0;font-size:12px;color:var(--ink-soft)"><span class="mono">${escapeHtml(x.barcode)}</span> — карточка «${escapeHtml(x.product.name||x.product.vendorCode)}», в системе занят товаром «${escapeHtml(x.owner.name||x.owner.sku)}»</div>`).join('')}` : ''}
@@ -527,11 +539,17 @@ async function applyWbBarcodeSync(clientId){
   const client = clients.find(c=>c.id===clientId);
   if(!client) return;
   const plan = planWbBarcodeSync(client); // пересчитываем заново — пока окно было открыто, данные могли измениться
-  const total = plan.setMain.length + plan.addExtras.length;
+  const total = plan.setMain.length + plan.addExtras.length + plan.dims.length;
   const applyBtn = document.getElementById('wbBarcodeApplyBtn');
   if(applyBtn){ applyBtn.disabled = true; applyBtn.textContent = '⏳ Сохраняю…'; }
   if(!total){ closeWbBarcodePreview(); toast('Менять нечего — всё уже обновлено'); return; }
-  let mainSet = 0, extrasAdded = 0, failed = 0;
+  let mainSet = 0, extrasAdded = 0, failed = 0, dimsSet = 0;
+  for(const d of plan.dims){
+    const rows = inventory.filter(i=>(i.client||'')===(d.item.client||'') && i.sku===d.item.sku && (i.size||'')===(d.item.size||''));
+    rows.forEach(r=>{ r.dims = {l:d.dims.l, w:d.dims.w, h:d.dims.h, weight:d.dims.weight||0}; });
+    for(const r of rows) await syncInventoryRow(r.sku, r.client, r.size, r.warehouseId);
+    dimsSet++;
+  }
   for(const m of plan.setMain){
     const rows = inventory.filter(i=>(i.client||'')===(m.item.client||'') && i.sku===m.item.sku && (i.size||'')===(m.item.size||''));
     rows.forEach(r=>{ r.barcode = m.barcode; });
@@ -551,7 +569,7 @@ async function applyWbBarcodeSync(clientId){
     extrasAdded += chunk.length;
   }
   closeWbBarcodePreview();
-  toast(`Штрихкоды обновлены: проставлено основных ${mainSet}, добавлено дополнительных ${extrasAdded}${failed ? ` · не сохранилось: ${failed} — повторите` : ''}`);
+  toast(`Обновлено из WB: габариты у ${dimsSet} товаров, основных штрихкодов ${mainSet}, дополнительных ${extrasAdded}${failed ? ` · не сохранилось: ${failed} — повторите` : ''}`);
   renderClients();
   renderInventory();
 }
@@ -824,7 +842,7 @@ function renderClientDetail(body){
         <div class="barcode-rule"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <button class="btn btn-accent" onclick="loadWbProducts('${c.id}')">↓ Загрузить карточки товаров</button>
-          <button class="btn btn-ghost" onclick="syncWbBarcodes('${c.id}')" title="Подтягивает из WB все штрихкоды карточек и добавляет те, которых у нас нет. Перед сохранением покажет, что именно изменится.">🔄 Обновить штрихкоды из WB${(()=>{ if(!c.wbProducts.length) return ''; const pl = planWbBarcodeSync(c); const n = pl.setMain.length + pl.addExtras.length; return n ? ` (новых: ${n})` : ''; })()}</button>
+          <button class="btn btn-ghost" onclick="syncWbBarcodes('${c.id}')" title="Подтягивает из WB штрихкоды карточек (добавляет недостающие) и габариты (где они у нас не заполнены). Перед сохранением покажет, что именно изменится.">🔄 Обновить штрихкоды и габариты из WB${(()=>{ if(!c.wbProducts.length) return ''; const pl = planWbBarcodeSync(c); const n = pl.setMain.length + pl.addExtras.length + pl.dims.length; return n ? ` (новых: ${n})` : ''; })()}</button>
         </div>
         ${c.wbProducts.length ? `
           <div style="display:flex;gap:8px;margin-top:14px;margin-bottom:4px;flex-wrap:wrap">
