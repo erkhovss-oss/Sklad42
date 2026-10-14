@@ -2224,10 +2224,24 @@ const SHIP_POINT_TYPES = {pp:'ПВЗ', sc:'СЦ', sw:'Склад'};
 let shipState = null;
 
 async function supplyCall(clientId, action, extra){
-  const { data, error } = await sb.functions.invoke('wb-supply-ts', { body: Object.assign({clientId, action}, extra||{}) });
-  if(error) throw new Error(await extractFnErrorMessage(error));
-  if(data && data.error){ const e = new Error(data.error); e.payload = data; throw e; }
-  return data;
+  // 'info' — только чтение: безопасно повторять при таймауте/429/временных ошибках WB. Остальные действия не повторяем (могут менять данные).
+  const attempts = action==='info' ? 3 : 1;
+  const timeoutMs = action==='info' ? 20000 : 60000;
+  let lastErr;
+  for(let i=1; i<=attempts; i++){
+    try{
+      const call = sb.functions.invoke('wb-supply-ts', { body: Object.assign({clientId, action}, extra||{}) });
+      const { data, error } = await Promise.race([call, new Promise((_, rej)=>setTimeout(()=>rej(new Error('WB не ответил за ' + Math.round(timeoutMs/1000) + ' с')), timeoutMs))]);
+      if(error) throw new Error(await extractFnErrorMessage(error));
+      if(data && data.error){ const e = new Error(data.error); e.payload = data; throw e; }
+      return data;
+    }catch(e){
+      lastErr = e;
+      if(e && e.payload) throw e; // осмысленный ответ с ошибкой от WB — повторять нечего
+      if(i < attempts) await new Promise(r=>setTimeout(r, 1500*i));
+    }
+  }
+  throw lastErr;
 }
 function shipBoxNo(id){ return String(id).replace(/^WB-(?:MP|TRBX)-/, ''); }
 // по правилам WB грузомест не больше, чем половина заказов (но хотя бы одно)
@@ -2397,7 +2411,7 @@ function shipRender(){
   const head = `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
       <div><div class="eyebrow">Заказы FBS · ${escapeHtml(st.clientName)}</div><h2 style="margin:2px 0 0 0;font-size:22px">Отгрузка поставки</h2></div>
       <button class="btn btn-ghost" onclick="closeSupplyShipment()" ${st.busy?'disabled':''}>✕ Закрыть</button></div>`;
-  if(st.fatal){ box.innerHTML = head + `<p style="margin-top:16px;color:var(--warn);font-size:13px">${escapeHtml(st.error)}</p>`; return; }
+  if(st.fatal){ box.innerHTML = head + `<p style="margin-top:16px;color:var(--warn);font-size:13px">${escapeHtml(st.error)}</p><button class="btn" style="margin-top:10px" onclick="(function(){const s=shipState; if(!s) return; const c=s.clientId, o=s.orders; openSupplyShipment(c,o);})()">↻ Повторить</button>`; return; }
   if(!st.supply){ box.innerHTML = head + `<p style="margin-top:20px;font-size:13px;color:var(--ink-soft)">⏳ Запрашиваю поставку у WB…</p>`; return; }
   const n = shipOrdersCount();
   const mismatch = st.orders.length && st.orderIds.length && st.orders.length !== st.orderIds.length;
