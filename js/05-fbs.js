@@ -1173,7 +1173,7 @@ function renderScanModeScreen(msg, msgIsError){
     <div class="panel" style="padding:30px;text-align:center;max-width:520px;margin:0 auto">
       <div class="eyebrow" style="margin-bottom:10px">Поиск заказа</div>
       ${pickProgressHtml()}
-      <p style="font-size:13px;color:var(--ink-soft);margin-bottom:20px">Отсканируйте стикер заказа (или штрихкод товара, или введите номер заказа) — заказ откроется автоматически.</p>
+      <p style="font-size:13px;color:var(--ink-soft);margin-bottom:20px">Отсканируйте стикер заказа WB (код вида *DbEFl55V) — заказ откроется автоматически.</p>
       <input class="search mono" id="orderScanInput" placeholder="Ждём скан…" style="width:100%;text-align:center;font-size:16px;padding:14px" autofocus
         onkeydown="if(event.key==='Enter') handleOrderScan(this)">
       ${msg ? `<p style="font-size:13px;margin-top:14px;font-weight:600;color:${msgIsError?'var(--warn)':'var(--ok)'}">${escapeHtml(msg)}</p>` : ''}
@@ -1222,28 +1222,11 @@ async function ensureStickerCodes(pool){
 // Что отсканировано → какой заказ: номер заказа, rid, код стикера, штрихкод товара, артикул. Если товар один и тот же в нескольких
 // заказах, берём ещё не обработанный в этом сеансе. via сообщает, чем нашли (по штрихкоду товара ШК уже подтверждён).
 function findOrderForScan(raw, pool){
+  // Только код стикера WB (со скана этикетки, например «*DbEFl55V»); номер заказа, штрихкод товара и артикул не ищем
   const key = stickerKey(raw);
-  const undoneFirst = (list)=> list.find(o=>!isOrderPicked(o)) || null;
-  let o = pool.find(x=>String(x.orderId)===raw) || pool.find(x=>x.rid && x.rid===raw);
-  if(o) return {order:o, via:'order'};
-  if(key.length >= 6){
-    o = pool.find(x=>x.stickerCode && (x.stickerCode===raw || stickerKey(x.stickerCode)===key));
-    if(o) return {order:o, via:'sticker'};
-  }
-  for(const [field, via] of [['barcode','barcode'], ['article','article']]){
-    const matches = pool.filter(x=>x[field] && x[field]===raw);
-    if(matches.length){
-      const next = undoneFirst(matches);
-      if(!next) return {order:null, via, allDone:matches.length};
-      return {order:next, via};
-    }
-  }
-  const digits = (raw.match(/\d{4,}/g) || []).sort((a,b)=>b.length-a.length);
-  for(const d of digits){
-    o = pool.find(x=>String(x.orderId)===d);
-    if(o) return {order:o, via:'order'};
-  }
-  return null;
+  if(key.length < 6) return null;
+  const o = pool.find(x=>x.stickerCode && (x.stickerCode===raw || stickerKey(x.stickerCode)===key));
+  return o ? {order:o, via:'sticker'} : null;
 }
 async function handleOrderScan(inputEl){
   const raw = fromRuLayout(inputEl.value.trim());
@@ -1268,7 +1251,7 @@ async function handleOrderScan(inputEl){
   }
   if(!found || !found.order){
     playBeep('error');
-    renderScanModeScreen(`Не нашёл заказ по «${raw}» среди заказов «На сборке». Проверьте, что заказ уже на сборке и выбран нужный клиент.`, true);
+    renderScanModeScreen(`Не нашёл заказ по коду стикера «${raw}» среди заказов «На сборке». Отсканируйте стикер WB; проверьте, что заказ на сборке и выбран нужный клиент.`, true);
     return;
   }
   openOrderInWizard(found.order, found.via==='barcode');
