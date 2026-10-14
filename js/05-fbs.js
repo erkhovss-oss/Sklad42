@@ -2847,6 +2847,10 @@ async function previewThermalInfoCard(){
   win.document.close();
 }
 async function printAllFbsStickersToThermalPrinter(){
+  try{ await printAllFbsStickersToThermalPrinterImpl(); }
+  catch(e){ console.error(e); toast('Ошибка печати: ' + (e && e.message ? e.message : e)); }
+}
+async function printAllFbsStickersToThermalPrinterImpl(){
   const connected = await connectThermalPrinter();
   if(!connected) return;
 
@@ -2872,18 +2876,41 @@ async function printAllFbsStickersToThermalPrinter(){
   const byClient = {};
   rows.forEach(o=>{ (byClient[o.clientId] = byClient[o.clientId] || []).push(o); });
   toast(`Запрашиваем этикетки у WB для ${rows.length} заказ(ов)…`);
-  const calls = Object.entries(byClient).map(([cid, orders])=>
-    sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action:'get_sticker', orderIds: orders.map(o=>o.orderId) } })
-      .then(({data, error})=>({ orders, data, error }))
-  );
-  const results = await Promise.all(calls);
+  // Каждый запрос к WB ограничен по времени: раньше при зависшем ответе печать молча «замирала» после первого сообщения
+  const withTimeout = (promise, ms)=> Promise.race([promise, new Promise((_, rej)=>setTimeout(()=>rej(new Error('WB не ответил за ' + Math.round(ms/1000) + ' с')), ms))]);
+  // Этикетки просим небольшими пачками (по 15 заказов) и повторяем при сбое: большой ответ или сбой связи с WB
+  // раньше валил запрос целиком (ошибка 500 от серверной функции).
+  const fetchStickerChunk = async (cid, ids)=>{
+    let last = null;
+    for(let attempt=0; attempt<3; attempt++){
+      try{
+        const res = await withTimeout(sb.functions.invoke('wb-orders-ts', { body: { clientId: cid, action:'get_sticker', orderIds: ids } }), 45000);
+        if(!(res.error || (res.data && res.data.error))) return res;
+        last = res;
+      }catch(e){ last = { data:null, error:e }; }
+      await new Promise(r=>setTimeout(r, 1500 + attempt*2000));
+    }
+    return last;
+  };
   const stickerByOrderId = {};
   let hadError = false;
-  results.forEach(({orders, data, error})=>{
-    if(error || (data && data.error)){ hadError = true; console.error(error||(data&&data.error)); return; }
-    const stickers = data.stickers || [];
-    stickers.forEach(s=>{ if(s && s.orderId != null && s.file) stickerByOrderId[s.orderId] = s.file; });
-  });
+  let firstErrText = '';
+  await Promise.all(Object.entries(byClient).map(async ([cid, orders])=>{
+    for(let i=0; i<orders.length; i+=15){
+      const chunk = orders.slice(i, i+15);
+      const {data, error} = await fetchStickerChunk(cid, chunk.map(o=>o.orderId));
+      if(error || (data && data.error)){
+        hadError = true;
+        console.error(error||(data&&data.error));
+        if(!firstErrText) firstErrText = await extractEdgeFunctionError(data, error);
+        continue;
+      }
+      (data.stickers||[]).forEach(s=>{ if(s && s.orderId != null && s.file) stickerByOrderId[s.orderId] = s.file; });
+    }
+  }));
+  const gotStickers = Object.keys(stickerByOrderId).length;
+  if(hadError) toast(`⚠ WB не отдал этикетки части заказов${firstErrText ? ': ' + firstErrText : ''}. Получено: ${gotStickers} из ${rows.length}`);
+  if(!gotStickers){ toast('Этикетки от WB не получены — печатать нечего. Повторите через минуту'); return; }
 
   toast(`Печатаем на принтере: ${groupList.length} карточек товара…`);
   const dpi203 = 203;
