@@ -926,7 +926,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadSupplyBarcode('${escapeHtml(g.supplyId)}','${escapeHtml(g.orders[0].clientId)}')">📥 QR поставки</button>` : ''}
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="event.stopPropagation();printSupplyBoxQr('${escapeHtml(g.supplyId)}','${escapeHtml(g.orders[0].clientId)}')">🖨 QR грузомест</button>` : ''}
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadFbsKizExcel('${escapeHtml(g.supplyId)}','${escapeHtml(g.clientName)}')">📊 КИЗ (Excel)</button>` : ''}
-          ${!isDelivered ? `<button class="btn btn-accent" style="padding:6px 12px" onclick="event.stopPropagation();closeFbsSupply('${escapeHtml(g.orders[0].clientId)}')">📦 Отгрузка поставки</button>` : ''}
+          ${!isDelivered ? `<button class="btn btn-accent" style="padding:6px 12px" onclick="event.stopPropagation();closeFbsSupply('${escapeHtml(g.orders[0].clientId)}','${escapeHtml(g.supplyId||'')}')">📦 Отгрузка поставки</button>` : ''}
           <span style="font-size:18px;color:var(--ink-faint);cursor:pointer" onclick="toggleFbsSupplyGroup('${escapeHtml(key)}')">${isExpanded?'▾':'▸'}</span>
         </div>
         ${isExpanded ? `
@@ -2242,6 +2242,7 @@ let shipState = null;
 
 async function supplyCall(clientId, action, extra){
   // 'info' — только чтение: безопасно повторять при таймауте/429/временных ошибках WB. Остальные действия не повторяем (могут менять данные).
+  if(shipState && shipState.purpose==='b2b' && shipState.clientId===clientId) extra = Object.assign({}, extra||{}, {purpose:'b2b'}); // отгрузка поставки «Юрлица»
   const attempts = action==='info' ? 3 : 1;
   const timeoutMs = action==='info' ? 20000 : 60000;
   let lastErr;
@@ -2384,13 +2385,13 @@ function closeSupplyShipment(){
   if(o) o.remove();
   shipState = null;
 }
-async function openSupplyShipment(clientId, orders){
+async function openSupplyShipment(clientId, orders, purpose){
   closeSupplyShipment();
   const client = clients.find(c=>c.id===clientId);
   let city = 'Москва', filter = 'all';
   try{ city = localStorage.getItem('sklad42_ship_city') || 'Москва'; filter = localStorage.getItem('sklad42_ship_filter') || 'all'; }catch(e){}
   shipState = {
-    clientId, clientName: client ? client.name : '', orders: orders || [],
+    clientId, purpose: purpose || 'main', clientName: client ? client.name : '', orders: orders || [],
     supply:null, trbxes:[], orderIds:[], fatal:false,
     points:null, pointsLoading:false, pointsError:'', pointId:null,
     shippingType:'selfShipping', shippingDt: shipDateStr(new Date()),
@@ -2428,7 +2429,7 @@ function shipRender(){
   const head = `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
       <div><div class="eyebrow">Заказы FBS · ${escapeHtml(st.clientName)}</div><h2 style="margin:2px 0 0 0;font-size:22px">Отгрузка поставки</h2></div>
       <button class="btn btn-ghost" onclick="closeSupplyShipment()" ${st.busy?'disabled':''}>✕ Закрыть</button></div>`;
-  if(st.fatal){ box.innerHTML = head + `<p style="margin-top:16px;color:var(--warn);font-size:13px">${escapeHtml(st.error)}</p><button class="btn" style="margin-top:10px" onclick="(function(){const s=shipState; if(!s) return; const c=s.clientId, o=s.orders; openSupplyShipment(c,o);})()">↻ Повторить</button>`; return; }
+  if(st.fatal){ box.innerHTML = head + `<p style="margin-top:16px;color:var(--warn);font-size:13px">${escapeHtml(st.error)}</p><button class="btn" style="margin-top:10px" onclick="(function(){const s=shipState; if(!s) return; const c=s.clientId, o=s.orders, p=s.purpose; openSupplyShipment(c,o,p);})()">↻ Повторить</button>`; return; }
   if(!st.supply){ box.innerHTML = head + `<p style="margin-top:20px;font-size:13px;color:var(--ink-soft)">⏳ Запрашиваю поставку у WB…</p>`; return; }
   const n = shipOrdersCount();
   const mismatch = st.orders.length && st.orderIds.length && st.orders.length !== st.orderIds.length;
@@ -2687,7 +2688,7 @@ async function shipSubmit(){
   }
 }
 
-async function closeFbsSupply(explicitClientId){
+async function closeFbsSupply(explicitClientId, explicitSupplyId){
   const clientId = explicitClientId || document.getElementById('fbsClientSelect').value;
   const client = clients.find(c=>c.id===clientId);
   if(!clientId){ toast('Выберите конкретного клиента, чтобы закрыть его поставку'); return; }
@@ -2698,7 +2699,10 @@ async function closeFbsSupply(explicitClientId){
     const { data: b2b } = await sb.from('wb_supplies').select('id').eq('client_id', clientId).eq('status','open').eq('purpose','b2b');
     b2bSupplyIds = new Set((b2b||[]).map(x=>x.id));
   }catch(e){ console.error(e); }
-  const allConfirmed = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm' && !(o.wbSupplyId && b2bSupplyIds.has(o.wbSupplyId)));
+  const isB2bShipment = !!(explicitSupplyId && b2bSupplyIds.has(explicitSupplyId));
+  const allConfirmed = isB2bShipment
+    ? fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm' && o.wbSupplyId===explicitSupplyId)
+    : fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm' && !(o.wbSupplyId && b2bSupplyIds.has(o.wbSupplyId)));
   const selected = fbsCloseSelectedOrders.filter(id=>allConfirmed.some(o=>o.orderId===id));
   const isPartial = selected.length>0 && selected.length<allConfirmed.length;
   const toClose = isPartial ? allConfirmed.filter(o=>selected.includes(o.orderId)) : allConfirmed;
@@ -2739,7 +2743,7 @@ async function closeFbsSupply(explicitClientId){
   }
 
   // дальше — окно «Отгрузка поставки»: грузоместа (для ПВЗ), пункт и дата отгрузки, передача в доставку
-  openSupplyShipment(clientId, toClose);
+  openSupplyShipment(clientId, toClose, isB2bShipment ? 'b2b' : 'main');
 }
 function printFbsPickList(){
   const clientId = document.getElementById('fbsClientSelect').value;
