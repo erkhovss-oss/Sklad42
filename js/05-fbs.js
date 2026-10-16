@@ -2161,6 +2161,23 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
       res = await sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'assemble', orderId: order.orderId, kizCode } });
       if(!(res.error || (res.data && res.data.error))) return res;
       const m = await extractEdgeFunctionError(res.data, res.error);
+      // WB не принимает заказы юрлиц (B2B) в общую поставку — кладём их в отдельную поставку «Юрлица»
+      if(/FailedToAddSupplyOrder|истёк срок сборки/i.test(String(m))){
+        try{
+          const b = await sb.functions.invoke('wb-b2b-supply-ts', { body: { clientId: order.clientId, action:'add_order', orderId: order.orderId } });
+          if(!(b.error || (b.data && b.data.error))){
+            const out = { data: { ok:true, wbSupplyId: b.data.wbSupplyId, separateSupply:true }, error: null };
+            if(kizCode){
+              const k = await sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'attach_kiz', orderId: order.orderId, kizCode } });
+              if(!(k.error || (k.data && k.data.error))){ out.data.kizStatus = k.data.kizStatus; out.data.warning = k.data.warning; }
+              else out.data.kizStatus = 'verify_failed';
+            }
+            toast(`Заказ №${order.orderId} — заказ юрлица: добавлен в отдельную поставку «Юрлица»`);
+            return out;
+          }
+        }catch(e){ console.error(e); }
+        return res; // не вышло и так — показываем исходную ошибку
+      }
       if(!/429|Too Many Requests|rate limit/i.test(String(m))) return res;
       await new Promise(r=>setTimeout(r, 2500 + attempt*2500 + Math.random()*1000));
     }
@@ -2675,7 +2692,13 @@ async function closeFbsSupply(explicitClientId){
   const client = clients.find(c=>c.id===clientId);
   if(!clientId){ toast('Выберите конкретного клиента, чтобы закрыть его поставку'); return; }
 
-  const allConfirmed = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm');
+  // заказы юрлиц лежат в отдельной поставке «Юрлица» — в общую отгрузку они не входят (отгружаются отдельно, например через ЛК WB)
+  let b2bSupplyIds = new Set();
+  try{
+    const { data: b2b } = await sb.from('wb_supplies').select('id').eq('client_id', clientId).eq('status','open').eq('purpose','b2b');
+    b2bSupplyIds = new Set((b2b||[]).map(x=>x.id));
+  }catch(e){ console.error(e); }
+  const allConfirmed = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm' && !(o.wbSupplyId && b2bSupplyIds.has(o.wbSupplyId)));
   const selected = fbsCloseSelectedOrders.filter(id=>allConfirmed.some(o=>o.orderId===id));
   const isPartial = selected.length>0 && selected.length<allConfirmed.length;
   const toClose = isPartial ? allConfirmed.filter(o=>selected.includes(o.orderId)) : allConfirmed;
