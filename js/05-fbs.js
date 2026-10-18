@@ -3491,7 +3491,9 @@ async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotation
   if(caption){
     // подпись — под QR в том положении, как этикетка наклеена (с учётом поворота картинки WB):
     // «низ» картинки WB при повороте 0/90/180/270 — это низ/левый край/верх/правый край растра
-    const rot = rotationDeg;
+    // по фото пробной печати при повороте 90° подпись выходила сбоку — сдвигаем положение подписи на четверть оборота,
+    // чтобы она оказывалась под QR горизонтально (картинку WB это не затрагивает)
+    const rot = (rotationDeg + 270) % 360;
     const vertical = (rot === 90 || rot === 270);
     const L = vertical ? widthPx : heightPx;                 // размер вдоль направления «вниз» картинки
     const capPx = Math.round(L * 0.11);
