@@ -3489,15 +3489,32 @@ async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotation
   }
   ctx.restore();
   if(caption){
-    const capPx = Math.round(heightPx * 0.16);
-    const k = (heightPx - capPx) / heightPx;
-    fctx.drawImage(canvas, (widthPx - widthPx*k)/2, 0, widthPx*k, heightPx*k);
-    let fs = Math.round(capPx * 0.72);
+    // подпись — под QR в том положении, как этикетка наклеена (с учётом поворота картинки WB):
+    // «низ» картинки WB при повороте 0/90/180/270 — это низ/левый край/верх/правый край растра
+    const rot = rotationDeg;
+    const vertical = (rot === 90 || rot === 270);
+    const L = vertical ? widthPx : heightPx;                 // размер вдоль направления «вниз» картинки
+    const capPx = Math.round(L * 0.11);
+    const k = (L - capPx) / L;
+    const dw = widthPx * k, dh = heightPx * k;
+    let ix = (widthPx - dw) / 2, iy = (heightPx - dh) / 2;
+    let cx = widthPx / 2, cy = heightPx / 2, textRot = 0;
+    if(rot === 0){ iy = 0; cy = heightPx - capPx / 2; }
+    else if(rot === 180){ iy = capPx; cy = capPx / 2; textRot = Math.PI; }
+    else if(rot === 90){ ix = capPx; cx = capPx / 2; textRot = Math.PI / 2; }
+    else { ix = 0; cx = widthPx - capPx / 2; textRot = -Math.PI / 2; }
+    fctx.drawImage(canvas, ix, iy, dw, dh);
+    const maxW = (vertical ? heightPx : widthPx) - 8;
+    let fs = Math.round(capPx * 0.7);
     fctx.fillStyle = '#000';
     fctx.textAlign = 'center';
     fctx.textBaseline = 'middle';
-    do{ fctx.font = `bold ${fs}px Arial, sans-serif`; fs -= 1; } while(fs > 8 && fctx.measureText(caption).width > widthPx - 8);
-    fctx.fillText(caption, widthPx/2, heightPx - capPx/2, widthPx - 8);
+    do{ fctx.font = `bold ${fs}px Arial, sans-serif`; fs -= 1; } while(fs > 8 && fctx.measureText(caption).width > maxW);
+    fctx.save();
+    fctx.translate(cx, cy);
+    fctx.rotate(textRot);
+    fctx.fillText(caption, 0, 0, maxW);
+    fctx.restore();
   }
   const imageData = fctx.getImageData(0, 0, widthPx, heightPx);
   const bytesPerRow = Math.ceil(widthPx / 8);
