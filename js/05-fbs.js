@@ -2337,7 +2337,8 @@ async function shipPrintStickers(clientId, ids){
   let data;
   try{ data = await supplyCall(clientId, 'box_stickers', {trbxIds: ids, stickerType:'svg'}); }
   catch(e){ toast('WB: ' + e.message); return; }
-  printBoxStickerWindow(ids, data.stickers || []);
+  const cl = clients.find(c=>c.id===clientId);
+  printBoxStickerWindow(ids, data.stickers || [], cl ? cl.name : '');
 }
 // QR грузомест уже отгруженной поставки (вкладка «В доставке»): открытой поставки у клиента может уже не быть
 async function printSupplyBoxQr(supplyId, clientId){
@@ -2347,10 +2348,11 @@ async function printSupplyBoxQr(supplyId, clientId){
   if(data && data.error){ toast(data.error); return; }
   const ids = ((data && data.trbxes) || []).map(t=>t.id);
   if(!ids.length){ toast('У этой поставки нет грузомест — для отгрузки в ПВЗ они создаются до передачи в доставку'); return; }
-  printBoxStickerWindow(ids, data.stickers || []);
+  const cl2 = clients.find(c=>c.id===clientId);
+  printBoxStickerWindow(ids, data.stickers || [], cl2 ? cl2.name : '');
 }
 // QR грузомест: сначала на термопринтер через QZ Tray (как этикетки заказов), если не вышло — окно печати браузера
-async function printBoxStickerWindow(ids, stickers){
+async function printBoxStickerWindow(ids, stickers, clientName){
   const list = (ids||[]).map((id, i)=>{
     const no = shipBoxNo(id);
     return { no, s: stickers.find(x=>String(x.barcode||'').split(':').pop()===no) || stickers[i] };
@@ -2358,7 +2360,7 @@ async function printBoxStickerWindow(ids, stickers){
   const ready = list.filter(x=>x.s && x.s.file);
   if(!window.qz){
     toast('QZ Tray не загрузился на странице — открываю обычное окно печати. Обновите страницу (Ctrl+F5), если нужна печать на термопринтер');
-    printBoxStickerBrowserWindow(ids, stickers);
+    printBoxStickerBrowserWindow(ids, stickers, clientName);
     return;
   }
   if(!ready.length){
@@ -2369,13 +2371,13 @@ async function printBoxStickerWindow(ids, stickers){
     const connected = await connectThermalPrinter();   // сама покажет причину, если QZ Tray не запущен
     if(!connected){
       toast('QZ Tray недоступен — открываю обычное окно печати');
-      printBoxStickerBrowserWindow(ids, stickers);
+      printBoxStickerBrowserWindow(ids, stickers, clientName);
       return;
     }
     const ls = getLabelSettings();
     toast(`Печатаем QR грузомест на принтере: ${ready.length}…`);
     for(const x of ready){
-      const done = await printSvgOnThermalPrinter(x.s.file, ls.widthMm, ls.heightMm);
+      const done = await printSvgOnThermalPrinter(x.s.file, ls.widthMm, ls.heightMm, clientName || '');
       if(!done){ toast('Печать остановлена — проблема с принтером'); return; }
     }
     const missing = list.length - ready.length;
@@ -2383,10 +2385,10 @@ async function printBoxStickerWindow(ids, stickers){
   }catch(e){
     console.error(e);
     toast('Не удалось напечатать через QZ Tray: ' + (e.message||e) + ' — открываю окно печати');
-    printBoxStickerBrowserWindow(ids, stickers);
+    printBoxStickerBrowserWindow(ids, stickers, clientName);
   }
 }
-function printBoxStickerBrowserWindow(ids, stickers){
+function printBoxStickerBrowserWindow(ids, stickers, clientName){
   const win = window.open('', '_blank');
   if(!win){ toast('Браузер заблокировал окно печати — разрешите всплывающие окна для сайта'); return; }
   // в стикере от WB нет номера короба, только закодированное значение (…:номер) — сопоставляем по нему, иначе по порядку
@@ -2394,7 +2396,7 @@ function printBoxStickerBrowserWindow(ids, stickers){
     const no = shipBoxNo(id);
     const s = stickers.find(x=>String(x.barcode||'').split(':').pop()===no) || stickers[i];
     return s && s.file
-      ? `<div class="lbl"><img src="data:image/svg+xml;base64,${s.file}" alt="Грузоместо ${escapeHtml(no)}"></div>`
+      ? `<div class="lbl"><img src="data:image/svg+xml;base64,${s.file}" alt="Грузоместо ${escapeHtml(no)}">${clientName?`<div class="cap">${escapeHtml(clientName)}</div>`:''}</div>`
       : `<div class="lbl"><div class="miss">QR грузоместа ${escapeHtml(no)} не получен от WB</div></div>`;
   }).join('');
   win.document.write(`<html><head><title>QR грузомест</title><style>
@@ -2402,7 +2404,9 @@ function printBoxStickerBrowserWindow(ids, stickers){
     html,body{margin:0;padding:0;background:#fff}
     .lbl{width:58mm;height:40mm;page-break-after:always;display:flex;align-items:center;justify-content:center;overflow:hidden}
     .lbl:last-child{page-break-after:auto}
+    .lbl{position:relative}
     .lbl img{width:58mm;height:40mm;object-fit:contain}
+    .cap{position:absolute;left:0;right:0;bottom:0;background:#fff;text-align:center;font:bold 9pt Arial;padding:0.6mm 1mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .miss{font:12px Arial;color:#c00;padding:6px;text-align:center}
     .note{font:13px Arial;padding:10px 14px;background:#FFF6D6;border-bottom:1px solid #E5D28A}
     @media print{.note{display:none}}
@@ -3448,7 +3452,7 @@ async function htmlToMonoBitmap(html, widthMm, heightMm, rotationOverride){
   const finalHeightPx = Math.round(heightMm / 25.4 * dpi);
   return imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', finalWidthPx, finalHeightPx, rotationOverride!=null ? rotationOverride : getLabelSettings().textRotation);
 }
-async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotationDeg){
+async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotationDeg, caption){
   rotationDeg = ((rotationDeg||0) % 360 + 360) % 360;
   const img = new Image();
   await new Promise((resolve, reject)=>{
@@ -3456,12 +3460,17 @@ async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotation
     img.onerror = reject;
     img.src = `data:${mime};base64,${base64}`;
   });
-  const canvas = document.createElement('canvas');
-  canvas.width = widthPx;
-  canvas.height = heightPx;
+  const finalCanvas = document.createElement('canvas');
+  finalCanvas.width = widthPx;
+  finalCanvas.height = heightPx;
+  const fctx = finalCanvas.getContext('2d');
+  fctx.fillStyle = '#fff';
+  fctx.fillRect(0, 0, widthPx, heightPx);
+  // картинка рисуется на отдельном холсте; если нужна подпись — потом вписывается выше неё с сохранением пропорций
+  const canvas = caption ? document.createElement('canvas') : finalCanvas;
+  if(caption){ canvas.width = widthPx; canvas.height = heightPx; }
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, widthPx, heightPx);
+  if(caption){ ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, widthPx, heightPx); }
   ctx.save();
   if(rotationDeg === 90){
     ctx.translate(widthPx, 0);
@@ -3479,7 +3488,18 @@ async function imageBase64ToMonoBitmap(base64, mime, widthPx, heightPx, rotation
     ctx.drawImage(img, 0, 0, widthPx, heightPx);
   }
   ctx.restore();
-  const imageData = ctx.getImageData(0, 0, widthPx, heightPx);
+  if(caption){
+    const capPx = Math.round(heightPx * 0.16);
+    const k = (heightPx - capPx) / heightPx;
+    fctx.drawImage(canvas, (widthPx - widthPx*k)/2, 0, widthPx*k, heightPx*k);
+    let fs = Math.round(capPx * 0.72);
+    fctx.fillStyle = '#000';
+    fctx.textAlign = 'center';
+    fctx.textBaseline = 'middle';
+    do{ fctx.font = `bold ${fs}px Arial, sans-serif`; fs -= 1; } while(fs > 8 && fctx.measureText(caption).width > widthPx - 8);
+    fctx.fillText(caption, widthPx/2, heightPx - capPx/2, widthPx - 8);
+  }
+  const imageData = fctx.getImageData(0, 0, widthPx, heightPx);
   const bytesPerRow = Math.ceil(widthPx / 8);
   const bitmap = new Uint8Array(bytesPerRow * heightPx);
   for(let y=0; y<heightPx; y++){
@@ -3513,13 +3533,13 @@ async function printBitmapOnThermalPrinter(widthMm, heightMm, bitmapInfo){
   fullData.set(footer, header.length + bitmap.length);
   return sendRawToPrinter(fullData);
 }
-async function printSvgOnThermalPrinter(svgBase64, widthMm, heightMm){
+async function printSvgOnThermalPrinter(svgBase64, widthMm, heightMm, caption){
   const dpi = 203;
   const widthPx = Math.round(widthMm / 25.4 * dpi);
   const heightPx = Math.round(heightMm / 25.4 * dpi);
   // QR-картинка от WB всегда альбомная (шире, чем выше) — поворот берём из настроек этикетки
   const rotationDeg = getLabelSettings().qrRotation;
-  const bitmapInfo = await imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', widthPx, heightPx, rotationDeg);
+  const bitmapInfo = await imageBase64ToMonoBitmap(svgBase64, 'image/svg+xml', widthPx, heightPx, rotationDeg, caption);
   return printBitmapOnThermalPrinter(widthMm, heightMm, bitmapInfo);
 }
 
