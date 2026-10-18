@@ -1470,6 +1470,59 @@ function wizardBarcodeLabelHtml(order, info, u, b, wMm){
     <div style="width:100%;margin-top:${u(1.5)};font-size:${u(2.6)};line-height:1.2;overflow:hidden;word-break:break-word">${lines.map(l=>`<div>${escapeHtml(l)}</div>`).join('')}</div>
   </div>`;
 }
+// Стикер (QR) текущего заказа от WB — сразу на термопринтер через QZ Tray
+async function wizardPrintOrderSticker(btn){
+  const order = wizardCurrentOrder();
+  if(!order) return;
+  if(btn){ btn.disabled = true; }
+  try{
+    toast('Запрашиваю стикер заказа у WB…');
+    let file = null, lastErr = '';
+    for(let attempt=0; attempt<3 && !file; attempt++){
+      try{
+        const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'get_sticker', orderIds:[order.orderId] } });
+        if(error || (data && data.error)){ lastErr = await extractEdgeFunctionError(data, error); }
+        else {
+          const st = (data.stickers||[]).find(x=>Number(x.orderId)===Number(order.orderId)) || (data.stickers||[])[0];
+          if(st && st.file){ file = st.file; if(st.barcode && !order.stickerCode) order.stickerCode = st.barcode; }
+          else lastErr = 'WB не вернул стикер';
+        }
+      }catch(e){ lastErr = e.message || String(e); }
+      if(!file) await new Promise(r=>setTimeout(r, 1500*(attempt+1)));
+    }
+    if(!file){ toast('Не удалось получить стикер заказа: ' + lastErr); return; }
+    const ok = await connectThermalPrinter();
+    if(!ok) return;
+    const ls = getLabelSettings();
+    const done = await printSvgOnThermalPrinter(file, ls.widthMm, ls.heightMm);
+    toast(done ? `🖨 QR заказа №${order.orderId} отправлен на печать` : 'Печать остановлена — проблема с принтером');
+  }catch(e){
+    console.error(e);
+    toast('Ошибка печати QR заказа: ' + (e.message || e));
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+// Номер на стикере заказа WB — цифры под QR (partA + partB из ответа WB)
+async function wizardLoadStickerNum(order){
+  let num = '';
+  for(let attempt=0; attempt<2 && !num; attempt++){
+    try{
+      const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'get_sticker', orderIds:[order.orderId] } });
+      if(!(error || (data && data.error))){
+        const st = (data.stickers||[]).find(x=>Number(x.orderId)===Number(order.orderId)) || (data.stickers||[])[0];
+        if(st){
+          if(st.partA!=null || st.partB!=null) num = [st.partA, st.partB].filter(v=>v!=null && v!=='').join(' ');
+          if(st.barcode && !order.stickerCode) order.stickerCode = st.barcode;
+        }
+      }
+    }catch(e){ console.error(e); }
+    if(!num) await new Promise(r=>setTimeout(r, 1200));
+  }
+  if(num) order.stickerNum = num;
+  const el = document.getElementById('wizardStickerCode');
+  if(el && wizardCurrentOrder() === order) el.innerHTML = num ? escapeHtml(num) : '<span style="color:var(--ink-faint);font-weight:400">не получен от WB</span>';
+}
 async function wizardPrintBarcode(copies){
   const order = wizardCurrentOrder();
   if(!order) return;
@@ -1535,12 +1588,16 @@ function renderAssemblyModeStepContent(order, requiresKiz){
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Размер</td><td>${order.size||'—'}</td></tr>
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Клиент</td><td>${escapeHtml(order.clientName)}</td></tr>
         <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Заказ №</td><td class="mono">${order.orderId}</td></tr>
+        <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Номер стикера</td><td class="mono" id="wizardStickerCode" style="font-weight:700">${order.stickerNum ? escapeHtml(order.stickerNum) : '<span style="color:var(--ink-faint);font-weight:400">загружаю…</span>'}</td></tr>
       </table>
       <div class="eyebrow" style="margin-bottom:6px">Штрихкод товара</div>
       <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;margin-bottom:14px">
         <div style="flex:1 1 320px;max-width:420px">
           <input class="search" id="wizardBarcodeInput" placeholder="Отсканируйте штрихкод, чтобы подтвердить товар…" style="width:100%;margin-bottom:8px" autocomplete="off">
-          ${order.barcode ? `<button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="wizardPrintBarcode()">🖨 Напечатать ШК</button>` : ''}
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            ${order.barcode ? `<button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="wizardPrintBarcode()">🖨 Напечатать ШК</button>` : ''}
+            <button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="wizardPrintOrderSticker(this)" title="Стикер заказа WB (QR) — сразу на термопринтер через QZ Tray">🖨 QR заказа</button>
+          </div>
         </div>
         ${order.barcode ? `<div id="wizardBarcodeBox" style="flex:0 1 auto"></div>` : ''}
       </div>
@@ -1572,6 +1629,7 @@ function renderAssemblyModeStepContent(order, requiresKiz){
     wizardFindByCode(findInput);
   });
   wizardRenderBarcode(order);
+  if(!order.stickerNum) wizardLoadStickerNum(order);
   const bcInput = document.getElementById('wizardBarcodeInput');
   forceEnglishInput(bcInput);
   bcInput.focus();
