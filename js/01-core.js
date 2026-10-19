@@ -623,6 +623,7 @@ function switchTab(tab){
   if(tab==='consumables') renderConsumables();
   if(tab==='returns') renderReturns();
   if(tab==='ozon') renderOzon();
+  if(tab==='speed') renderSpeed();
   if(tab==='portal-supplies'){ renderPortalSupplyDraftRows(); renderPortalSuppliesList(); }
   if(tab==='portal-kiz') renderPortalKizList();
   if(tab==='packing') packLoadStaff();
