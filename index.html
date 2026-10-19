@@ -551,6 +551,7 @@
     <div class="nav-item" data-tab="outbound"><span class="num">05</span>Поставка на склад</div>
     <div class="nav-item" data-tab="fbs"><span class="num">06</span>Заказы FBS</div>
     <div class="nav-item" data-tab="ozon"><span class="num">07</span>Заказы Ozon</div>
+    <div class="nav-item" data-tab="speed"><span class="num">07</span>Скорость сдачи</div>
     <div class="nav-item" data-tab="dds"><span class="num">07</span>ДДС</div>
     <div class="nav-item" data-tab="stocktake"><span class="num">08</span>Инвентаризация</div>
     <div class="nav-item" data-tab="warehouses"><span class="num">09</span>Склады</div>
@@ -563,6 +564,13 @@
 
   <div class="main">
     <div class="content">
+
+      <!-- SPEED -->
+      <section class="section" id="tab-speed">
+        <div class="page-head"><div><h1>Скорость сдачи</h1><p>Срок от создания заказа до передачи в доставку и оценка коэффициента за срок сдачи.</p></div>
+          <div><button class="btn btn-accent" onclick="speedState.rows=null;loadSpeed()">Обновить</button></div></div>
+        <div id="speedBody"><div class="panel empty">Загрузка…</div></div>
+      </section>
 
       <!-- DASHBOARD -->
       <section class="section" id="tab-dashboard">
@@ -1034,6 +1042,7 @@
 <script src="js/12-supplies.js"></script>
 <script src="js/13-employees-auth.js"></script>
 <script src="js/14-load-from-supabase.js"></script>
+<script src="js/16-delivery-speed.js"></script>
 <script src="js/15-init.js"></script>
 </body>
 </html>
