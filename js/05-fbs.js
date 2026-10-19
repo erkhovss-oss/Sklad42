@@ -2300,7 +2300,7 @@ let shipState = null;
 
 async function supplyCall(clientId, action, extra){
   // 'info' — только чтение: безопасно повторять при таймауте/429/временных ошибках WB. Остальные действия не повторяем (могут менять данные).
-  if(shipState && shipState.purpose==='b2b' && shipState.clientId===clientId) extra = Object.assign({}, extra||{}, {purpose:'b2b'}); // отгрузка поставки «Юрлица»
+  if(shipState && shipState.supplyId && shipState.clientId===clientId) extra = Object.assign({}, extra||{}, {supplyId:shipState.supplyId}); // отгружаем именно выбранную поставку
   const attempts = action==='info' ? 3 : 1;
   const timeoutMs = action==='info' ? 20000 : 60000;
   let lastErr;
@@ -2447,13 +2447,13 @@ function closeSupplyShipment(){
   if(o) o.remove();
   shipState = null;
 }
-async function openSupplyShipment(clientId, orders, purpose){
+async function openSupplyShipment(clientId, orders, supplyId){
   closeSupplyShipment();
   const client = clients.find(c=>c.id===clientId);
   let city = 'Москва', filter = 'all';
   try{ city = localStorage.getItem('sklad42_ship_city') || 'Москва'; filter = localStorage.getItem('sklad42_ship_filter') || 'all'; }catch(e){}
   shipState = {
-    clientId, purpose: purpose || 'main', clientName: client ? client.name : '', orders: orders || [],
+    clientId, supplyId: supplyId || '', clientName: client ? client.name : '', orders: orders || [],
     supply:null, trbxes:[], orderIds:[], fatal:false,
     points:null, pointsLoading:false, pointsError:'', pointId:null,
     shippingType:'selfShipping', shippingDt: shipDateStr(new Date()),
@@ -2491,7 +2491,7 @@ function shipRender(){
   const head = `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
       <div><div class="eyebrow">Заказы FBS · ${escapeHtml(st.clientName)}</div><h2 style="margin:2px 0 0 0;font-size:22px">Отгрузка поставки</h2></div>
       <button class="btn btn-ghost" onclick="closeSupplyShipment()" ${st.busy?'disabled':''}>✕ Закрыть</button></div>`;
-  if(st.fatal){ box.innerHTML = head + `<p style="margin-top:16px;color:var(--warn);font-size:13px">${escapeHtml(st.error)}</p><button class="btn" style="margin-top:10px" onclick="(function(){const s=shipState; if(!s) return; const c=s.clientId, o=s.orders, p=s.purpose; openSupplyShipment(c,o,p);})()">↻ Повторить</button>`; return; }
+  if(st.fatal){ box.innerHTML = head + `<p style="margin-top:16px;color:var(--warn);font-size:13px">${escapeHtml(st.error)}</p><button class="btn" style="margin-top:10px" onclick="(function(){const s=shipState; if(!s) return; const c=s.clientId, o=s.orders, p=s.supplyId; openSupplyShipment(c,o,p);})()">↻ Повторить</button>`; return; }
   if(!st.supply){ box.innerHTML = head + `<p style="margin-top:20px;font-size:13px;color:var(--ink-soft)">⏳ Запрашиваю поставку у WB…</p>`; return; }
   const n = shipOrdersCount();
   const mismatch = st.orders.length && st.orderIds.length && st.orders.length !== st.orderIds.length;
@@ -2755,16 +2755,17 @@ async function closeFbsSupply(explicitClientId, explicitSupplyId){
   const client = clients.find(c=>c.id===clientId);
   if(!clientId){ toast('Выберите конкретного клиента, чтобы закрыть его поставку'); return; }
 
-  // заказы юрлиц лежат в отдельной поставке «Юрлица» — в общую отгрузку они не входят (отгружаются отдельно, например через ЛК WB)
-  let b2bSupplyIds = new Set();
-  try{
-    const { data: b2b } = await sb.from('wb_supplies').select('id').eq('client_id', clientId).eq('status','open').eq('purpose','b2b');
-    b2bSupplyIds = new Set((b2b||[]).map(x=>x.id));
-  }catch(e){ console.error(e); }
-  const isB2bShipment = !!(explicitSupplyId && b2bSupplyIds.has(explicitSupplyId));
-  const allConfirmed = isB2bShipment
-    ? fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm' && o.wbSupplyId===explicitSupplyId)
-    : fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm' && !(o.wbSupplyId && b2bSupplyIds.has(o.wbSupplyId)));
+  // У клиента может быть несколько поставок в WB (основная, «Юрлица», «Отложенные», перенесённые вручную).
+  // Отгружается ровно та, на чьей кнопке нажали, и только её заказы — иначе «Собрано 12 из 13» считало бы и перенесённые заказы.
+  const confirmedAll = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='confirm');
+  const supplyKeys = [...new Set(confirmedAll.map(o=>o.wbSupplyId||''))];
+  let shipSupplyId = explicitSupplyId || '';
+  if(!shipSupplyId && supplyKeys.length > 1){
+    toast('У клиента несколько поставок — нажмите «Отгрузка поставки» в строке нужной поставки');
+    return;
+  }
+  const allConfirmed = shipSupplyId ? confirmedAll.filter(o=>o.wbSupplyId===shipSupplyId) : confirmedAll;
+  if(!shipSupplyId && supplyKeys.length === 1 && supplyKeys[0]) shipSupplyId = supplyKeys[0];
   const selected = fbsCloseSelectedOrders.filter(id=>allConfirmed.some(o=>o.orderId===id));
   const isPartial = selected.length>0 && selected.length<allConfirmed.length;
   const toClose = isPartial ? allConfirmed.filter(o=>selected.includes(o.orderId)) : allConfirmed;
@@ -2805,7 +2806,7 @@ async function closeFbsSupply(explicitClientId, explicitSupplyId){
   }
 
   // дальше — окно «Отгрузка поставки»: грузоместа (для ПВЗ), пункт и дата отгрузки, передача в доставку
-  openSupplyShipment(clientId, toClose, isB2bShipment ? 'b2b' : 'main');
+  openSupplyShipment(clientId, toClose, shipSupplyId);
 }
 function printFbsPickList(){
   const clientId = document.getElementById('fbsClientSelect').value;
