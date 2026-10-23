@@ -2221,20 +2221,33 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
       const m = await extractEdgeFunctionError(res.data, res.error);
       // WB не принимает заказы юрлиц (B2B) в общую поставку — кладём их в отдельную поставку «Юрлица»
       if(/FailedToAddSupplyOrder|истёк срок сборки/i.test(String(m))){
+        // заказы юрлиц кладём в отдельную поставку строго по одному (очередь) и с повтором при лимите запросов WB
+        const prev = window.__b2bQueue || Promise.resolve();
+        let release; window.__b2bQueue = new Promise(r=>{ release = r; });
+        await prev.catch(()=>{});
+        let lastB2bErr = null;
         try{
-          const b = await sb.functions.invoke('wb-b2b-supply-ts', { body: { clientId: order.clientId, action:'add_order', orderId: order.orderId } });
-          if(!(b.error || (b.data && b.data.error))){
-            const out = { data: { ok:true, wbSupplyId: b.data.wbSupplyId, separateSupply:true }, error: null };
-            if(kizCode){
-              const k = await sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'attach_kiz', orderId: order.orderId, kizCode } });
-              if(!(k.error || (k.data && k.data.error))){ out.data.kizStatus = k.data.kizStatus; out.data.warning = k.data.warning; }
-              else out.data.kizStatus = 'verify_failed';
+          for(let t=0; t<5; t++){
+            const b = await sb.functions.invoke('wb-b2b-supply-ts', { body: { clientId: order.clientId, action:'add_order', orderId: order.orderId } });
+            if(!(b.error || (b.data && b.data.error))){
+              const out = { data: { ok:true, wbSupplyId: b.data.wbSupplyId, separateSupply:true }, error: null };
+              if(kizCode){
+                const k = await sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'attach_kiz', orderId: order.orderId, kizCode } });
+                if(!(k.error || (k.data && k.data.error))){ out.data.kizStatus = k.data.kizStatus; out.data.warning = k.data.warning; }
+                else out.data.kizStatus = 'verify_failed';
+              }
+              toast(`Заказ №${order.orderId} — заказ юрлица: добавлен в отдельную поставку «Юрлица»`);
+              release();
+              return out;
             }
-            toast(`Заказ №${order.orderId} — заказ юрлица: добавлен в отдельную поставку «Юрлица»`);
-            return out;
+            lastB2bErr = await extractEdgeFunctionError(b.data, b.error);
+            if(!/429|Too Many Requests|rate limit|5\d\d|timeout|fetch/i.test(String(lastB2bErr))) break;
+            await new Promise(r=>setTimeout(r, 2500 + t*2500));
           }
-        }catch(e){ console.error(e); }
-        return res; // не вышло и так — показываем исходную ошибку
+        }catch(e){ console.error(e); lastB2bErr = e.message||String(e); }
+        release();
+        // показываем реальную причину из отдельной поставки, а не только исходный отказ
+        return { data:null, error:{ message: `не удалось добавить в отдельную поставку «Юрлица»: ${lastB2bErr||'неизвестная ошибка'}` } };
       }
       if(!/429|Too Many Requests|rate limit/i.test(String(m))) return res;
       await new Promise(r=>setTimeout(r, 2500 + attempt*2500 + Math.random()*1000));
