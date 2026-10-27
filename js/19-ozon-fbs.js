@@ -165,6 +165,7 @@ function renderOzonBody(){
       `<span class="chip oz">${escapeHtml(OZ_STATUS_RU[o.status]||o.status)}</span>`,
       !linked && tab==='new' ? `<span class="chip" style="background:#FFF1E0;color:#B45309" title="Артикул Ozon не сопоставлен с товаром в остатках — карточка клиента → Ozon → «Загрузить карточки Ozon и сопоставить»">не сопоставлен</span>` : '',
       kiz && tab==='new' ? `<span class="chip" style="background:#FDE8E8;color:#B91C1C">нужен КИЗ</span>` : '',
+      (o.qty||1)>1 && tab==='new' ? `<span class="chip" style="background:#E0ECFF;color:#1D4ED8" title="При сборке отправление автоматически делится на отправления по 1 шт">${o.qty} шт → разделится</span>` : '',
       o.outOfStock ? `<span class="chip" style="background:#FDE8E8;color:#B91C1C">нет на складе</span>` : '',
       ozDoneIds.has(o.postingNumber) ? '<span class="chip" style="background:#DCFCE7;color:#166534">✓ собран</span>' : ''
     ].join(' ');
@@ -218,7 +219,7 @@ function ozUndoDeduction(inv, order, qty, ddsId){
     }
   }catch(e){ console.error(e); }
 }
-async function ozAssemble(order, kizCodes){
+async function ozAssembleOne(order, kizCodes){
   const pn = order.postingNumber;
   if(ozInFlight.has(pn)) return {ok:false, message:'уже отправляется — подождите'};
   if(order.status!=='awaiting_packaging') return {ok:false, message:'не в статусе «ожидает сборки»'};
@@ -254,6 +255,8 @@ async function ozAssemble(order, kizCodes){
     order.status = 'awaiting_deliver';
     if(codes.length){ order.kizCode = codes.join('\n'); order.kizStatus = 'ok'; }
     order.pickedAt = new Date().toISOString();
+    const cur = ozonOrders.find(o=>o.postingNumber===pn);
+    if(cur && cur!==order){ cur.status = order.status; cur.pickedAt = order.pickedAt; if(codes.length) cur.kizCode = order.kizCode; }
     ozDbUpdate(pn, {status:'awaiting_deliver', picked_at:order.pickedAt, picked_by: currentUser?currentUser.name:null});
     ozDoneIds.add(pn);
     return {ok:true, warning:data && data.warning};
@@ -263,6 +266,40 @@ async function ozAssemble(order, kizCodes){
   }finally{
     ozInFlight.delete(pn);
   }
+}
+// Ozon: в одном отправлении может быть 2 шт и больше. Как на WB (1 заказ = 1 шт), делим такое отправление у Ozon на
+// отдельные отправления по 1 шт и собираем каждое (КИЗ — по одному на отправление). Если после деления что-то не собралось,
+// оставшиеся отправления по 1 шт лежат в «Новых».
+async function ozAssemble(order, kizCodes){
+  const qty = order.qty || 1;
+  if(qty <= 1 || order.status!=='awaiting_packaging') return ozAssembleOne(order, kizCodes);
+  const inv = ozonItemForOrder(order);
+  if(!inv) return {ok:false, message:`«${order.name||order.article}» (${order.article}) не сопоставлен с товаром в остатках`};
+  const available = inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty;
+  if(available < qty) return {ok:false, message:`Недостаточно на складе «${inv.name}» — нужно ${qty} шт, есть ${available} (отправление не делилось)`};
+  if(ozInFlight.has(order.postingNumber)) return {ok:false, message:'уже обрабатывается — подождите'};
+  ozInFlight.add(order.postingNumber);
+  let sp;
+  try{
+    toast(`Отправление ${order.postingNumber} на ${qty} шт — делю на отдельные по 1 шт…`);
+    sp = await sb.functions.invoke('ozon-fbs-ts', { body:{ clientId:order.clientId, action:'split', postingNumber:order.postingNumber } });
+  }catch(e){ ozInFlight.delete(order.postingNumber); return {ok:false, message:'Сбой связи при делении: ' + (e.message||e)}; }
+  ozInFlight.delete(order.postingNumber);
+  if(sp.error || (sp.data && sp.data.error)) return {ok:false, message:'Ozon (деление): ' + ((sp.data && sp.data.error) || await extractEdgeFunctionError(sp.data, sp.error))};
+  if(!sp.data.split) return ozAssembleOne(order, kizCodes);
+  await loadOzonOrders();
+  const kids = (sp.data.children||[]).map(pn=>ozonOrders.find(o=>o.postingNumber===pn)).filter(Boolean);
+  if(!kids.length) return {ok:false, message:'Ozon разделил отправление, но новые отправления ещё не подтянулись — нажмите «Проверить новые»'};
+  const codes = (kizCodes||[]).filter(Boolean);
+  let done = 0, warning;
+  for(let i=0;i<kids.length;i++){
+    const r = await ozAssembleOne(kids[i], codes[i] ? [codes[i]] : []);
+    if(!r.ok) return {ok:false, message:`разделено на ${kids.length} шт, собрано ${done}; ${kids[i].postingNumber}: ${r.message}. Остальные ждут в «Новых»`};
+    done++; if(r.warning) warning = r.warning;
+    if(i<kids.length-1) await new Promise(res=>setTimeout(res,300));
+  }
+  toast(`Разделено и собрано: ${done} шт`);
+  return {ok:true, warning};
 }
 async function shipOzonOrder(postingNumber){
   const order = ozonOrders.find(o=>o.postingNumber===postingNumber);
@@ -292,6 +329,7 @@ async function shipAllOzonOrders(){
   }
   ozonShipAllBusy = false;
   ozSel = new Set();
+  try{ await loadOzonOrders(); }catch(e){ console.error(e); }
   renderOzonBody();
   if(fails.length) await customConfirm(`Собрано: ${ok} из ${plain.length}.\n\nНе собрано (${fails.length}):\n` + fails.slice(0,8).join('\n') + (fails.length>8?`\n…и ещё ${fails.length-8}`:''), {danger:false, okText:'Понятно', cancelText:'Закрыть'});
   else toast(`Собрано и подтверждено: ${ok}`);
