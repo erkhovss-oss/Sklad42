@@ -325,6 +325,7 @@ function renderInventory(){
         ` : `
         <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="adjustQty" data-key="${escapeHtml(key)}" data-delta="-1">−</button>
         <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="adjustQty" data-key="${escapeHtml(key)}" data-delta="1">+</button>
+        <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="openAllocate" data-key="${escapeHtml(key)}" title="Сколько товара показывать на Wildberries и на Ozon">WB / Ozon</button>
         <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="startEdit" data-key="${escapeHtml(key)}">Изменить</button>
         <button class="btn btn-ghost inv-act" style="padding:5px 10px" data-act="openHistory" data-key="${escapeHtml(key)}">История</button>
         <button class="btn btn-ghost inv-act" style="padding:5px 10px;color:var(--warn)" data-act="openWriteOff" data-key="${escapeHtml(key)}">Списать</button>
@@ -457,7 +458,7 @@ async function saveEdit(key){
   if(cl) recordStorageSnapshot(cl);
 }
 function openWriteOff(key){ writeOffSku = key; editingSku = null; deletingSku = null; historySku = null; renderInventory(); }
-function openAllocate(key){ allocatingSku = key; editingSku=null; writeOffSku=null; deletingSku=null; renderInventory(); }
+function openAllocate(key){ openStockModal(key); }
 function cancelAllocate(){ allocatingSku = null; renderInventory(); }
 function saveAllocate(key){
   const {sku, client, size, warehouseId} = parseItemKey(key);
@@ -785,4 +786,127 @@ function logReceipt(sku, name, qty, client, size, warehouseId){
       });
     }
   }
+}
+
+// ---------- ОКНО «ОСТАТОК ПО ПЛОЩАДКАМ» (WB / Ozon) ----------
+// Сколько штук этого товара показывать на каждой площадке. Числа применяются в режиме клиента «Раздельно по площадкам»;
+// при режиме «Общий остаток» обе площадки видят весь доступный остаток, и окно предлагает перейти на раздельный режим.
+let stockModal = null; // {key, tab, wb, ozon, buffer}
+function openStockModal(key){
+  const {sku, client, size, warehouseId} = parseItemKey(key);
+  const item = findInventoryItem(sku, client, size, warehouseId);
+  if(!item) return;
+  stockModal = {key, tab:'wb', wb:item.wbAllocatedQty||0, ozon:item.ozonAllocatedQty||0, buffer:item.safetyBuffer||0};
+  renderStockModal();
+}
+function closeStockModal(){
+  const el = document.getElementById('stockModalOverlay'); if(el) el.remove();
+  stockModal = null;
+}
+function stockModalSync(){
+  if(!stockModal) return;
+  const v = id=>{ const e=document.getElementById(id); return e ? Math.max(0, parseInt(e.value)||0) : null; };
+  const a = v('stockModalAlloc'); if(a!==null) stockModal[stockModal.tab] = a;
+  const b = v('stockModalBuffer'); if(b!==null) stockModal.buffer = b;
+}
+function stockModalTab(tab){ stockModalSync(); stockModal.tab = tab; renderStockModal(); }
+function stockModalUpdateHint(){
+  stockModalSync();
+  const el = document.getElementById('stockModalHint'); if(el) el.innerHTML = stockModalHintHtml();
+}
+function stockModalCtx(){
+  const {sku, client, size, warehouseId} = parseItemKey(stockModal.key);
+  const item = findInventoryItem(sku, client, size, warehouseId);
+  const m = buildReserveMap();
+  const resW = item && item.barcode ? (m.wb.get(item.client+'|'+item.barcode)||0) : 0;
+  const resO = item ? (m.oz.get(item.client+'|'+item.sku)||0) : 0;
+  const cl = item ? clients.find(c=>c.name===item.client) : null;
+  return {item, resW, resO, cl, split: !!(cl && cl.stockAllocationMode==='split')};
+}
+function stockModalHintHtml(){
+  const {item, resW, resO} = stockModalCtx();
+  const st = stockModal;
+  const rest = item.qty - st.wb - st.ozon;
+  const shown = (alloc, res)=>Math.max(0, alloc - res - st.buffer);
+  return `<div style="font-size:12px;color:var(--ink-soft);line-height:1.7">
+    На WB будет показано: <b>${shown(st.wb,resW)}</b> · на Ozon: <b>${shown(st.ozon,resO)}</b><br>
+    ${rest<0 ? `<span style="color:var(--warn)">Выделено больше, чем есть на складе (${item.qty}) — уменьшите на ${-rest}</span>` : `Не выделено ни под одну площадку (в запасе): <b>${rest}</b>`}
+  </div>`;
+}
+function renderStockModal(){
+  const st = stockModal; if(!st) return;
+  const {item, resW, resO, cl, split} = stockModalCtx();
+  if(!item){ closeStockModal(); return; }
+  const old = document.getElementById('stockModalOverlay'); if(old) old.remove();
+  const isWb = st.tab==='wb';
+  const res = isWb ? resW : resO;
+  const tabBtn = (k,l)=>`<button class="btn ${st.tab===k?'btn-accent':'btn-ghost'}" style="flex:1" onclick="stockModalTab('${k}')">${l}</button>`;
+  const fld = 'width:100%;font-size:18px;padding:10px 12px;box-sizing:border-box';
+  const overlay = document.createElement('div');
+  overlay.id = 'stockModalOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:22px;max-width:400px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,.2)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div>
+          <div style="font-size:19px;font-weight:700">Остаток по площадкам</div>
+          <div style="font-size:12px;color:var(--ink-soft);margin-top:2px">${escapeHtml(item.name||item.sku)}${item.size?` · ${escapeHtml(item.size)}`:''} · <span class="mono">${escapeHtml(item.sku)}</span></div>
+          <div style="font-size:12px;color:var(--ink-soft)">Физически на складе: <b>${item.qty} шт</b></div>
+        </div>
+        <span style="cursor:pointer;font-size:20px;color:var(--ink-faint);line-height:1" onclick="closeStockModal()">×</span>
+      </div>
+      ${split ? '' : `<div style="margin-top:12px;padding:10px 12px;background:#fff7e6;border-radius:10px;font-size:12px;line-height:1.5">У клиента сейчас режим «Общий остаток»: обе площадки видят весь доступный остаток, и числа ниже не применяются. <a href="#" style="color:var(--accent)" onclick="event.preventDefault();stockModalGoSplit()">Перейти на раздельный режим</a></div>`}
+      <div style="display:flex;gap:8px;margin:14px 0">${tabBtn('wb','Wildberries')}${tabBtn('ozon','Ozon')}</div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-bottom:4px">${isWb?'ФБС · Wildberries':'ФБС · Ozon'}</div>
+      <label style="display:block;margin-bottom:12px">
+        <span style="font-size:12px;color:var(--ink-soft)">Доступно к заказу (выделено под площадку)</span>
+        <input class="search mono" type="number" min="0" id="stockModalAlloc" value="${st[st.tab]}" style="${fld}" oninput="stockModalUpdateHint()">
+      </label>
+      <label style="display:block;margin-bottom:12px">
+        <span style="font-size:12px;color:var(--ink-soft)">🔒 Резерв под несобранные заказы</span>
+        <input class="search mono" type="text" value="${res}" disabled style="${fld};background:var(--bg)">
+      </label>
+      <label style="display:block;margin-bottom:12px">
+        <span style="font-size:12px;color:var(--ink-soft)">Страховой запас (не показывать нигде)</span>
+        <input class="search mono" type="number" min="0" id="stockModalBuffer" value="${st.buffer}" style="${fld}" oninput="stockModalUpdateHint()">
+      </label>
+      <div id="stockModalHint" style="margin-bottom:14px">${stockModalHintHtml()}</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-accent" style="flex:1;padding:12px" onclick="saveStockModal()">Применить</button>
+        <button class="btn btn-ghost" style="padding:12px 20px" onclick="closeStockModal()">Отмена</button>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', e=>{ if(e.target===overlay) closeStockModal(); });
+  document.body.appendChild(overlay);
+}
+async function stockModalGoSplit(){
+  stockModalSync();
+  const {cl} = stockModalCtx();
+  if(!cl) return;
+  await setStockAllocationMode(cl.id, 'split');
+  renderStockModal();
+}
+function saveStockModal(){
+  stockModalSync();
+  const st = stockModal; if(!st) return;
+  const {sku, client, size, warehouseId} = parseItemKey(st.key);
+  const item = findInventoryItem(sku, client, size, warehouseId);
+  if(!item) return;
+  if(st.wb + st.ozon > item.qty){
+    toast(`Сумма WB + Ozon (${st.wb+st.ozon}) больше, чем есть физически (${item.qty}) — поправьте числа`);
+    return;
+  }
+  item.wbAllocatedQty = st.wb; item.ozonAllocatedQty = st.ozon; item.safetyBuffer = st.buffer;
+  const wb = st.wb, ozon = st.ozon, buffer = st.buffer;
+  closeStockModal();
+  renderInventory();
+  sb.from('inventory').update({wb_allocated_qty: wb, ozon_allocated_qty: ozon, safety_buffer: buffer})
+    .eq('sku', item.sku).eq('client_name', item.client||'').eq('size', item.size||'').eq('warehouse_id', item.warehouseId||'MAIN')
+    .then(({error})=>{
+      if(error){ console.error(error); toast('Не удалось сохранить в базе'); return; }
+      const cl = clients.find(c=>c.name===item.client);
+      toast(cl && cl.stockAllocationMode==='split' ? 'Остатки по площадкам сохранены' : 'Сохранено (применится при режиме «Раздельно по площадкам»)');
+      scheduleWbAutoSync(item.client);
+      if(cl && cl.ozonConnected && cl.ozonAutoSync) pushStocksToOzon(cl.id);
+    });
 }
