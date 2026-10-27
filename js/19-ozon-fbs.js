@@ -144,14 +144,18 @@ function renderOzonBody(){
     toolbar = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
       <button class="btn btn-accent" onclick="ozEnterScan()" ${total?'':'disabled'}>🎯 Режим сборки (сканер)</button>
       <button class="btn btn-primary" onclick="shipAllOzonOrders()" ${total?'':'disabled'}>${ozSel.size?`Собрать выбранные (${ozSel.size})`:`Собрать все (${total})`}</button>
-      <button class="btn btn-ghost" onclick="ozPrintLabels()" ${total?'':'disabled'}>🖨 Этикетки${ozSel.size?` (${ozSel.size})`:''}</button>
+      <button class="btn btn-ghost" onclick="ozPrintLabelsThermal()" ${total?'':'disabled'}>🖨️ ${ozSel.size?`На принтер — выбранные (${ozSel.size})`:'На принтер (QZ Tray)'}</button>
+      <button class="btn btn-ghost" onclick="ozPrintLabels()" ${total?'':'disabled'}>📄 Этикетки PDF${ozSel.size?` (${ozSel.size})`:''}</button>
       <button class="btn btn-ghost" onclick="ozPrintPickList()" ${total?'':'disabled'}>📋 Лист подбора</button>
+      <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="forgetQzPrinter()" title="Выбрать другой принтер при следующей печати">⚙️ Сменить принтер</button>
       <label style="display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-soft);cursor:pointer;margin-left:auto"><input type="checkbox" onchange="ozToggleAll(this.checked)" ${total && selCnt===rows.length?'checked':''}> Выбрать все</label>
     </div>`;
   } else if(ozonView==='ship'){
     toolbar = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
       <button class="btn btn-accent" onclick="ozCloseShipment()" ${total?'':'disabled'}>📦 Закрыть отгрузку (акт)</button>
-      <button class="btn btn-ghost" onclick="ozPrintLabels()" ${total?'':'disabled'}>🖨 Этикетки${ozSel.size?` (${ozSel.size})`:''}</button>
+      <button class="btn btn-ghost" onclick="ozPrintLabelsThermal()" ${total?'':'disabled'}>🖨️ ${ozSel.size?`На принтер — выбранные (${ozSel.size})`:'На принтер (QZ Tray)'}</button>
+      <button class="btn btn-ghost" onclick="ozPrintLabels()" ${total?'':'disabled'}>📄 Этикетки PDF${ozSel.size?` (${ozSel.size})`:''}</button>
+      <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="forgetQzPrinter()" title="Выбрать другой принтер при следующей печати">⚙️ Сменить принтер</button>
       <label style="display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-soft);cursor:pointer;margin-left:auto"><input type="checkbox" onchange="ozToggleAll(this.checked)" ${total && selCnt===rows.length?'checked':''}> Выбрать все</label>
     </div>`;
   }
@@ -180,7 +184,7 @@ function renderOzonBody(){
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${chips}
         ${tab==='new' ? `<button class="btn btn-accent" onclick="shipOzonOrder('${o.postingNumber}')">Собрать</button>` : ''}
-        ${['new','ship'].includes(tab) ? `<button class="btn btn-ghost" onclick="getOzonSticker('${o.postingNumber}')">🏷 Этикетка</button>` : ''}
+        ${['new','ship'].includes(tab) ? `<button class="btn btn-ghost" onclick="ozPrintOne('${o.postingNumber}')" title="Этикетка отправления — на термопринтер (QZ Tray)">🏷 Этикетка</button>` : ''}
         ${['new','ship','transit'].includes(tab) ? `<button class="btn btn-ghost" style="color:var(--warn)" onclick="cancelOzonOrder('${o.postingNumber}')">Отменить</button>` : ''}
       </div>
     </div>`;
@@ -404,7 +408,7 @@ function ozRenderWizard(){
       <div><div class="eyebrow">Отправление ${escapeHtml(order.postingNumber)} · ${escapeHtml(order.clientName)}</div>
         <h2 style="margin:6px 0 0 0">${escapeHtml(pi.name)}${pi.color?` · ${escapeHtml(pi.color)}`:''}${pi.size?` · ${escapeHtml(pi.size)}`:''}</h2></div>
       ${pi.cell?`<div style="background:var(--accent);color:#fff;border-radius:10px;padding:10px 20px;text-align:center;line-height:1.1"><div style="font-size:11px;opacity:.85">ЯЧЕЙКА</div><div style="font-size:26px;font-weight:800">${escapeHtml(String(pi.cell))}</div></div>`:''}
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost" onclick="ozWizBack()">↩ К поиску</button><button class="btn btn-ghost" onclick="ozExitScan()">✕ Завершить режим</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="ozPrintOne('${order.postingNumber}', this)" title="Этикетка отправления Ozon — сразу на термопринтер через QZ Tray">🖨 Этикетка</button><button class="btn btn-ghost" onclick="ozWizBack()">↩ К поиску</button><button class="btn btn-ghost" onclick="ozExitScan()">✕ Завершить режим</button></div>
     </div>
     <table style="margin-bottom:18px">
       <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Артикул Ozon</td><td class="mono">${escapeHtml(order.article)}</td></tr>
@@ -529,6 +533,22 @@ function ozLoadPdfLib(){
   return ozPdfLibPromise;
 }
 function ozB64ToBytes(b64){ const bin = atob(b64); const a = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) a[i]=bin.charCodeAt(i); return a; }
+// Этикетки 58×40 (small_label) одним PDF на пачку отправлений; по странице на отправление в порядке запроса
+async function ozFetchLabelPdf(clientId, postingNumbers){
+  let last = '';
+  for(let attempt=0; attempt<3; attempt++){
+    try{
+      const res = await Promise.race([
+        sb.functions.invoke('ozon-fbs-ts', { body:{ clientId, action:'labels', postingNumbers } }),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('Ozon не ответил за 50 с')), 50000))
+      ]);
+      if(!(res.error || (res.data && res.data.error)) && res.data && res.data.file) return {ok:true, file:res.data.file};
+      last = (res.data && res.data.error) || await extractEdgeFunctionError(res.data, res.error);
+    }catch(e){ last = e.message || String(e); }
+    await new Promise(r=>setTimeout(r, 1500 + attempt*2000));
+  }
+  return {ok:false, message:last};
+}
 async function ozPrintLabels(){
   const tab = ozonView==='ship' ? 'ship' : 'new';
   const list = ozTargets(tab);
@@ -543,13 +563,11 @@ async function ozPrintLabels(){
   for(const cid of Object.keys(byClient)){
     const arr = byClient[cid];
     for(let i=0;i<arr.length;i+=20){
-      const chunk = arr.slice(i,i+20);
-      const { data, error } = await sb.functions.invoke('ozon-orders-ts', { body:{ clientId:cid, action:'get_sticker', postingNumbers: chunk.map(o=>o.postingNumber) } });
-      if(error || (data && data.error)){ win.close(); toast('Ozon: ' + ((data && data.error) || await extractEdgeFunctionError(data, error))); return; }
-      (data.files && data.files.length ? data.files : [data.file]).forEach(f=>{ if(f) files.push(f); });
+      const r = await ozFetchLabelPdf(cid, arr.slice(i,i+20).map(o=>o.postingNumber));
+      if(!r.ok){ win.close(); toast('Ozon: ' + r.message); return; }
+      files.push(r.file);
     }
   }
-  if(!files.length){ win.close(); toast('Ozon не вернул этикетки'); return; }
   let blob;
   if(files.length===1) blob = new Blob([ozB64ToBytes(files[0])], {type:'application/pdf'});
   else {
@@ -566,6 +584,159 @@ async function ozPrintLabels(){
   }
   win.location.href = URL.createObjectURL(blob);
 }
+
+// ---------- печать на термопринтер через QZ Tray — как у WB: карточка товара, затем этикетки отправлений ----------
+let ozPdfJsPromise = null;
+function ozLoadPdfJs(){
+  if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if(!ozPdfJsPromise) ozPdfJsPromise = new Promise((res, rej)=>{
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    s.onload = ()=>{ try{ window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(e){} res(window.pdfjsLib); };
+    s.onerror = ()=>{ ozPdfJsPromise = null; rej(new Error('pdf.js не загрузился — проверьте интернет и обновите страницу')); };
+    document.head.appendChild(s);
+  });
+  return ozPdfJsPromise;
+}
+// PDF-страницы → картинки PNG (base64). Страницы рисуем в их родной ориентации (58×40 альбомная), поворот делает печать — как для WB.
+async function ozPdfToPngPages(b64){
+  const lib = await ozLoadPdfJs();
+  const pdf = await lib.getDocument({ data: ozB64ToBytes(b64) }).promise;
+  const pages = [];
+  for(let n=1; n<=pdf.numPages; n++){
+    const page = await pdf.getPage(n);
+    const v1 = page.getViewport({ scale:1 });
+    const scale = Math.max(1, 900 / Math.max(v1.width, v1.height));
+    const vp = page.getViewport({ scale });
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    pages.push(cv.toDataURL('image/png').split(',')[1]);
+  }
+  return pages;
+}
+function ozLabelAllPages(){ try{ return localStorage.getItem('sklad42_oz_label_all_pages')==='1'; }catch(e){ return false; } }
+async function ozPrintPngOnThermal(pngB64, ls){
+  const widthPx = Math.round(ls.widthMm/25.4*203), heightPx = Math.round(ls.heightMm/25.4*203);
+  const info = await imageBase64ToMonoBitmap(pngB64, 'image/png', widthPx, heightPx, ls.qrRotation);
+  return printBitmapOnThermalPrinter(ls.widthMm, ls.heightMm, info);
+}
+// страницы PDF, относящиеся к отправлению №i из пачки (обычно 1 страница на отправление)
+function ozPagesFor(pages, count, i){
+  if(count>0 && pages.length===count) return [pages[i]];
+  if(count>0 && pages.length%count===0){
+    const per = pages.length/count;
+    return ozLabelAllPages() ? pages.slice(i*per, (i+1)*per) : [pages[i*per]];
+  }
+  return null;
+}
+async function ozLabelPagesForPostings(clientId, orders){
+  // возвращает {pn: [png,...]}; при несовпадении числа страниц пробует по одному отправлению
+  const out = {};
+  const getChunk = async (chunk)=>{
+    const r = await ozFetchLabelPdf(clientId, chunk.map(o=>o.postingNumber));
+    if(!r.ok) return {err:r.message};
+    const pages = await ozPdfToPngPages(r.file);
+    return {pages};
+  };
+  let errText = '';
+  for(let i=0;i<orders.length;i+=20){
+    const chunk = orders.slice(i,i+20);
+    const r = await getChunk(chunk);
+    if(r.err){ errText = r.err; continue; }
+    let ok = chunk.map((o,k)=>ozPagesFor(r.pages, chunk.length, k));
+    if(ok.every(Boolean)){ chunk.forEach((o,k)=>{ out[o.postingNumber] = ok[k]; }); continue; }
+    for(const o of chunk){                       // страниц не поровну — берём этикетки по одному
+      const r1 = await getChunk([o]);
+      if(r1.err){ errText = r1.err; continue; }
+      out[o.postingNumber] = ozLabelAllPages() ? r1.pages : [r1.pages[0]];
+    }
+  }
+  return {pages:out, err:errText};
+}
+function ozInfoCardHtml(g){
+  const ptPx = pt=>Math.round(pt/72*203), mmPx = mm=>Math.round(mm/25.4*203);
+  const nameHtml = wrapTextManually(g.name||g.article, 22).map(line=>`<div>${escapeHtml(line)}</div>`).join('');
+  const td = 'color:#666;white-space:nowrap;width:32%;padding:'+mmPx(0.4)+'px '+mmPx(1.2)+'px '+mmPx(0.4)+'px 0';
+  const tv = 'font-weight:bold;word-break:break-all;padding:'+mmPx(0.4)+'px 0';
+  const row = (label, val)=>`<tr><td style="${td}">${label}</td><td style="${tv}">${val}</td></tr>`;
+  return `
+    <div style="padding:${mmPx(2)}px;box-sizing:border-box;font-family:Arial,sans-serif;overflow:hidden;width:100%;height:100%">
+      <div style="font-size:${ptPx(11)}px;font-weight:bold;margin-bottom:${mmPx(1.2)}px">${g.qty} шт.</div>
+      <div style="font-size:${ptPx(8)}px;font-weight:bold;margin-bottom:${mmPx(1.2)}px;line-height:1.2">${nameHtml}</div>
+      <table style="width:100%;font-size:${ptPx(6.5)}px;border-collapse:collapse;table-layout:fixed">
+        ${g.cell?row('Ячейка', escapeHtml(String(g.cell))):''}
+        ${g.color?row('Цвет', escapeHtml(g.color)):''}
+        ${g.size?row('Размер', escapeHtml(g.size)):''}
+        ${row('Артикул', escapeHtml(g.article||''))}
+        ${row('ШК', escapeHtml(g.barcode||'—'))}
+        ${row('Заказов', String(g.orders.length))}
+      </table>
+    </div>`;
+}
+async function ozPrintLabelsThermal(){
+  try{ await ozPrintLabelsThermalImpl(); }
+  catch(e){ console.error(e); toast('Ошибка печати: ' + (e && e.message ? e.message : e)); }
+}
+async function ozPrintLabelsThermalImpl(){
+  const tab = ozonView==='ship' ? 'ship' : 'new';
+  const rows = ozTargets(tab).slice().sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||''));
+  if(!rows.length){ toast('Нет отправлений для печати'); return; }
+  if(!await connectThermalPrinter()) return;
+  const groups = {};
+  rows.forEach(o=>{
+    const pi = ozPI(o);
+    const key = o.clientId + '::' + (pi.barcode || o.article || o.postingNumber);
+    if(!groups[key]) groups[key] = { name:pi.name, article:o.article, size:pi.size, barcode:pi.barcode, color:pi.color, cell:pi.cell, clientId:o.clientId, qty:0, orders:[] };
+    groups[key].orders.push(o); groups[key].qty += (o.qty||1);
+  });
+  const groupList = Object.values(groups).sort((a,b)=> (a.article||'').localeCompare(b.article||''));
+  toast(`Запрашиваем этикетки у Ozon для ${rows.length} отправл.…`);
+  const byClient = {};
+  rows.forEach(o=>{ (byClient[o.clientId] = byClient[o.clientId] || []).push(o); });
+  const labelPages = {}; let firstErr = '';
+  for(const [cid, arr] of Object.entries(byClient)){
+    const r = await ozLabelPagesForPostings(cid, arr);
+    Object.assign(labelPages, r.pages); if(r.err && !firstErr) firstErr = r.err;
+  }
+  const got = Object.keys(labelPages).length;
+  if(firstErr) toast(`⚠ Ozon отдал этикетки не для всех отправлений: ${firstErr}. Получено: ${got} из ${rows.length}`);
+  if(!got){ toast('Этикетки от Ozon не получены — печатать нечего. Повторите через минуту'); return; }
+  toast(`Печатаем на принтере: ${groupList.length} карточек товара…`);
+  const ls = getLabelSettings();
+  for(const g of groupList){
+    const info = await htmlToMonoBitmap(ozInfoCardHtml(g), ls.widthMm, ls.heightMm);
+    if(!await printBitmapOnThermalPrinter(ls.widthMm, ls.heightMm, info)){ toast('Печать остановлена — проблема с принтером'); return; }
+    for(const o of g.orders){
+      for(const png of (labelPages[o.postingNumber]||[])){
+        if(!await ozPrintPngOnThermal(png, ls)){ toast('Печать остановлена — проблема с принтером'); return; }
+      }
+    }
+  }
+  toast(`Готово: напечатано на принтере ${groupList.length} карточек товара`);
+}
+// Одна этикетка отправления — сразу на термопринтер; если QZ Tray недоступен, открывается PDF
+async function ozPrintOne(pn, btn){
+  const order = ozonOrders.find(o=>o.postingNumber===pn);
+  if(!order) return;
+  if(btn) btn.disabled = true;
+  try{
+    toast('Запрашиваю этикетку у Ozon…');
+    const r = await ozLabelPagesForPostings(order.clientId, [order]);
+    const pages = r.pages[pn];
+    if(!pages || !pages.length){ toast('Ozon: ' + (r.err || 'этикетка не получена')); return; }
+    if(await connectThermalPrinter()){
+      const ls = getLabelSettings();
+      for(const png of pages){ if(!await ozPrintPngOnThermal(png, ls)){ toast('Печать остановлена — проблема с принтером'); return; } }
+      toast(`🖨 Этикетка ${pn} отправлена на печать`);
+    }
+  }catch(e){ console.error(e); toast('Ошибка печати этикетки: ' + (e.message||e)); }
+  finally{ if(btn) btn.disabled = false; }
+}
+// старая кнопка «Этикетка» из 05-fbs.js — теперь тоже печатает через новый метод
+function getOzonSticker(pn){ return ozPrintOne(pn); }
 function ozPrintPickList(){
   const rows = ozTargets('new').map(o=>({o, pi:ozPI(o)})).sort((a,b)=>{
     if(a.pi.cell && b.pi.cell) return String(a.pi.cell).localeCompare(String(b.pi.cell), 'ru', {numeric:true});
@@ -617,3 +788,66 @@ async function ozCloseShipment(){
 // инициализация оформления (старые кнопки-вкладки скрываются)
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', ozInitUi); else ozInitUi();
 setTimeout(ozInitUi, 800);
+
+// ---------- подгрузка и синхронизации — как у WB ----------
+// При открытии вкладки и каждые 30 секунд (пока она открыта) проверяем новые отправления; ещё работает фоновая проверка на сервере и живое обновление.
+let ozAutoPollTimer = null, ozPolling = false;
+async function ozPoll(){
+  if(ozPolling || !isTabActive('tab-ozon')) return;
+  if(ozMode!=='list' || ozonShipAllBusy || ozInFlight.size) return;
+  const targets = ozClientFilter() ? [ozClientFilter()] : clients.filter(c=>c.ozonConnected).map(c=>c.id);
+  if(!targets.length) return;
+  ozPolling = true;
+  try{
+    let added = 0;
+    for(const cid of targets){
+      try{
+        const { data, error } = await sb.functions.invoke('ozon-orders-ts', { body:{ clientId:cid, action:'fetch_new' } });
+        if(!error && data && !data.error) added += data.newlyInserted || 0;
+      }catch(e){ console.error(e); }
+    }
+    if(added>0 && ozMode==='list' && !ozInFlight.size){
+      await loadOzonOrders();
+      if(!isTypingInside('ozonBody')) renderOzonBody();
+    }
+  } finally { ozPolling = false; }
+}
+function renderOzon(){
+  populateOzonClientSelect();
+  ozInitHeader();
+  renderOzonBody();
+  if(!ozAutoPollTimer) ozAutoPollTimer = setInterval(ozPoll, 30000);
+  ozPoll();
+}
+async function ozDiscoverMissing(){
+  const targets = ozClientFilter() ? [ozClientFilter()] : clients.filter(c=>c.ozonConnected).map(c=>c.id);
+  if(!targets.length){ toast('Нет ни одного клиента с подключённым Ozon'); return; }
+  toast('Ищем отправления за последние 30 дней, которых нет в системе — это может занять минуту…');
+  let found=0, missing=0, inserted=0; const errors=[];
+  for(const cid of targets){
+    const cl = clients.find(c=>c.id===cid);
+    try{
+      const { data, error } = await sb.functions.invoke('ozon-fbs-ts', { body:{ clientId:cid, action:'discover_missing' } });
+      if(error || (data && data.error)){ errors.push(`«${cl?cl.name:cid}»: ${(data && data.error) || await extractEdgeFunctionError(data, error)}`); continue; }
+      found += data.found||0; missing += data.missingCount||0; inserted += data.inserted||0;
+    }catch(e){ errors.push(`«${cl?cl.name:cid}»: ${e.message||e}`); }
+  }
+  await loadOzonOrders(); renderOzonBody();
+  toast(errors.length ? `Ошибки: ${errors.join(' | ')}` : `У Ozon за 30 дней: ${found}. Не было в системе: ${missing}. Добавлено: ${inserted}.`);
+}
+// кнопки шапки — те же, что на вкладке WB
+function ozInitHeader(){
+  const tab = document.getElementById('tab-ozon');
+  if(!tab) return;
+  const btns = [...tab.querySelectorAll('button')];
+  const b1 = btns.find(b=>(b.getAttribute('onclick')||'').includes('fetchNewOzonOrders'));
+  const b2 = btns.find(b=>(b.getAttribute('onclick')||'').includes('syncOzonStatuses'));
+  if(b1){ b1.textContent = '🔄 Обновить сейчас'; b1.className = 'btn btn-ghost'; }
+  if(b2) b2.textContent = '📡 Сверить статусы с Ozon';
+  if(b2 && !document.getElementById('ozDiscoverBtn')){
+    const d = document.createElement('button');
+    d.id = 'ozDiscoverBtn'; d.className = 'btn btn-ghost'; d.textContent = '🔍 Найти пропущенные заказы';
+    d.setAttribute('onclick', 'ozDiscoverMissing()');
+    b2.insertAdjacentElement('afterend', d);
+  }
+}
