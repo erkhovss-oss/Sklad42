@@ -905,6 +905,10 @@ function renderClientDetail(body){
           </div>
           <p style="font-size:11px;color:var(--ink-faint);margin-top:4px">Без выбранного склада будут подгружаться заказы со всех складов продавца — это и есть причина лишних заказов, если склад не указан.</p>
         ` : ''}
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn btn-primary" onclick="loadOzonProductsAndMatch('${c.id}')" title="Загружает карточки Ozon и связывает их с товарами в остатках по штрихкоду и артикулу — чтобы не было дублей">📦 Загрузить карточки Ozon и сопоставить</button>
+          ${(()=>{ const st = ozonLinkStats(c); return (st.linked||st.unlinked||st.ignored) ? `<span style="font-size:12px;color:var(--ink-soft)">связано: <b>${st.linked}</b>${st.unlinked?` · без решения: <b style="color:var(--warn)">${st.unlinked}</b>`:''}${st.ignored?` · пропущено: ${st.ignored}`:''}</span>` : `<span style="font-size:12px;color:var(--ink-faint)">карточки Ozon ещё не сопоставлены — остатки на Ozon не отправятся</span>`; })()}
+        </div>
         ${c.ozonWarehouseId ? `
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px">
             <button class="btn btn-accent" onclick="pushStocksToOzon('${c.id}')">🔄 Отправить остатки на Ozon сейчас</button>

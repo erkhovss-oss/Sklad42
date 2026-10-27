@@ -3747,7 +3747,7 @@ async function syncOzonStatuses(){
 function shipOzonOrder(postingNumber){
   const order = ozonOrders.find(o=>o.postingNumber===postingNumber);
   if(!order) return;
-  const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
+  const inv = ozonItemForOrder(order);
   const needQty = order.qty || 1;
   const available = inv ? (inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty) : 0;
   if(!inv || available < needQty){
@@ -3790,7 +3790,7 @@ function cancelOzonOrder(postingNumber){
     sb.functions.invoke('ozon-orders-ts', { body: { clientId: order.clientId, action:'cancel', postingNumber, cancelReasonId: chosen } }).then(({data, error})=>{
       if(error || (data && data.error)){ toast('Ozon: ' + (data?.error || error.message)); return; }
       if(wasShipped && !order.outOfStock){
-        const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
+        const inv = ozonItemForOrder(order);
         if(inv) logMovement(inv.sku, inv.name, order.qty||1, `Возврат остатка — отмена отправления Ozon ${postingNumber}`, inv.client, inv.size, inv.warehouseId||'MAIN');
       }
       order.status = 'cancelled';

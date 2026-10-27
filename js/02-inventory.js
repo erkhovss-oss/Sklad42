@@ -77,7 +77,8 @@ function buildReserveMap(){
   });
   ozonOrders.forEach(o=>{
     if(o.status!=='awaiting_packaging' || !o.article) return;
-    const k = o.clientName+'|'+o.article; oz.set(k, (oz.get(k)||0)+(o.qty||1));
+    const link = (typeof ozonLinkFor==='function') ? ozonLinkFor(o.clientName, o.article) : null;
+    const k = o.clientName+'|'+(link && link.invSku ? link.invSku : o.article); oz.set(k, (oz.get(k)||0)+(o.qty||1));
   });
   return {wb, oz};
 }
