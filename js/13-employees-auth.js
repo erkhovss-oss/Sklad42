@@ -188,7 +188,7 @@ function renderEmployeesTab(){
   const body = document.getElementById('employeesBody');
 
   if(currentEmployeesView==='roles'){
-    const permLabels = [['dashboard','Дашборд'],['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['outbound','Поставка на склад'],['fbs','Заказы FBS'],['ozon','Заказы Ozon'],['speed','Скорость сдачи'],['packing','Задания на упаковку'],['kizdup','Дубль КИЗ'],['prsettings','Настройки печати'],['dds','ДДС'],['stocktake','Инвентаризация'],['warehouses','Склады'],['consumables','Расходники'],['returns','Возвраты'],['employees','Сотрудники']];
+    const permLabels = [['dashboard','Дашборд'],['inventory','Остатки'],['clients','Клиенты'],['storage','Хранение'],['supplies','Плановые поставки'],['outbound','Поставка на склад'],['fbs','Заказы FBS'],['ozon','Заказы Ozon'],['packing','Задания на упаковку'],['kizdup','Дубль КИЗ'],['prsettings','Настройки печати'],['dds','ДДС'],['stocktake','Инвентаризация'],['warehouses','Склады'],['consumables','Расходники'],['returns','Возвраты'],['employees','Сотрудники']];
     body.innerHTML = `
       <div class="panel" style="padding:18px;margin-bottom:18px">
         <div class="eyebrow" style="margin-bottom:10px">Новая роль</div>

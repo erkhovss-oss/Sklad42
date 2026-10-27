@@ -135,3 +135,14 @@ function renderSpeed(){
     <button class="btn btn-ghost" onclick="speedResetCfg()">Сбросить</button></div>`;
   body.innerHTML = html;
 }
+
+function setDashView(v){
+  const sp = v==='speed';
+  const g = id=>document.getElementById(id);
+  g('dashboardBody').style.display = sp ? 'none' : '';
+  g('speedBody').style.display = sp ? '' : 'none';
+  g('dashControls').style.display = sp ? 'none' : 'flex';
+  g('dashViewMain').className = 'btn ' + (sp ? 'btn-ghost' : 'btn-accent');
+  g('dashViewSpeed').className = 'btn ' + (sp ? 'btn-accent' : 'btn-ghost');
+  if(sp) renderSpeed();
+}
