@@ -25,6 +25,8 @@ async function enterClientPortal(token){
   if(cellFilterSelect) cellFilterSelect.style.display = 'none';
   const writeoffsBtn = document.getElementById('viewWriteoffsBtn');
   if(writeoffsBtn) writeoffsBtn.style.display = 'none';
+  const gloveBtn = document.getElementById('gloveKitsBtn');
+  if(gloveBtn) gloveBtn.style.display = 'none';
   setInventoryView('stock');
   const heading = document.querySelector('#tab-inventory h1');
   if(heading) heading.textContent = 'Остатки — ' + clientViewMode.name;
