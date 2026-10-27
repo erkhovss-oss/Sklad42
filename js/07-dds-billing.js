@@ -47,8 +47,7 @@ function renderDds(){
     invoiceClientSelect.innerHTML = clients.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
     if(clients.some(c=>c.id===prev)) invoiceClientSelect.value = prev;
   }
-  const invoiceMonthInput = document.getElementById('invoiceMonth');
-  if(invoiceMonthInput && !invoiceMonthInput.value) invoiceMonthInput.value = new Date().toISOString().slice(0,7);
+  setInvoicePeriod('month', true);
   document.getElementById('tochkaPanelWrap').innerHTML = renderTochkaPanel();
   renderDdsTable();
 }
@@ -175,20 +174,38 @@ function editDdsCategory(id){
     });
   }
 }
+
+// Быстрые периоды для счёта и «Хранения». Возвращает {from,to} в формате YYYY-MM-DD (локальная дата, без сдвига по UTC)
+function periodRange(kind){
+  const ymd = d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const now = new Date(); const y = now.getFullYear(), m = now.getMonth();
+  if(kind==='week' || kind==='prevweek'){
+    const dow = (now.getDay()+6)%7; // понедельник = 0
+    const mon = new Date(y, m, now.getDate()-dow-(kind==='prevweek'?7:0));
+    const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate()+6);
+    return {from:ymd(mon), to:ymd(sun)};
+  }
+  if(kind==='h1') return {from:ymd(new Date(y,m,1)), to:ymd(new Date(y,m,15))};
+  if(kind==='h2') return {from:ymd(new Date(y,m,16)), to:ymd(new Date(y,m+1,0))};
+  if(kind==='prevmonth') return {from:ymd(new Date(y,m-1,1)), to:ymd(new Date(y,m,0))};
+  return {from:ymd(new Date(y,m,1)), to:ymd(new Date(y,m+1,0))};
+}
+function setInvoicePeriod(kind, onlyIfEmpty){
+  const f = document.getElementById('invoiceFrom'), t = document.getElementById('invoiceTo');
+  if(!f || !t) return;
+  if(onlyIfEmpty && f.value && t.value) return;
+  const r = periodRange(kind); f.value = r.from; t.value = r.to;
+}
 function generateClientInvoice(){
   const clientId = document.getElementById('invoiceClient').value;
-  const monthStr = document.getElementById('invoiceMonth').value;
-  if(!clientId){ toast('Выберите клиента'); return; }
-  if(!monthStr){ toast('Выберите месяц'); return; }
+  const periodStart = document.getElementById('invoiceFrom').value;
+  const periodEnd = document.getElementById('invoiceTo').value;
+  if(!periodStart || !periodEnd){ toast('Укажите период: с какой и по какую дату'); return; }
+  if(periodStart > periodEnd){ toast('Дата «с» позже даты «по»'); return; }
   const client = clients.find(c=>c.id===clientId);
   if(!client){ toast('Клиент не найден'); return; }
-  const [year, month] = monthStr.split('-').map(Number);
-  const periodStart = `${monthStr}-01`;
-  const lastDay = new Date(year, month, 0).getDate();
-  const periodEnd = `${monthStr}-${String(lastDay).padStart(2,'0')}`;
-
   const rows = ddsEntries.filter(d=>d.type==='income' && d.clientId===clientId && d.date>=periodStart && d.date<=periodEnd);
-  if(!rows.length){ toast('За этот месяц по клиенту нет ни одной операции прихода'); return; }
+  if(!rows.length){ toast('За этот период по клиенту нет ни одной операции прихода'); return; }
 
   const byCategory = {};
   rows.forEach(r=>{ byCategory[r.category] = (byCategory[r.category]||0) + r.amount; });
@@ -201,14 +218,15 @@ function generateClientInvoice(){
     if(!wh.name) wh.name = 'ТелеПак';
   }
 
-  const monthName = new Date(year, month-1, 1).toLocaleDateString('ru-RU', {month:'long', year:'numeric'});
+  const fmtD = x=>new Date(x+'T00:00:00').toLocaleDateString('ru-RU');
+  const monthName = periodStart===periodEnd ? fmtD(periodStart) : `период ${fmtD(periodStart)} — ${fmtD(periodEnd)}`;
   const today = new Date();
   const dateStr = today.toLocaleDateString('ru-RU', {day:'2-digit', month:'long', year:'numeric'});
 
   const win = window.open('', '_blank');
   if(!win){ toast('Браузер заблокировал открытие окна — разрешите всплывающие окна для этого сайта и попробуйте снова'); return; }
   win.document.write(`
-    <!DOCTYPE html><html><head><meta charset="utf-8"><title>Счёт за ${monthName}</title>
+    <!DOCTYPE html><html><head><meta charset="utf-8"><title>Счёт — ${monthName}</title>
     <style>
       body{font-family:Arial,sans-serif;padding:40px;color:#111;max-width:850px;margin:0 auto;line-height:1.5}
       h1{text-align:center;font-size:18px;margin-bottom:4px}
@@ -225,7 +243,7 @@ function generateClientInvoice(){
       @media print{ body{padding:20px} }
     </style></head><body>
       <h1>СЧЁТ ЗА УСЛУГИ ФУЛФИЛМЕНТА</h1>
-      <div class="sub">за ${monthName} · составлен ${dateStr}</div>
+      <div class="sub">${monthName} · составлен ${dateStr}</div>
       <p><b>Исполнитель:</b> ${wh.name}${companySettings.inn?` (ИНН ${companySettings.inn}${companySettings.kpp?`, КПП ${companySettings.kpp}`:''})`:''}</p>
       ${companySettings.legalAddress?`<p style="margin-top:-10px"><span class="small">${companySettings.legalAddress}</span></p>`:''}
       ${companySettings.bankDetails?`<p style="margin-top:-10px"><span class="small">${companySettings.bankDetails.replace(/\n/g,'<br>')}</span></p>`:''}
