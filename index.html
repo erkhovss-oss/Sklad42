@@ -551,7 +551,6 @@
     <div class="nav-item" data-tab="outbound"><span class="num">05</span>Поставка на склад</div>
     <div class="nav-item" data-tab="fbs"><span class="num">06</span>Заказы FBS</div>
     <div class="nav-item" data-tab="ozon"><span class="num">07</span>Заказы Ozon</div>
-    <div class="nav-item" data-tab="speed"><span class="num">07</span>Скорость сдачи</div>
     <div class="nav-item" data-tab="dds"><span class="num">07</span>ДДС</div>
     <div class="nav-item" data-tab="stocktake"><span class="num">08</span>Инвентаризация</div>
     <div class="nav-item" data-tab="warehouses"><span class="num">09</span>Склады</div>
@@ -565,13 +564,6 @@
   <div class="main">
     <div class="content">
 
-      <!-- SPEED -->
-      <section class="section" id="tab-speed">
-        <div class="page-head"><div><h1>Скорость сдачи</h1><p>Срок от создания заказа до передачи в доставку и оценка коэффициента за срок сдачи.</p></div>
-          <div><button class="btn btn-accent" onclick="speedState.rows=null;loadSpeed()">Обновить</button></div></div>
-        <div id="speedBody"><div class="panel empty">Загрузка…</div></div>
-      </section>
-
       <!-- DASHBOARD -->
       <section class="section" id="tab-dashboard">
         <div class="page-head">
@@ -579,7 +571,7 @@
             <h1>Дашборд</h1>
             <p>Финансы, заказы и склад за выбранный период — общая картина без похода по вкладкам.</p>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div id="dashControls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input class="search" id="dashDateFrom" type="date" style="width:150px">
             <span style="color:var(--ink-faint)">—</span>
             <input class="search" id="dashDateTo" type="date" style="width:150px">
@@ -589,7 +581,12 @@
             <button class="btn btn-accent" onclick="loadDashboard()">Обновить</button>
           </div>
         </div>
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <button class="btn btn-accent" id="dashViewMain" onclick="setDashView('main')">Обзор</button>
+          <button class="btn btn-ghost" id="dashViewSpeed" onclick="setDashView('speed')">Скорость сдачи</button>
+        </div>
         <div id="dashboardBody"><div class="panel empty">Загрузка…</div></div>
+        <div id="speedBody" style="display:none"></div>
       </section>
 
       <!-- INVENTORY -->
@@ -717,8 +714,19 @@
             <select class="search" id="storageClientFilter" style="width:220px">
               <option value="">Все клиенты</option>
             </select>
+            <input class="search" id="storageFrom" type="date" style="width:150px" title="С даты">
+            <input class="search" id="storageTo" type="date" style="width:150px" title="По дату">
             <button class="btn btn-ghost" onclick="recordAllStorageSnapshots().then(renderStorage)">↻ Пересчитать сейчас</button>
           </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+          <button class="btn btn-ghost" onclick="setStoragePeriod('all')">Всё время</button>
+          <button class="btn btn-ghost" onclick="setStoragePeriod('week')">Эта неделя</button>
+          <button class="btn btn-ghost" onclick="setStoragePeriod('prevweek')">Прошлая неделя</button>
+          <button class="btn btn-ghost" onclick="setStoragePeriod('h1')">1–15 этого мес.</button>
+          <button class="btn btn-ghost" onclick="setStoragePeriod('h2')">16–конец этого мес.</button>
+          <button class="btn btn-ghost" onclick="setStoragePeriod('month')">Этот месяц</button>
+          <button class="btn btn-ghost" onclick="setStoragePeriod('prevmonth')">Прошлый месяц</button>
         </div>
         <div class="stat-row" id="storageStats"></div>
         <div class="panel" style="padding:22px" id="storageChartWrap"></div>
@@ -855,12 +863,22 @@
           <button class="btn btn-accent" onclick="generateStorageIncome()">📥 Подтянуть приход по хранению</button>
         </div>
         <div class="panel" style="padding:20px;margin-bottom:18px">
-          <div class="eyebrow" style="margin-bottom:10px">Счёт клиенту за месяц</div>
-          <p style="font-size:12px;color:var(--ink-faint);margin:0 0 12px 0">Соберёт весь приход по клиенту за выбранный месяц (хранение, приёмка, отгрузки FBS, прочее) в один документ на печать/PDF.</p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <div class="eyebrow" style="margin-bottom:10px">Счёт клиенту за период</div>
+          <p style="font-size:12px;color:var(--ink-faint);margin:0 0 12px 0">Соберёт весь приход по клиенту за выбранный период (хранение, приёмка, отгрузки FBS, прочее) в один документ на печать/PDF. Период — любой: неделя, полмесяца, месяц.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
             <select class="search" id="invoiceClient" style="width:240px"></select>
-            <input class="search" id="invoiceMonth" type="month" style="width:170px">
+            <input class="search" id="invoiceFrom" type="date" style="width:150px">
+            <span style="color:var(--ink-faint)">—</span>
+            <input class="search" id="invoiceTo" type="date" style="width:150px">
             <button class="btn btn-primary" onclick="generateClientInvoice()">📄 Сформировать счёт</button>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn btn-ghost" onclick="setInvoicePeriod('week')">Эта неделя</button>
+            <button class="btn btn-ghost" onclick="setInvoicePeriod('prevweek')">Прошлая неделя</button>
+            <button class="btn btn-ghost" onclick="setInvoicePeriod('h1')">1–15 этого мес.</button>
+            <button class="btn btn-ghost" onclick="setInvoicePeriod('h2')">16–конец этого мес.</button>
+            <button class="btn btn-ghost" onclick="setInvoicePeriod('month')">Этот месяц</button>
+            <button class="btn btn-ghost" onclick="setInvoicePeriod('prevmonth')">Прошлый месяц</button>
           </div>
         </div>
         <div id="tochkaPanelWrap"></div>
