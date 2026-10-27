@@ -976,7 +976,9 @@ function renderStorage(){
 
   let data, title;
   const byDay = {};
-  const rows = filterSelect.value ? storageHistoryRows.filter(r=>r.client_id===filterSelect.value) : storageHistoryRows;
+  const dFrom = (document.getElementById('storageFrom')||{}).value || '';
+  const dTo = (document.getElementById('storageTo')||{}).value || '';
+  const rows = storageHistoryRows.filter(r=>(!filterSelect.value || r.client_id===filterSelect.value) && (!dFrom || r.day>=dFrom) && (!dTo || r.day<=dTo));
   rows.forEach(r=>{
     byDay[r.day] = (byDay[r.day]||0) + Number(r.cost);
   });
@@ -984,11 +986,12 @@ function renderStorage(){
   title = filterSelect.value ? (clients.find(x=>x.id===filterSelect.value)?.name || '') : 'Все клиенты';
 
   const todayCost = data.length ? data[data.length-1].cost : 0;
+  const lastLabel = (dFrom || dTo) ? 'Последний день периода' : 'Сегодня';
   const avgCost = data.length ? data.reduce((s,d)=>s+d.cost,0)/data.length : 0;
   const totalCost = data.reduce((s,d)=>s+d.cost,0);
 
   document.getElementById('storageStats').innerHTML = `
-    <div class="stat"><div class="val">${todayCost.toFixed(0)} ₽</div><div class="lbl">Сегодня</div></div>
+    <div class="stat"><div class="val">${todayCost.toFixed(0)} ₽</div><div class="lbl">${lastLabel}</div></div>
     <div class="stat"><div class="val">${avgCost.toFixed(0)} ₽</div><div class="lbl">В среднем за день</div></div>
     <div class="stat"><div class="val">${totalCost.toFixed(0)} ₽</div><div class="lbl">Итого за ${data.length} дн.</div></div>
   `;
@@ -1043,3 +1046,10 @@ function renderStorageChartSvg(data){
   </svg>`;
 }
 document.getElementById('storageClientFilter').addEventListener('change', renderStorage);
+['storageFrom','storageTo'].forEach(id=>document.getElementById(id).addEventListener('change', renderStorage));
+function setStoragePeriod(kind){
+  const f = document.getElementById('storageFrom'), t = document.getElementById('storageTo');
+  if(kind==='all'){ f.value=''; t.value=''; }
+  else { const r = periodRange(kind); f.value = r.from; t.value = r.to; }
+  renderStorage();
+}
