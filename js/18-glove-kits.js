@@ -81,7 +81,8 @@ function gkBuildMerge(){
   const groups = [];
   let n = 0;
   map.forEach((arr, g)=>{
-    if(arr.length<2) return;
+    // одиночный артикул тоже можно перевести в «пары + набор» (если это перчатки/в названии есть «пар»)
+    if(arr.length<2 && !/перчат|\d+\s*пар/i.test(arr[0].name||'')) return;
     const rows = arr.map(i=>({key:itemKey(i), pairs:gkGuessPairs(i)})).sort((a,b)=>a.pairs-b.pairs);
     const allGuessed = rows.every(r=>r.pairs>0);
     groups.push({id:'g'+(n++), gname:g, baseSku:g+'_пара', on:allGuessed, rows});
@@ -92,7 +93,7 @@ function gkMergeHtml(){
   if(!gk.merge) gkBuildMerge();
   const gs = gk.merge.groups;
   if(!gs.length) return '<div class="empty" style="padding:24px">Не нашёл групп артикулов, которые можно объединить (нужно минимум 2 похожих артикула вроде «Оранж5», «Оранж6»).</div>';
-  return `<div style="font-size:13px;margin-bottom:10px">Артикулы сгруппированы по названию без числа в конце. Проверьте «пар в артикуле» (подставил число из артикула/названия), отметьте группы, которые нужно объединить. Остаток каждого артикула пересчитается в пары. <b>Штрихкоды артикулов остаются</b>.</div>` +
+  return `<div style="font-size:13px;margin-bottom:10px">Артикулы сгруппированы по названию без числа в конце; одиночные артикулы перчаток (например «Хаки» на 6 пар) показаны отдельными группами — для них создастся базовый «1 пара», а сам артикул станет набором. Проверьте «пар в артикуле» (подставил число из артикула/названия), отметьте группы, которые нужно объединить. Остаток каждого артикула пересчитается в пары. <b>Штрихкоды артикулов остаются</b>.</div>` +
   gs.map(g=>{
     const total = g.rows.reduce((s,r)=>{ const it = gkItemByKey(r.key); return s + (it ? it.qty*(r.pairs||0) : 0); },0);
     return `<div class="panel" style="padding:12px 14px;margin-bottom:10px">
