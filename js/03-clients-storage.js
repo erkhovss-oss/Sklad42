@@ -1046,9 +1046,10 @@ function renderStorageChartSvg(data){
   </svg>`;
 }
 document.getElementById('storageClientFilter').addEventListener('change', renderStorage);
-['storageFrom','storageTo'].forEach(id=>document.getElementById(id).addEventListener('change', renderStorage));
+['storageFrom','storageTo'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('change', renderStorage); });
 function setStoragePeriod(kind){
   const f = document.getElementById('storageFrom'), t = document.getElementById('storageTo');
+  if(!f || !t) return;
   if(kind==='all'){ f.value=''; t.value=''; }
   else { const r = periodRange(kind); f.value = r.from; t.value = r.to; }
   renderStorage();
