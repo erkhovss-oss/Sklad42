@@ -142,7 +142,7 @@ function renderOzonBody(){
   let toolbar = '';
   if(ozonView==='new'){
     toolbar = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
-      <button class="btn btn-accent" onclick="ozEnterScan()" ${total?'':'disabled'}>🎯 Режим сборки (сканер)</button>
+      <button class="btn btn-accent" onclick="ozEnterScan('new')" ${total?'':'disabled'} title="Сканер: товар (и КИЗ) → подтверждение сборки в Ozon → этикетка">🎯 Режим сборки (сканер)</button>
       <button class="btn btn-primary" onclick="shipAllOzonOrders()" ${total?'':'disabled'}>${ozSel.size?`Собрать выбранные (${ozSel.size})`:`Собрать все (${total})`}</button>
       <button class="btn btn-ghost" onclick="ozPrintLabelsThermal()" ${total?'':'disabled'}>🖨️ ${ozSel.size?`На принтер — выбранные (${ozSel.size})`:'На принтер (QZ Tray)'}</button>
       <button class="btn btn-ghost" onclick="ozPrintLabels()" ${total?'':'disabled'}>📄 Этикетки PDF${ozSel.size?` (${ozSel.size})`:''}</button>
@@ -152,7 +152,8 @@ function renderOzonBody(){
     </div>`;
   } else if(ozonView==='ship'){
     toolbar = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
-      <button class="btn btn-accent" onclick="ozCloseShipment()" ${total?'':'disabled'}>📦 Закрыть отгрузку (акт)</button>
+      <button class="btn btn-accent" onclick="ozEnterScan('ship')" ${rows.some(o=>!o.pickedAt)?'':'disabled'} title="Сканер: товар → отметка «собран» + этикетка на принтер">🎯 Режим сборки (сканер)</button>
+      <button class="btn btn-primary" onclick="ozCloseShipment()" ${total?'':'disabled'}>📦 Закрыть отгрузку (акт)</button>
       <button class="btn btn-ghost" onclick="ozPrintLabelsThermal()" ${total?'':'disabled'}>🖨️ ${ozSel.size?`На принтер — выбранные (${ozSel.size})`:'На принтер (QZ Tray)'}</button>
       <button class="btn btn-ghost" onclick="ozPrintLabels()" ${total?'':'disabled'}>📄 Этикетки PDF${ozSel.size?` (${ozSel.size})`:''}</button>
       <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="forgetQzPrinter()" title="Выбрать другой принтер при следующей печати">⚙️ Сменить принтер</button>
@@ -168,10 +169,10 @@ function renderOzonBody(){
     const chips = [
       `<span class="chip oz">${escapeHtml(OZ_STATUS_RU[o.status]||o.status)}</span>`,
       !linked && tab==='new' ? `<span class="chip" style="background:#FFF1E0;color:#B45309" title="Артикул Ozon не сопоставлен с товаром в остатках — карточка клиента → Ozon → «Загрузить карточки Ozon и сопоставить»">не сопоставлен</span>` : '',
-      kiz && tab==='new' ? `<span class="chip" style="background:#FDE8E8;color:#B91C1C">нужен КИЗ</span>` : '',
+      kiz && (tab==='new' || (tab==='ship' && !o.kizCode)) ? `<span class="chip" style="background:#FDE8E8;color:#B91C1C">нужен КИЗ</span>` : '',
       (o.qty||1)>1 && tab==='new' ? `<span class="chip" style="background:#E0ECFF;color:#1D4ED8" title="При сборке отправление автоматически делится на отправления по 1 шт">${o.qty} шт → разделится</span>` : '',
       o.outOfStock ? `<span class="chip" style="background:#FDE8E8;color:#B91C1C">нет на складе</span>` : '',
-      ozDoneIds.has(o.postingNumber) ? '<span class="chip" style="background:#DCFCE7;color:#166534">✓ собран</span>' : ''
+      (ozDoneIds.has(o.postingNumber) || (tab==='ship' && o.pickedAt)) ? '<span class="chip" style="background:#DCFCE7;color:#166534">✓ собран</span>' : (tab==='ship' ? '<span class="chip" style="background:#FFF1E0;color:#B45309">нужно собрать</span>' : '')
     ].join(' ');
     return `<div class="panel" style="padding:12px 16px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
       <div style="display:flex;gap:10px;align-items:center;min-width:260px;flex:1">
@@ -223,17 +224,9 @@ function ozUndoDeduction(inv, order, qty, ddsId){
     }
   }catch(e){ console.error(e); }
 }
-async function ozAssembleOne(order, kizCodes){
+// списание остатка и начисление за отгрузку (как у WB); возвращает id записи ДДС или null
+function ozDeductAndBill(order, inv, needQty){
   const pn = order.postingNumber;
-  if(ozInFlight.has(pn)) return {ok:false, message:'уже отправляется — подождите'};
-  if(order.status!=='awaiting_packaging') return {ok:false, message:'не в статусе «ожидает сборки»'};
-  const inv = ozonItemForOrder(order);
-  const needQty = order.qty || 1;
-  if(!inv) return {ok:false, message:`«${order.name||order.article}» (${order.article}) не сопоставлен с товаром в остатках`};
-  const available = inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty;
-  if(available < needQty) return {ok:false, message:`Недостаточно на складе «${inv.name}» — нужно ${needQty} шт, есть ${available}`};
-  const codes = (kizCodes||[]).filter(Boolean);
-  ozInFlight.add(pn);
   deductStockForShipment(inv, needQty, `Сборка отправления Ozon ${pn}`);
   let ddsId = null;
   if(inv.dims && inv.dims.l && inv.dims.w && inv.dims.h){
@@ -249,6 +242,26 @@ async function ozAssembleOne(order, kizCodes){
       } else ddsId = null;
     }
   }
+  return ddsId;
+}
+// списывался ли уже остаток по этому отправлению (по журналу движений в базе)
+async function ozAlreadyDeducted(pn){
+  const { data, error } = await sb.from('movement_log').select('delta').like('type', '%Ozon ' + pn + '%');
+  if(error){ console.error(error); return null; }
+  return (data||[]).reduce((a,m)=>a+(Number(m.delta)||0), 0) < 0;
+}
+async function ozAssembleOne(order, kizCodes, opts){
+  const pn = order.postingNumber;
+  if(ozInFlight.has(pn)) return {ok:false, message:'уже отправляется — подождите'};
+  if(order.status!=='awaiting_packaging') return {ok:false, message:'не в статусе «ожидает сборки»'};
+  const inv = ozonItemForOrder(order);
+  const needQty = order.qty || 1;
+  if(!inv) return {ok:false, message:`«${order.name||order.article}» (${order.article}) не сопоставлен с товаром в остатках`};
+  const available = inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty;
+  if(available < needQty) return {ok:false, message:`Недостаточно на складе «${inv.name}» — нужно ${needQty} шт, есть ${available}`};
+  const codes = (kizCodes||[]).filter(Boolean);
+  ozInFlight.add(pn);
+  const ddsId = ozDeductAndBill(order, inv, needQty);
   try{
     const { data, error } = await sb.functions.invoke('ozon-fbs-ts', { body:{ clientId:order.clientId, action:'ship', postingNumber:pn, kizCodes:codes } });
     if(error || (data && data.error)){
@@ -258,10 +271,12 @@ async function ozAssembleOne(order, kizCodes){
     }
     order.status = 'awaiting_deliver';
     if(codes.length){ order.kizCode = codes.join('\n'); order.kizStatus = 'ok'; }
-    order.pickedAt = new Date().toISOString();
+    // «собран» (picked_at) отмечается только при физической сборке сканером, как у WB; кнопки «Собрать» его не ставят
+    const upd = {status:'awaiting_deliver'};
+    if(opts && opts.picked){ order.pickedAt = new Date().toISOString(); upd.picked_at = order.pickedAt; upd.picked_by = currentUser?currentUser.name:null; }
     const cur = ozonOrders.find(o=>o.postingNumber===pn);
     if(cur && cur!==order){ cur.status = order.status; cur.pickedAt = order.pickedAt; if(codes.length) cur.kizCode = order.kizCode; }
-    ozDbUpdate(pn, {status:'awaiting_deliver', picked_at:order.pickedAt, picked_by: currentUser?currentUser.name:null});
+    ozDbUpdate(pn, upd);
     ozDoneIds.add(pn);
     return {ok:true, warning:data && data.warning};
   }catch(e){
@@ -274,9 +289,9 @@ async function ozAssembleOne(order, kizCodes){
 // Ozon: в одном отправлении может быть 2 шт и больше. Как на WB (1 заказ = 1 шт), делим такое отправление у Ozon на
 // отдельные отправления по 1 шт и собираем каждое (КИЗ — по одному на отправление). Если после деления что-то не собралось,
 // оставшиеся отправления по 1 шт лежат в «Новых».
-async function ozAssemble(order, kizCodes){
+async function ozAssemble(order, kizCodes, opts){
   const qty = order.qty || 1;
-  if(qty <= 1 || order.status!=='awaiting_packaging') return ozAssembleOne(order, kizCodes);
+  if(qty <= 1 || order.status!=='awaiting_packaging') return ozAssembleOne(order, kizCodes, opts);
   const inv = ozonItemForOrder(order);
   if(!inv) return {ok:false, message:`«${order.name||order.article}» (${order.article}) не сопоставлен с товаром в остатках`};
   const available = inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty;
@@ -290,14 +305,14 @@ async function ozAssemble(order, kizCodes){
   }catch(e){ ozInFlight.delete(order.postingNumber); return {ok:false, message:'Сбой связи при делении: ' + (e.message||e)}; }
   ozInFlight.delete(order.postingNumber);
   if(sp.error || (sp.data && sp.data.error)) return {ok:false, message:'Ozon (деление): ' + ((sp.data && sp.data.error) || await extractEdgeFunctionError(sp.data, sp.error))};
-  if(!sp.data.split) return ozAssembleOne(order, kizCodes);
+  if(!sp.data.split) return ozAssembleOne(order, kizCodes, opts);
   await loadOzonOrders();
   const kids = (sp.data.children||[]).map(pn=>ozonOrders.find(o=>o.postingNumber===pn)).filter(Boolean);
   if(!kids.length) return {ok:false, message:'Ozon разделил отправление, но новые отправления ещё не подтянулись — нажмите «Проверить новые»'};
   const codes = (kizCodes||[]).filter(Boolean);
   let done = 0, warning;
   for(let i=0;i<kids.length;i++){
-    const r = await ozAssembleOne(kids[i], codes[i] ? [codes[i]] : []);
+    const r = await ozAssembleOne(kids[i], codes[i] ? [codes[i]] : [], opts);
     if(!r.ok) return {ok:false, message:`разделено на ${kids.length} шт, собрано ${done}; ${kids[i].postingNumber}: ${r.message}. Остальные ждут в «Новых»`};
     done++; if(r.warning) warning = r.warning;
     if(i<kids.length-1) await new Promise(res=>setTimeout(res,300));
@@ -340,10 +355,14 @@ async function shipAllOzonOrders(){
 }
 
 // ---------- режим сборки со сканером ----------
-function ozEnterScan(){ ozMode = 'scan'; ozDoneIds = new Set(); ozWiz = null; ozScanMsg = ''; ozScanErr = false; renderOzonBody(); }
+let ozScanTab = 'new';            // new — режим сборки на «Ожидают сборки» (подтверждение у Ozon + КИЗ); ship — на «Ожидают отгрузки» (физическая сборка + этикетка)
+function ozScanPool(){
+  return ozScanTab==='ship' ? ozRows('ship').filter(o=>!o.pickedAt) : ozRows('new');
+}
+function ozEnterScan(tab){ ozScanTab = tab==='new' ? 'new' : 'ship'; ozMode = 'scan'; ozDoneIds = new Set(); ozWiz = null; ozScanMsg = ''; ozScanErr = false; renderOzonBody(); }
 function ozExitScan(){ ozMode = 'list'; ozWiz = null; renderOzonBody(); }
 function ozProgress(){
-  const pool = ozRows('new'); const done = ozDoneIds.size;
+  const pool = ozScanPool(); const done = ozDoneIds.size;
   return {left: pool.length, done};
 }
 function ozRenderScan(msg, isErr){
@@ -351,7 +370,7 @@ function ozRenderScan(msg, isErr){
   const wrap = document.getElementById('ozonBody');
   const p = ozProgress();
   wrap.innerHTML = `<div class="panel" style="padding:30px;text-align:center;max-width:560px;margin:0 auto">
-    <div class="eyebrow" style="margin-bottom:10px">Режим сборки Ozon · поиск отправления</div>
+    <div class="eyebrow" style="margin-bottom:10px">Режим сборки Ozon · ${ozScanTab==='ship'?'ожидают отгрузки':'ожидают сборки'} · поиск отправления</div>
     <div style="font-size:14px;margin-bottom:6px"><b>Собрано: ${p.done}</b> · осталось: ${p.left}</div>
     <p style="font-size:13px;color:var(--ink-soft);margin-bottom:18px">Отсканируйте этикетку отправления Ozon (номер вида 0123456789-0123-1) или штрихкод товара — откроется карточка сборки.</p>
     <input class="search mono" id="ozScanInput" placeholder="Ждём скан…" style="width:100%;text-align:center;font-size:16px;padding:14px" autocomplete="off" onkeydown="if(event.key==='Enter') ozHandleScan(this)">
@@ -366,9 +385,9 @@ function ozFindForScan(raw, pool){
   const key = ozPostingKey(raw);
   if(key.length >= 8){
     const o = pool.find(x=>x.postingNumber===key) || pool.find(x=>key.includes(x.postingNumber));
-    if(o) return {order:o, via:'label'};
+    if(o){ if(ozScanTab==='ship' && o.pickedAt) return {done:true, order:o}; return {order:o, via:'label'}; }
   }
-  const left = pool.filter(o=>!ozDoneIds.has(o.postingNumber));
+  const left = pool.filter(o=>!ozDoneIds.has(o.postingNumber) && !(ozScanTab==='ship' && o.pickedAt));
   const inv = findInventoryItemByBarcode(raw, ozClientFilter() ? (clients.find(c=>c.id===ozClientFilter())||{}).name : undefined);
   const cands = [];
   if(inv) cands.push(...left.filter(o=>ozonItemForOrder(o)===inv));
@@ -383,15 +402,17 @@ function ozHandleScan(inputEl){
   inputEl.value = '';
   if(!raw) return;
   if(raw===NEXT_ORDER_QR_CODE){ ozRenderScan('Код «Следующий заказ» здесь не нужен — отсканируйте этикетку отправления', true); return; }
-  const pool = ozRows('new');
-  const f = ozFindForScan(raw, pool);
+  const pool = ozScanPool();
+  const f = ozFindForScan(raw, ozScanTab==='ship' ? ozRows('ship') : pool);
+  if(f && f.done){ playBeep('warn'); ozRenderScan(`${f.order.postingNumber} уже отмечено собранным.`, true); return; }
   if(f && f.allDone){ playBeep('warn'); ozRenderScan('Все отправления с этим товаром уже собраны.', true); return; }
-  if(!f){ playBeep('error'); ozRenderScan(`Не нашёл отправление по коду «${raw}» среди «Новых». Проверьте клиента и что оно ещё не собрано.`, true); return; }
+  if(!f){ playBeep('error'); ozRenderScan(`Не нашёл отправление по коду «${raw}» среди ${ozScanTab==='ship'?'«Ожидают отгрузки»':'«Ожидают сборки»'}. Проверьте клиента и что оно ещё не собрано.`, true); return; }
   ozOpenWizard(f.order, f.via==='barcode');
 }
 function ozOpenWizard(order, bcDone){
   ozMode = 'wiz';
-  ozWiz = {pn:order.postingNumber, bcOk:false, codes:[], busy:false, needKiz:ozNeedsKiz(order)};
+  const shipMode = ozScanTab==='ship' && order.status!=='awaiting_packaging';
+  ozWiz = {pn:order.postingNumber, bcOk:false, codes:[], busy:false, shipMode, needKiz: ozNeedsKiz(order) && !(shipMode && order.kizCode)};
   renderOzonBody();
   if(bcDone) setTimeout(()=>ozBarcodeConfirmed(), 0);
 }
@@ -429,9 +450,9 @@ function ozRenderWizard(){
       <button class="btn btn-ghost" style="margin-bottom:14px" onclick="ozForceKiz()">+ Этому товару нужен КИЗ</button>`}
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-accent" id="ozWizShipBtn" onclick="ozWizShip()" ${ozWiz.bcOk && (!need || ozWiz.codes.length>=kizTotal) && !ozWiz.busy?'':'disabled'}>${ozWiz.busy?'⏳ Собираю…':'Собрать отправление'}</button>
+      <button class="btn btn-accent" id="ozWizShipBtn" onclick="ozWizShip()" ${ozWiz.bcOk && (!need || ozWiz.codes.length>=kizTotal) && !ozWiz.busy?'':'disabled'}>${ozWiz.busy?'⏳ Собираю…':(ozWiz.shipMode?(need?'КИЗ внести и собрать — печать этикетки':'Товар собран — печать этикетки'):'Собрать отправление')}</button>
       <button class="btn btn-ghost" onclick="ozWizBack()">Пропустить</button>
-      <button class="btn btn-ghost" style="color:var(--warn)" onclick="ozOutOfStock()">❌ Нет на складе</button>
+      ${ozWiz.shipMode?'':`<button class="btn btn-ghost" style="color:var(--warn)" onclick="ozOutOfStock()">❌ Нет на складе</button>`}
     </div></div>`;
   const bc = document.getElementById('ozBcInput');
   if(bc){
@@ -457,7 +478,7 @@ function ozBarcodeConfirmed(){
   playBeep('ok');
   ozWiz.bcOk = true;
   const order = ozWizOrder();
-  if(!ozWiz.needKiz){ ozWizShip(); return; }   // КИЗ не нужен: подтверждённый товар сразу собираем
+  if(!ozWiz.needKiz){ ozWizShip(); return; }   // КИЗ не нужен: подтверждённый товар сразу собираем (в режиме на «Ожидают отгрузки» — отметка + этикетка)
   ozRenderWizard();
   const k = document.getElementById('ozKizInput'); if(k){ forceEnglishInput(k); k.focus(); }
   toast('Теперь отсканируйте КИЗ' + ((order&&order.qty>1)?'ы (по одному на единицу)':' этой единицы'));
@@ -488,17 +509,61 @@ async function ozForceKiz(){
   ozWiz.needKiz = true; order.requiresKiz = true;
   const inv = ozonItemForOrder(order);
   if(inv && !inv.requiresKiz){ inv.requiresKiz = true; syncInventoryRow(inv.sku, inv.client, inv.size, inv.warehouseId); }
-  sb.from('ozon_orders').update({requires_kiz:true}).eq('client_id', order.clientId).eq('article', order.article).eq('status','awaiting_packaging').then(({error})=>{ if(error) console.error(error); });
-  ozonOrders.forEach(o=>{ if(o.clientId===order.clientId && o.article===order.article && o.status==='awaiting_packaging') o.requiresKiz = true; });
+  sb.from('ozon_orders').update({requires_kiz:true}).eq('client_id', order.clientId).eq('article', order.article).in('status',['awaiting_packaging','awaiting_deliver']).then(({error})=>{ if(error) console.error(error); });
+  ozonOrders.forEach(o=>{ if(o.clientId===order.clientId && o.article===order.article && ['awaiting_packaging','awaiting_deliver'].includes(o.status)) o.requiresKiz = true; });
   toast('Запомнил: этому товару всегда нужен КИЗ (отключить можно в «Остатках» → Изменить)');
   ozRenderWizard();
 }
+// физическая сборка отправления, уже подтверждённого у Ozon: отметка «собран» + печать этикетки
+async function ozPickDone(order){
+  // отправление могли подтвердить прямо в кабинете Ozon — тогда остаток у нас ещё не списан: списываем при физической сборке
+  const ded = await ozAlreadyDeducted(order.postingNumber);
+  if(ded === false){
+    const inv = ozonItemForOrder(order);
+    const q = order.qty || 1;
+    if(!inv){ playBeep('error'); toast(`«${order.name||order.article}» (${order.article}) не сопоставлен с товаром в остатках — остаток не списан`); if(ozWiz) ozWiz.busy = false; ozRenderWizard(); return; }
+    const avail = inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty;
+    if(avail < q){ playBeep('error'); toast(`Недостаточно на складе «${inv.name}» — нужно ${q} шт, есть ${avail}`); if(ozWiz) ozWiz.busy = false; ozRenderWizard(); return; }
+    ozDeductAndBill(order, inv, q);
+    toast('Отправление подтверждено в кабинете Ozon — остаток списан сейчас');
+  }
+  order.pickedAt = new Date().toISOString();
+  ozDbUpdate(order.postingNumber, {picked_at:order.pickedAt, picked_by: currentUser?currentUser.name:null});
+  ozDoneIds.add(order.postingNumber);
+  playBeep('ok');
+  const pi = ozPI(order);
+  ozMode = 'scan'; ozWiz = null;
+  ozRenderScan(`✓ ${order.postingNumber} · ${pi.name}${pi.size?' · '+pi.size:''} — собрано. Сканируйте следующее`, false);
+  try{ await ozPrintOne(order.postingNumber); }catch(e){ console.error(e); }
+  setTimeout(()=>{ const el = document.getElementById('ozScanInput'); if(el) el.focus(); }, 50);
+}
+// КИЗ в отправление, уже подтверждённое у Ozon (Ozon это разрешает: «Можно добавить код маркировки»)
+async function ozSetKizOnShipped(order, codes){
+  try{
+    const { data, error } = await sb.functions.invoke('ozon-kiz-ts', { body:{ clientId:order.clientId, action:'set_kiz', postingNumber:order.postingNumber, kizCodes:codes } });
+    if(error || (data && data.error)) return {ok:false, message:'Ozon: ' + ((data && data.error) || await extractEdgeFunctionError(data, error))};
+    order.kizCode = codes.join('\n'); order.kizStatus = 'ok';
+    return {ok:true, warning:data && data.warning};
+  }catch(e){ return {ok:false, message:'Сбой связи: ' + (e.message||e)}; }
+}
 async function ozWizShip(){
   const order = ozWizOrder(); if(!order || ozWiz.busy) return;
+  if(ozWiz.shipMode){
+    if(!ozWiz.bcOk){ toast('Сначала отсканируйте штрихкод товара'); return; }
+    if(ozWiz.needKiz && ozWiz.codes.length < (order.qty||1)){ toast('Отсканируйте все КИЗ'); return; }
+    ozWiz.busy = true;
+    if(ozWiz.needKiz){
+      ozRenderWizard();
+      const kr = await ozSetKizOnShipped(order, ozWiz.codes);
+      if(!kr.ok){ playBeep('error'); toast('⚠ ' + order.postingNumber + ': ' + kr.message); if(ozWiz){ ozWiz.busy = false; ozWiz.codes = []; ozRenderWizard(); } return; }
+      if(kr.warning) toast('КИЗ внесён, но: ' + kr.warning);
+    }
+    return ozPickDone(order);
+  }
   const need = ozWiz.needKiz;
   if(need && ozWiz.codes.length < (order.qty||1)){ toast('Отсканируйте все КИЗ'); return; }
   ozWiz.busy = true; ozRenderWizard();
-  const r = await ozAssemble(order, need ? ozWiz.codes : []);
+  const r = await ozAssemble(order, need ? ozWiz.codes : [], {picked:true});
   if(!r.ok){
     playBeep('error');
     toast('⚠ ' + order.postingNumber + ': ' + r.message);
@@ -804,6 +869,10 @@ async function ozPoll(){
       try{
         const { data, error } = await sb.functions.invoke('ozon-orders-ts', { body:{ clientId:cid, action:'fetch_new' } });
         if(!error && data && !data.error) added += data.newlyInserted || 0;
+      }catch(e){ console.error(e); }
+      try{   // заказы, подтверждённые/отменённые прямо в кабинете Ozon, — сразу меняем статус
+        const r = await sb.functions.invoke('ozon-reconcile-ts', { body:{ clientId:cid, action:'reconcile_new' } });
+        if(!r.error && r.data && !r.data.error) added += (r.data.changed||[]).length;
       }catch(e){ console.error(e); }
     }
     if(added>0 && ozMode==='list' && !ozInFlight.size){
