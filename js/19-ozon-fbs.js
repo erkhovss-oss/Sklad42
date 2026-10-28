@@ -40,7 +40,7 @@ async function loadOzonOrders(){
     article:o.article||'', barcode:o.barcode||'', name:o.name||'', size:o.size||'', price:o.price, qty:o.qty||1,
     status:o.status||'', requiresKiz:o.requires_kiz||false, kizCode:o.kiz_code||'', kizStatus:o.kiz_status||null,
     warehouseId:o.warehouse_id||'MAIN', ozonWarehouseId:o.ozon_warehouse_id, shipmentDate:o.shipment_date||null,
-    outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null, pickedAt:o.picked_at||null, pickedBy:o.picked_by||null
+    outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null, pickedAt:o.picked_at||null, pickedBy:o.picked_by||null, labelCode:o.label_code||''
   }));
 }
 
@@ -384,7 +384,8 @@ function ozPostingKey(s){ return String(s||'').replace(/[^0-9A-Za-z-]/g,''); }
 function ozFindForScan(raw, pool){
   const key = ozPostingKey(raw);
   if(key.length >= 8){
-    const o = pool.find(x=>x.postingNumber===key) || pool.find(x=>key.includes(x.postingNumber));
+    // на этикетке Ozon напечатан свой код вида ii50008953702 (поле scanit) — ищем и по нему, и по номеру отправления
+    const o = pool.find(x=>x.labelCode && x.labelCode.toLowerCase()===key.toLowerCase()) || pool.find(x=>x.postingNumber===key) || pool.find(x=>key.includes(x.postingNumber));
     if(o){ if(ozScanTab==='ship' && o.pickedAt) return {done:true, order:o}; return {order:o, via:'label'}; }
   }
   const left = pool.filter(o=>!ozDoneIds.has(o.postingNumber) && !(ozScanTab==='ship' && o.pickedAt));
@@ -397,13 +398,26 @@ function ozFindForScan(raw, pool){
   if((inv||offer)) return {allDone:true};
   return null;
 }
-function ozHandleScan(inputEl){
+// коды этикеток (scanit) подтягиваются в фоне раз в минуту; если отправление свежее — добираем по требованию
+async function ozRefreshLabelCodes(){
+  const targets = ozClientFilter() ? [ozClientFilter()] : clients.filter(c=>c.ozonConnected).map(c=>c.id);
+  for(const cid of targets){
+    try{ await sb.functions.invoke('ozon-reconcile-ts', { body:{ clientId:cid, action:'fill_labels' } }); }catch(e){ console.error(e); }
+  }
+  await loadOzonOrders();
+}
+async function ozHandleScan(inputEl){
   const raw = fromRuLayout(inputEl.value.trim());
   inputEl.value = '';
   if(!raw) return;
   if(raw===NEXT_ORDER_QR_CODE){ ozRenderScan('Код «Следующий заказ» здесь не нужен — отсканируйте этикетку отправления', true); return; }
-  const pool = ozScanPool();
-  const f = ozFindForScan(raw, ozScanTab==='ship' ? ozRows('ship') : pool);
+  const poolOf = ()=> ozScanTab==='ship' ? ozRows('ship') : ozScanPool();
+  let f = ozFindForScan(raw, poolOf());
+  if(!f && /^[A-Za-z]{2}\d{6,}$/.test(raw)){      // похоже на код этикетки Ozon, которого мы ещё не знаем
+    ozRenderScan('Ищу отправление по коду этикетки…');
+    await ozRefreshLabelCodes();
+    f = ozFindForScan(raw, poolOf());
+  }
   if(f && f.done){ playBeep('warn'); ozRenderScan(`${f.order.postingNumber} уже отмечено собранным.`, true); return; }
   if(f && f.allDone){ playBeep('warn'); ozRenderScan('Все отправления с этим товаром уже собраны.', true); return; }
   if(!f){ playBeep('error'); ozRenderScan(`Не нашёл отправление по коду «${raw}» среди ${ozScanTab==='ship'?'«Ожидают отгрузки»':'«Ожидают сборки»'}. Проверьте клиента и что оно ещё не собрано.`, true); return; }
