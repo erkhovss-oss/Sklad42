@@ -142,6 +142,7 @@ function renderOzonBody(){
   let toolbar = '';
   if(ozonView==='new'){
     toolbar = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+      ${ozPickChipHtml()}
       <button class="btn btn-accent" onclick="ozEnterScan('new')" ${total?'':'disabled'} title="Сканер: товар (и КИЗ) → подтверждение сборки в Ozon → этикетка">🎯 Режим сборки (сканер)</button>
       <button class="btn btn-primary" onclick="shipAllOzonOrders()" ${total?'':'disabled'}>${ozSel.size?`Собрать выбранные (${ozSel.size})`:`Собрать все (${total})`}</button>
       <button class="btn btn-ghost" onclick="ozPrintLabelsThermal()" ${total?'':'disabled'}>🖨️ ${ozSel.size?`На принтер — выбранные (${ozSel.size})`:'На принтер (QZ Tray)'}</button>
@@ -152,6 +153,7 @@ function renderOzonBody(){
     </div>`;
   } else if(ozonView==='ship'){
     toolbar = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+      ${ozPickChipHtml()}
       <button class="btn btn-accent" onclick="ozEnterScan('ship')" ${rows.some(o=>!o.pickedAt)?'':'disabled'} title="Сканер: товар → отметка «собран» + этикетка на принтер">🎯 Режим сборки (сканер)</button>
       <button class="btn btn-primary" onclick="ozCloseShipment()" ${total?'':'disabled'}>📦 Закрыть отгрузку (акт)</button>
       <button class="btn btn-ghost" onclick="ozPrintLabelsThermal()" ${total?'':'disabled'}>🖨️ ${ozSel.size?`На принтер — выбранные (${ozSel.size})`:'На принтер (QZ Tray)'}</button>
@@ -277,7 +279,7 @@ async function ozAssembleOne(order, kizCodes, opts){
     const cur = ozonOrders.find(o=>o.postingNumber===pn);
     if(cur && cur!==order){ cur.status = order.status; cur.pickedAt = order.pickedAt; if(codes.length) cur.kizCode = order.kizCode; }
     ozDbUpdate(pn, upd);
-    ozDoneIds.add(pn);
+    if(opts && opts.picked) ozDoneIds.add(pn);
     return {ok:true, warning:data && data.warning};
   }catch(e){
     ozUndoDeduction(inv, order, needQty, ddsId);
@@ -361,17 +363,40 @@ function ozScanPool(){
 }
 function ozEnterScan(tab){ ozScanTab = tab==='new' ? 'new' : 'ship'; ozMode = 'scan'; ozDoneIds = new Set(); ozWiz = null; ozScanMsg = ''; ozScanErr = false; renderOzonBody(); }
 function ozExitScan(){ ozMode = 'list'; ozWiz = null; renderOzonBody(); }
-function ozProgress(){
-  const pool = ozScanPool(); const done = ozDoneIds.size;
-  return {left: pool.length, done};
+// ---------- счётчик «Собрано N / M» (как у WB): собран = отмечен в режиме сборки (picked_at в базе, общий для всех сотрудников) ----------
+function ozIsPicked(o){ return !!o.pickedAt || ozDoneIds.has(o.postingNumber); }
+function ozPickPool(){ return ozRows('new').concat(ozRows('ship')); }
+function ozPickProgress(){
+  const pool = ozPickPool();
+  return {
+    total: pool.length,
+    picked: pool.filter(ozIsPicked).length,
+    noStock: pool.filter(o=>!ozIsPicked(o) && o.outOfStock).length,
+    remaining: pool.filter(o=>!ozIsPicked(o) && !o.outOfStock).length
+  };
+}
+function ozPickProgressHtml(){
+  const p = ozPickProgress();
+  const pct = p.total ? Math.round(p.picked / p.total * 100) : 0;
+  const allDone = p.total > 0 && p.remaining === 0 && p.noStock === 0;
+  const extra = [p.remaining ? `осталось собрать: ${p.remaining}` : (allDone ? 'все заказы собраны ✓' : ''), p.noStock ? `❌ нет на складе: ${p.noStock}` : ''].filter(Boolean).join(' · ');
+  return `<div style="margin-bottom:16px">
+      <div style="font-size:32px;font-weight:700;line-height:1.1;color:${allDone?'var(--ok)':'var(--ink)'}">Собрано ${p.picked} / ${p.total}</div>
+      <div style="height:8px;border-radius:4px;background:#E7E4DC;margin:8px auto 6px auto;max-width:360px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--ok)"></div></div>
+      ${extra ? `<div style="font-size:12px;color:var(--ink-soft)">${extra}</div>` : ''}
+    </div>`;
+}
+function ozPickChipHtml(){
+  const p = ozPickProgress();
+  const allDone = p.total > 0 && p.remaining === 0 && p.noStock === 0;
+  return `<span class="status ${allDone?'assembled':'planned'}" style="cursor:default">Собрано ${p.picked} / ${p.total}</span>`;
 }
 function ozRenderScan(msg, isErr){
   if(msg !== undefined){ ozScanMsg = msg; ozScanErr = !!isErr; }
   const wrap = document.getElementById('ozonBody');
-  const p = ozProgress();
   wrap.innerHTML = `<div class="panel" style="padding:30px;text-align:center;max-width:560px;margin:0 auto">
     <div class="eyebrow" style="margin-bottom:10px">Режим сборки Ozon · ${ozScanTab==='ship'?'ожидают отгрузки':'ожидают сборки'} · поиск отправления</div>
-    <div style="font-size:14px;margin-bottom:6px"><b>Собрано: ${p.done}</b> · осталось: ${p.left}</div>
+    ${ozPickProgressHtml()}
     <p style="font-size:13px;color:var(--ink-soft);margin-bottom:18px">Отсканируйте этикетку отправления Ozon (номер вида 0123456789-0123-1) или штрихкод товара — откроется карточка сборки.</p>
     <input class="search mono" id="ozScanInput" placeholder="Ждём скан…" style="width:100%;text-align:center;font-size:16px;padding:14px" autocomplete="off" onkeydown="if(event.key==='Enter') ozHandleScan(this)">
     ${ozScanMsg ? `<p style="font-size:13px;margin-top:14px;font-weight:600;color:${ozScanErr?'var(--warn)':'var(--ok)'}">${escapeHtml(ozScanMsg)}</p>` : ''}
@@ -387,9 +412,9 @@ function ozFindForScan(raw, pool){
   if(key.length >= 8){
     // на этикетке Ozon напечатан свой код вида ii50008953702 (поле scanit) — ищем и по нему, и по номеру отправления
     const o = pool.find(x=>x.labelCode && x.labelCode.toLowerCase()===key.toLowerCase()) || pool.find(x=>x.postingNumber===key) || pool.find(x=>key.includes(x.postingNumber));
-    if(o){ if(ozScanTab==='ship' && o.pickedAt) return {done:true, order:o}; return {order:o, via:'label'}; }
+    if(o){ if(ozPending.has(o.postingNumber)) return {pending:true, order:o}; if(ozScanTab==='ship' && o.pickedAt) return {done:true, order:o}; return {order:o, via:'label'}; }
   }
-  const left = pool.filter(o=>!ozDoneIds.has(o.postingNumber) && !(ozScanTab==='ship' && o.pickedAt));
+  const left = pool.filter(o=>!ozDoneIds.has(o.postingNumber) && !ozPending.has(o.postingNumber) && !(ozScanTab==='ship' && o.pickedAt));
   const inv = findInventoryItemByBarcode(raw, ozClientFilter() ? (clients.find(c=>c.id===ozClientFilter())||{}).name : undefined);
   const cands = [];
   if(inv) cands.push(...left.filter(o=>ozonItemForOrder(o)===inv));
@@ -419,6 +444,7 @@ async function ozHandleScan(inputEl){
     await ozRefreshLabelCodes();
     f = ozFindForScan(raw, poolOf());
   }
+  if(f && f.pending){ playBeep('warn'); ozRenderScan(`${f.order.postingNumber} уже отправляется в Ozon — подождите секунду.`, true); return; }
   if(f && f.done){ playBeep('warn'); ozRenderScan(`${f.order.postingNumber} уже отмечено собранным.`, true); return; }
   if(f && f.allDone){ playBeep('warn'); ozRenderScan('Все отправления с этим товаром уже собраны.', true); return; }
   if(!f){ playBeep('error'); ozRenderScan(`Не нашёл отправление по коду «${raw}» среди ${ozScanTab==='ship'?'«Ожидают отгрузки»':'«Ожидают сборки»'}. Проверьте клиента и что оно ещё не собрано.`, true); return; }
@@ -493,7 +519,7 @@ function ozRenderWizard(){
   const kizTotal = order.qty || 1;
   wrap.innerHTML = `<div class="panel" style="padding:24px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-      <div><div class="eyebrow">Отправление ${escapeHtml(order.postingNumber)} · ${escapeHtml(order.clientName)}</div>
+      <div><div class="eyebrow">${ozPickChipHtml()} Отправление ${escapeHtml(order.postingNumber)} · ${escapeHtml(order.clientName)}</div>
         <h2 style="margin:6px 0 0 0">${escapeHtml(pi.name)}${pi.color?` · ${escapeHtml(pi.color)}`:''}${pi.size?` · ${escapeHtml(pi.size)}`:''}</h2></div>
       ${pi.cell?`<div style="background:var(--accent);color:#fff;border-radius:10px;padding:10px 20px;text-align:center;line-height:1.1"><div style="font-size:11px;opacity:.85">ЯЧЕЙКА</div><div style="font-size:26px;font-weight:800">${escapeHtml(String(pi.cell))}</div></div>`:''}
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost" onclick="printNextOrderQrCard()">🖨 QR «Следующий»</button><button class="btn btn-ghost" onclick="ozWizBack()">↩ К поиску</button><button class="btn btn-ghost" onclick="ozExitScan()">✕ Завершить режим</button></div>
@@ -601,27 +627,63 @@ async function ozForceKiz(){
   ozRenderWizard();
 }
 // физическая сборка отправления, уже подтверждённого у Ozon: отметка «собран» + печать этикетки
-async function ozPickDone(order){
+// фиксация «собрано» для отправления, уже подтверждённого у Ozon: списание (если ещё не было) + отметка в базе; экран не трогает
+async function ozPickCommit(order){
   // отправление могли подтвердить прямо в кабинете Ozon — тогда остаток у нас ещё не списан: списываем при физической сборке
   const ded = await ozAlreadyDeducted(order.postingNumber);
   if(ded === false){
     const inv = ozonItemForOrder(order);
     const q = order.qty || 1;
-    if(!inv){ playBeep('error'); toast(`«${order.name||order.article}» (${order.article}) не сопоставлен с товаром в остатках — остаток не списан`); if(ozWiz) ozWiz.busy = false; ozRenderWizard(); return; }
+    if(!inv) return {ok:false, message:`«${order.name||order.article}» (${order.article}) не сопоставлен с товаром в остатках — остаток не списан`};
     const avail = inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty;
-    if(avail < q){ playBeep('error'); toast(`Недостаточно на складе «${inv.name}» — нужно ${q} шт, есть ${avail}`); if(ozWiz) ozWiz.busy = false; ozRenderWizard(); return; }
+    if(avail < q) return {ok:false, message:`Недостаточно на складе «${inv.name}» — нужно ${q} шт, есть ${avail}`};
     ozDeductAndBill(order, inv, q);
     toast('Отправление подтверждено в кабинете Ozon — остаток списан сейчас');
   }
   order.pickedAt = new Date().toISOString();
   ozDbUpdate(order.postingNumber, {picked_at:order.pickedAt, picked_by: currentUser?currentUser.name:null});
   ozDoneIds.add(order.postingNumber);
+  return {ok:true};
+}
+async function ozPickDone(order){
+  const c = await ozPickCommit(order);
+  if(!c.ok){ playBeep('error'); toast(c.message); if(ozWiz){ ozWiz.busy = false; ozRenderWizard(); } return; }
   playBeep('ok');
   const pi = ozPI(order);
   ozMode = 'scan'; ozWiz = null;
   ozRenderScan(`✓ ${order.postingNumber} · ${pi.name}${pi.size?' · '+pi.size:''} — собрано. Сканируйте следующее`, false);
   if(ozAutoPrintLabel()){ try{ await ozPrintOne(order.postingNumber); }catch(e){ console.error(e); } }
   setTimeout(()=>{ const el = document.getElementById('ozScanInput'); if(el) el.focus(); }, 50);
+}
+// Отправка в Ozon идёт в фоне: после последнего КИЗ сразу открывается поиск следующего заказа, не дожидаясь ответа Ozon.
+// Если Ozon откажет — заметное окно с причиной, остаток при этом возвращается.
+const ozPending = new Set();
+function ozBgShip(order, codes, shipMode){
+  const pn = order.postingNumber, pi = ozPI(order);
+  ozPending.add(pn);
+  ozMode = 'scan'; ozWiz = null;
+  ozRenderScan(`⏳ ${pn} · ${pi.name} — отправляю в Ozon… Можно сканировать следующее`, false);
+  (async ()=>{
+    let r;
+    try{
+      if(shipMode){
+        r = await ozSetKizOnShipped(order, codes);
+        if(r.ok){ const c = await ozPickCommit(order); if(!c.ok) r = c; }
+      } else r = await ozAssemble(order, codes, {picked:true});
+    }catch(e){ console.error(e); r = {ok:false, message:e.message||String(e)}; }
+    ozPending.delete(pn);
+    const inScan = ozMode==='scan';
+    if(!r.ok){
+      playBeep('error');
+      showScanAlert({icon:'⚠️', title:'Не собрано', subject:`${pn} · ${pi.name}`, message:r.message});
+      if(inScan) ozRenderScan(`⚠ ${pn}: не собрано — ${r.message}`, true);
+      return;
+    }
+    playBeep('ok');
+    const msg = `✓ ${pn} · ${pi.name}${pi.size?' · '+pi.size:''} — собрано${r.warning?' (предупреждение: '+r.warning+')':''}`;
+    if(inScan) ozRenderScan(msg + '. Сканируйте следующее', false); else toast(msg);
+    if(ozAutoPrintLabel()){ try{ await ozPrintOne(pn); }catch(e){ console.error(e); } }
+  })();
 }
 // КИЗ в отправление, уже подтверждённое у Ozon (Ozon это разрешает: «Можно добавить код маркировки»)
 async function ozSetKizOnShipped(order, codes){
@@ -634,33 +696,17 @@ async function ozSetKizOnShipped(order, codes){
 }
 async function ozWizShip(){
   const order = ozWizOrder(); if(!order || ozWiz.busy) return;
+  if(ozPending.has(order.postingNumber)){ toast('Это отправление уже отправляется в Ozon'); return; }
   if(ozWiz.shipMode){
     if(!ozWiz.bcOk){ toast('Сначала отсканируйте штрихкод товара'); return; }
     if(ozWiz.needKiz && ozWiz.codes.length < (order.qty||1)){ toast('Отсканируйте все КИЗ'); return; }
+    if(ozWiz.needKiz) return ozBgShip(order, ozWiz.codes.slice(), true);
     ozWiz.busy = true;
-    if(ozWiz.needKiz){
-      ozRenderWizard();
-      const kr = await ozSetKizOnShipped(order, ozWiz.codes);
-      if(!kr.ok){ playBeep('error'); toast('⚠ ' + order.postingNumber + ': ' + kr.message); if(ozWiz){ ozWiz.busy = false; ozWiz.codes = []; ozRenderWizard(); } return; }
-      if(kr.warning) toast('КИЗ внесён, но: ' + kr.warning);
-    }
     return ozPickDone(order);
   }
   const need = ozWiz.needKiz;
   if(need && ozWiz.codes.length < (order.qty||1)){ toast('Отсканируйте все КИЗ'); return; }
-  ozWiz.busy = true; ozRenderWizard();
-  const r = await ozAssemble(order, need ? ozWiz.codes : [], {picked:true});
-  if(!r.ok){
-    playBeep('error');
-    toast('⚠ ' + order.postingNumber + ': ' + r.message);
-    if(ozWiz){ ozWiz.busy = false; ozWiz.codes = []; ozRenderWizard(); }
-    return;
-  }
-  playBeep('ok');
-  const pi = ozPI(order);
-  ozMode = 'scan'; ozWiz = null;
-  ozRenderScan(`✓ ${order.postingNumber} · ${pi.name}${pi.size?' · '+pi.size:''} — собрано${r.warning?' (предупреждение: '+r.warning+')':''}. Сканируйте следующее`, false);
-  if(ozAutoPrintLabel()){ try{ await ozPrintOne(order.postingNumber); }catch(e){ console.error(e); } }
+  ozBgShip(order, need ? ozWiz.codes.slice() : [], false);
 }
 function ozWizBack(){ ozMode = 'scan'; ozWiz = null; ozRenderScan(); }
 async function ozOutOfStock(){
