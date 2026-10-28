@@ -1039,15 +1039,53 @@ function renderStorageChartSvg(data){
     }
   });
 
-  const dotsHtml = points.map(p=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="var(--accent)"><title>${p.date.toLocaleDateString('ru-RU')} — ${Math.round(p.cost)} ₽</title></circle>`).join('');
-
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;font-family:'IBM Plex Mono',monospace">
-    ${gridHtml}
-    <path d="${areaPath}" fill="var(--accent)" opacity="0.08"/>
-    <path d="${linePath}" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
-    ${dotsHtml}
-    ${xLabelsHtml}
-  </svg>`;
+  const dotsHtml = points.map(p=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="var(--accent)"/>`).join('');
+  const id = 'stChart' + (++storageChartSeq);
+  storageChartData[id] = { points, w, h, pad };
+  // «живой» график: при наведении (или касании) появляется вертикальная линия, подсвечивается точка и показывается подсказка с датой и суммой
+  return `<div id="${id}" style="position:relative;touch-action:pan-y">
+    <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;font-family:'IBM Plex Mono',monospace;display:block">
+      ${gridHtml}
+      <path d="${areaPath}" fill="var(--accent)" opacity="0.08"/>
+      <path d="${linePath}" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+      ${dotsHtml}
+      ${xLabelsHtml}
+      <line class="st-cross" x1="0" y1="${pad.top}" x2="0" y2="${pad.top+innerH}" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3" style="display:none"/>
+      <circle class="st-hot" r="6" fill="#fff" stroke="var(--accent)" stroke-width="3" style="display:none"/>
+      <rect x="${pad.left}" y="${pad.top}" width="${innerW}" height="${innerH}" fill="transparent" style="cursor:crosshair"
+        onpointermove="storageChartHover('${id}',event)" onpointerdown="storageChartHover('${id}',event)" onpointerleave="storageChartLeave('${id}')"/>
+    </svg>
+    <div class="st-tip" style="display:none;position:absolute;pointer-events:none;background:var(--ink);color:#fff;border-radius:8px;padding:6px 10px;font-size:12px;line-height:1.35;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.25);transform:translate(-50%,-100%);z-index:5"></div>
+  </div>`;
+}
+let storageChartSeq = 0;
+const storageChartData = {};
+function storageChartHover(id, ev){
+  const box = document.getElementById(id), d = storageChartData[id];
+  if(!box || !d) return;
+  const svg = box.querySelector('svg');
+  const r = svg.getBoundingClientRect();
+  const sx = (ev.clientX - r.left) * (d.w / r.width);       // координата курсора в системе SVG
+  let best = 0, bd = Infinity;
+  d.points.forEach((p,i)=>{ const dx = Math.abs(p.x - sx); if(dx < bd){ bd = dx; best = i; } });
+  const p = d.points[best];
+  const cross = box.querySelector('.st-cross'), hot = box.querySelector('.st-hot'), tip = box.querySelector('.st-tip');
+  cross.setAttribute('x1', p.x); cross.setAttribute('x2', p.x); cross.style.display = '';
+  hot.setAttribute('cx', p.x); hot.setAttribute('cy', p.y); hot.style.display = '';
+  const dayName = p.date.toLocaleDateString('ru-RU', {weekday:'short'});
+  const prev = best > 0 ? d.points[best-1].cost : null;
+  const diff = prev === null ? '' : (() => { const x = p.cost - prev; return `<div style="opacity:.75">${x>=0?'+':''}${Math.round(x).toLocaleString('ru-RU')} ₽ к предыдущему дню</div>`; })();
+  tip.innerHTML = `<div style="opacity:.75">${p.date.toLocaleDateString('ru-RU')} (${dayName})</div><div style="font-weight:700;font-size:14px">${Math.round(p.cost).toLocaleString('ru-RU')} ₽</div>${diff}`;
+  tip.style.display = '';
+  const left = (p.x / d.w) * r.width, top = (p.y / d.h) * r.height - 12;
+  tip.style.left = Math.min(Math.max(left, 60), r.width - 60) + 'px';
+  tip.style.top = Math.max(top, 58) + 'px';
+}
+function storageChartLeave(id){
+  const box = document.getElementById(id); if(!box) return;
+  box.querySelector('.st-cross').style.display = 'none';
+  box.querySelector('.st-hot').style.display = 'none';
+  box.querySelector('.st-tip').style.display = 'none';
 }
 document.getElementById('storageClientFilter').addEventListener('change', renderStorage);
 ['storageFrom','storageTo'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('change', renderStorage); });

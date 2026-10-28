@@ -375,7 +375,8 @@ function ozRenderScan(msg, isErr){
     <p style="font-size:13px;color:var(--ink-soft);margin-bottom:18px">Отсканируйте этикетку отправления Ozon (номер вида 0123456789-0123-1) или штрихкод товара — откроется карточка сборки.</p>
     <input class="search mono" id="ozScanInput" placeholder="Ждём скан…" style="width:100%;text-align:center;font-size:16px;padding:14px" autocomplete="off" onkeydown="if(event.key==='Enter') ozHandleScan(this)">
     ${ozScanMsg ? `<p style="font-size:13px;margin-top:14px;font-weight:600;color:${ozScanErr?'var(--warn)':'var(--ok)'}">${escapeHtml(ozScanMsg)}</p>` : ''}
-    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:18px"><button class="btn btn-ghost" onclick="ozExitScan()">Выйти из режима сборки</button></div>
+    <div style="display:flex;justify-content:center;margin-top:14px">${ozAutoPrintHtml()}</div>
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px"><button class="btn btn-ghost" onclick="ozExitScan()">Выйти из режима сборки</button></div>
   </div>`;
   setTimeout(()=>{ const el = document.getElementById('ozScanInput'); if(el){ forceEnglishInput(el); el.focus(); } }, 50);
 }
@@ -431,6 +432,58 @@ function ozOpenWizard(order, bcDone){
   if(bcDone) setTimeout(()=>ozBarcodeConfirmed(), 0);
 }
 function ozWizOrder(){ return ozWiz ? ozonOrders.find(o=>o.postingNumber===ozWiz.pn) : null; }
+// штрихкод товара: из остатков, иначе из карточки Ozon
+function ozBarcodeOf(order){
+  const pi = ozPI(order);
+  if(pi.barcode) return pi.barcode;
+  const of = ozonOffers.find(x=>x.clientName===order.clientName && x.offerId===order.article);
+  return (of && (of.barcodes||[])[0]) || '';
+}
+async function ozRenderBarcodeBox(order){
+  const box = document.getElementById('ozBarcodeBox'); const bc = ozBarcodeOf(order);
+  if(!box || !bc) return;
+  try{ await kizDupLoadLib(); }catch(e){ box.innerHTML = `<span style="font-size:12px;color:var(--warn)">${escapeHtml(e.message)}</span>`; return; }
+  if(document.getElementById('ozBarcodeBox') !== box) return;
+  try{
+    const b = barcodeCanvasFor(bc, 420, 26);
+    box.innerHTML = `<div style="display:inline-block;background:#fff;border:1px solid var(--line,#ddd);border-radius:10px;padding:10px 14px;text-align:center">
+      <img src="${b.url}" style="image-rendering:pixelated;max-width:100%" />
+      <div class="mono" style="font-size:16px;font-weight:700;letter-spacing:2px;margin-top:2px">${escapeHtml(bc)}</div></div>`;
+  }catch(e){ console.error(e); box.innerHTML = `<span style="font-size:12px;color:var(--warn)">Не удалось построить штрихкод</span>`; }
+}
+// печать штрихкода товара — те же размеры и поворот, что у WB / «Дубля КИЗ» (Настройки печати)
+async function ozPrintBarcode(copies){
+  const order = ozWizOrder(); if(!order) return;
+  const bc = ozBarcodeOf(order);
+  if(!bc){ toast('У этого товара нет штрихкода'); return; }
+  copies = copies || 1;
+  try{ await kizDupLoadLib(); }catch(e){ toast(e.message); return; }
+  const pi = ozPI(order);
+  const fake = { barcode: bc, article: order.article, size: pi.size };
+  const info = { name: pi.name, color: pi.color, size: pi.size, cell: pi.cell };
+  const g = kizDupGeom(true), ls = g.ls;
+  try{
+    const b = barcodeCanvasFor(bc, Math.round((g.boxW - 4) / 25.4 * 203), Math.min(22, g.boxH * 0.4));
+    if(kizDupSettings().mode === 'qz'){
+      if(!await connectThermalPrinter()) return;
+      const mm2px = mm=>Math.round(mm / 25.4 * 203) + 'px';
+      const bitmap = await htmlToMonoBitmap(wizardBarcodeLabelHtml(fake, info, mm2px, b), ls.widthMm, ls.heightMm, g.rot);
+      for(let i=0;i<copies;i++){ if(!await printBitmapOnThermalPrinter(ls.widthMm, ls.heightMm, bitmap)){ toast('Печать остановлена — проблема с принтером'); return; } }
+      toast('🖨 Штрихкод отправлен на печать');
+    } else {
+      const label = wizardBarcodeLabelHtml(fake, info, mm=>mm+'mm', b);
+      const win = window.open('', '_blank');
+      if(!win){ toast('Браузер заблокировал окно печати — разрешите всплывающие окна для сайта'); return; }
+      win.document.write(`<html><head><title>Штрихкод</title><style>@page{size:${g.boxW}mm ${g.boxH}mm;margin:0} html,body{margin:0;padding:0} .l{width:${g.boxW}mm;height:${g.boxH}mm;overflow:hidden;page-break-after:always}</style></head><body>${Array.from({length:copies}, ()=>`<div class="l">${label}</div>`).join('')}<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
+      win.document.close();
+    }
+  }catch(e){ console.error(e); toast('Не удалось напечатать штрихкод: ' + e.message); }
+}
+function ozAutoPrintHtml(){
+  return `<label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--ink-soft);margin-top:8px;cursor:pointer"><input type="checkbox" ${ozAutoPrintLabel()?'checked':''} onchange="ozSetAutoPrintLabel(this.checked)"> Печатать этикетку заказа автоматически, когда заказ собран</label>`;
+}
+function ozAutoPrintLabel(){ try{ return localStorage.getItem('sklad42_oz_autoprint_label_v2')==='1'; }catch(e){ return false; } }   // по умолчанию выключено — этикетка печатается только кнопкой
+function ozSetAutoPrintLabel(on){ try{ localStorage.setItem('sklad42_oz_autoprint_label_v2', on?'1':'0'); }catch(e){} }
 function ozRenderWizard(){
   const order = ozWizOrder();
   const wrap = document.getElementById('ozonBody');
@@ -443,18 +496,31 @@ function ozRenderWizard(){
       <div><div class="eyebrow">Отправление ${escapeHtml(order.postingNumber)} · ${escapeHtml(order.clientName)}</div>
         <h2 style="margin:6px 0 0 0">${escapeHtml(pi.name)}${pi.color?` · ${escapeHtml(pi.color)}`:''}${pi.size?` · ${escapeHtml(pi.size)}`:''}</h2></div>
       ${pi.cell?`<div style="background:var(--accent);color:#fff;border-radius:10px;padding:10px 20px;text-align:center;line-height:1.1"><div style="font-size:11px;opacity:.85">ЯЧЕЙКА</div><div style="font-size:26px;font-weight:800">${escapeHtml(String(pi.cell))}</div></div>`:''}
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="ozPrintOne('${order.postingNumber}', this)" title="Этикетка отправления Ozon — сразу на термопринтер через QZ Tray">🖨 Этикетка</button><button class="btn btn-ghost" onclick="ozWizBack()">↩ К поиску</button><button class="btn btn-ghost" onclick="ozExitScan()">✕ Завершить режим</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost" onclick="printNextOrderQrCard()">🖨 QR «Следующий»</button><button class="btn btn-ghost" onclick="ozWizBack()">↩ К поиску</button><button class="btn btn-ghost" onclick="ozExitScan()">✕ Завершить режим</button></div>
     </div>
     <table style="margin-bottom:18px">
       <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Артикул Ozon</td><td class="mono">${escapeHtml(order.article)}</td></tr>
-      <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Штрихкод товара</td><td class="mono">${escapeHtml(pi.barcode||'—')}</td></tr>
+      <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Штрихкод товара</td><td class="mono">${escapeHtml(ozBarcodeOf(order)||'—')}</td></tr>
+      <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Клиент</td><td>${escapeHtml(order.clientName)}</td></tr>
+      <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Отправление №</td><td class="mono">${escapeHtml(order.postingNumber)}</td></tr>
+      <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Код этикетки</td><td class="mono" style="font-weight:700">${escapeHtml(order.labelCode||'—')}</td></tr>
       <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Количество</td><td style="font-weight:700">${order.qty||1} шт</td></tr>
       <tr><td style="color:var(--ink-faint);padding:4px 12px 4px 0">Ячейка</td><td style="font-weight:700">${escapeHtml(String(pi.cell||'не назначена'))}</td></tr>
       ${pi.inv?'':`<tr><td colspan="2" style="color:var(--warn);padding-top:6px">⚠ Товар не сопоставлен с остатками — сборка не пройдёт, пока не сопоставите (карточка клиента → Ozon).</td></tr>`}
     </table>
-    <div class="eyebrow" style="margin-bottom:6px">Штрихкод товара — подтверждение</div>
-    <input class="search" id="ozBcInput" placeholder="Отсканируйте штрихкод товара…" style="width:100%;max-width:420px;margin-bottom:6px" autocomplete="off" ${ozWiz.bcOk?'disabled':''}>
-    <div style="margin-bottom:14px">${ozWiz.bcOk?'<span style="color:var(--ok);font-size:12px">✓ товар подтверждён</span>':`<button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="ozBarcodeConfirmed()">Подтвердить без скана</button>`}</div>
+    <div class="eyebrow" style="margin-bottom:6px">Штрихкод товара</div>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;margin-bottom:14px">
+      <div style="flex:1 1 320px;max-width:420px">
+        <input class="search" id="ozBcInput" placeholder="Отсканируйте штрихкод, чтобы подтвердить товар…" style="width:100%;margin-bottom:8px" autocomplete="off" ${ozWiz.bcOk?'disabled':''}>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          ${ozBarcodeOf(order) ? `<button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="ozPrintBarcode()">🖨 Напечатать ШК</button>` : ''}
+          <button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="ozPrintOne('${order.postingNumber}', this)" title="Этикетка отправления Ozon — сразу на термопринтер через QZ Tray">🖨 Этикетка заказа</button>
+          ${ozWiz.bcOk?'<span style="color:var(--ok);font-size:12px">✓ товар подтверждён</span>':`<button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="ozBarcodeConfirmed()">Подтвердить без скана</button>`}
+        </div>
+        ${ozAutoPrintHtml()}
+      </div>
+      ${ozBarcodeOf(order) ? `<div id="ozBarcodeBox" style="flex:0 1 auto"></div>` : ''}
+    </div>
     <div id="ozKizBlock">${need ? `
       <div class="eyebrow" style="margin-bottom:6px">КИЗ (Честный Знак) — ${ozWiz.codes.length} из ${kizTotal}</div>
       <input class="search mono" id="ozKizInput" placeholder="Отсканируйте КИЗ ${ozWiz.codes.length+1}-й единицы…" style="width:100%;max-width:420px;margin-bottom:6px" autocomplete="off" ${ozWiz.bcOk?'':'disabled'}>
@@ -467,7 +533,13 @@ function ozRenderWizard(){
       <button class="btn btn-accent" id="ozWizShipBtn" onclick="ozWizShip()" ${ozWiz.bcOk && (!need || ozWiz.codes.length>=kizTotal) && !ozWiz.busy?'':'disabled'}>${ozWiz.busy?'⏳ Собираю…':(ozWiz.shipMode?(need?'КИЗ внести и собрать — печать этикетки':'Товар собран — печать этикетки'):'Собрать отправление')}</button>
       <button class="btn btn-ghost" onclick="ozWizBack()">Пропустить</button>
       ${ozWiz.shipMode?'':`<button class="btn btn-ghost" style="color:var(--warn)" onclick="ozOutOfStock()">❌ Нет на складе</button>`}
-    </div></div>`;
+    </div></div>
+    <div style="position:fixed;bottom:16px;right:16px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,0.1);z-index:50">
+      <div id="fixedNextOrderQr"></div>
+      <div style="font-size:10px;color:var(--ink-faint);margin-top:4px;max-width:100px">скан = следующий заказ</div>
+    </div>`;
+  try{ renderFixedNextOrderQr(); }catch(e){ console.error(e); }
+  ozRenderBarcodeBox(order);
   const bc = document.getElementById('ozBcInput');
   if(bc){
     forceEnglishInput(bc); if(!ozWiz.bcOk) bc.focus();
@@ -477,7 +549,7 @@ function ozRenderWizard(){
       if(!code) return;
       if(code===NEXT_ORDER_QR_CODE){ ozWizBack(); return; }
       const inv = pi.inv;
-      const okBc = !pi.barcode && !(inv) ? true
+      const okBc = !ozBarcodeOf(order) && !(inv) ? true
         : (inv && findInventoryItemByBarcode(code, order.clientName)===inv)
           || ozonOffers.some(of=>of.clientName===order.clientName && of.offerId===order.article && (of.barcodes||[]).includes(code));
       if(!okBc){ playBeep('error'); toast('Штрихкод не совпадает с товаром этого отправления'); return; }
@@ -548,7 +620,7 @@ async function ozPickDone(order){
   const pi = ozPI(order);
   ozMode = 'scan'; ozWiz = null;
   ozRenderScan(`✓ ${order.postingNumber} · ${pi.name}${pi.size?' · '+pi.size:''} — собрано. Сканируйте следующее`, false);
-  try{ await ozPrintOne(order.postingNumber); }catch(e){ console.error(e); }
+  if(ozAutoPrintLabel()){ try{ await ozPrintOne(order.postingNumber); }catch(e){ console.error(e); } }
   setTimeout(()=>{ const el = document.getElementById('ozScanInput'); if(el) el.focus(); }, 50);
 }
 // КИЗ в отправление, уже подтверждённое у Ozon (Ozon это разрешает: «Можно добавить код маркировки»)
@@ -588,6 +660,7 @@ async function ozWizShip(){
   const pi = ozPI(order);
   ozMode = 'scan'; ozWiz = null;
   ozRenderScan(`✓ ${order.postingNumber} · ${pi.name}${pi.size?' · '+pi.size:''} — собрано${r.warning?' (предупреждение: '+r.warning+')':''}. Сканируйте следующее`, false);
+  if(ozAutoPrintLabel()){ try{ await ozPrintOne(order.postingNumber); }catch(e){ console.error(e); } }
 }
 function ozWizBack(){ ozMode = 'scan'; ozWiz = null; ozRenderScan(); }
 async function ozOutOfStock(){
