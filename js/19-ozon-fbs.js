@@ -804,11 +804,12 @@ function ozLoadPdfJs(){
   return ozPdfJsPromise;
 }
 // PDF-страницы → картинки PNG (base64). Страницы рисуем в их родной ориентации (58×40 альбомная), поворот делает печать — как для WB.
-async function ozPdfToPngPages(b64){
+async function ozPdfToPngPages(b64, firstOnly){
   const lib = await ozLoadPdfJs();
   const pdf = await lib.getDocument({ data: ozB64ToBytes(b64) }).promise;
   const pages = [];
-  for(let n=1; n<=pdf.numPages; n++){
+  const last = firstOnly ? Math.min(1, pdf.numPages) : pdf.numPages;
+  for(let n=1; n<=last; n++){
     const page = await pdf.getPage(n);
     const v1 = page.getViewport({ scale:1 });
     const scale = Math.max(1, 900 / Math.max(v1.width, v1.height));
@@ -838,27 +839,24 @@ function ozPagesFor(pages, count, i){
   return null;
 }
 async function ozLabelPagesForPostings(clientId, orders){
-  // возвращает {pn: [png,...]}; при несовпадении числа страниц пробует по одному отправлению
+  // возвращает {pages:{pn:[png,...]}, err}. Каждое отправление запрашивается отдельным запросом, несколько запросов идут параллельно
+  // (раньше шла общая пачка, а при несовпадении числа страниц — по одному последовательно, из-за чего печать занимала десятки секунд).
   const out = {};
-  const getChunk = async (chunk)=>{
-    const r = await ozFetchLabelPdf(clientId, chunk.map(o=>o.postingNumber));
-    if(!r.ok) return {err:r.message};
-    const pages = await ozPdfToPngPages(r.file);
-    return {pages};
-  };
   let errText = '';
-  for(let i=0;i<orders.length;i+=20){
-    const chunk = orders.slice(i,i+20);
-    const r = await getChunk(chunk);
-    if(r.err){ errText = r.err; continue; }
-    let ok = chunk.map((o,k)=>ozPagesFor(r.pages, chunk.length, k));
-    if(ok.every(Boolean)){ chunk.forEach((o,k)=>{ out[o.postingNumber] = ok[k]; }); continue; }
-    for(const o of chunk){                       // страниц не поровну — берём этикетки по одному
-      const r1 = await getChunk([o]);
-      if(r1.err){ errText = r1.err; continue; }
-      out[o.postingNumber] = ozLabelAllPages() ? r1.pages : [r1.pages[0]];
+  const allPages = ozLabelAllPages();
+  let next = 0;
+  const worker = async ()=>{
+    while(next < orders.length){
+      const o = orders[next++];
+      try{
+        const r = await ozFetchLabelPdf(clientId, [o.postingNumber]);
+        if(!r.ok){ if(!errText) errText = r.message; continue; }
+        const pngs = await ozPdfToPngPages(r.file, !allPages);
+        if(pngs.length) out[o.postingNumber] = pngs;
+      }catch(e){ if(!errText) errText = e.message || String(e); }
     }
-  }
+  };
+  await Promise.all(Array.from({length: Math.min(5, orders.length)}, worker));
   return {pages:out, err:errText};
 }
 function ozInfoCardHtml(g){
@@ -881,13 +879,18 @@ function ozInfoCardHtml(g){
       </table>
     </div>`;
 }
+let ozThermalBusy = 0;   // время запуска текущей печати (мс) или 0
 async function ozPrintLabelsThermal(){
+  if(ozThermalBusy && Date.now() - ozThermalBusy < 120000){ toast('Печать уже идёт — подождите, пока закончится'); return; }
+  const mine = ozThermalBusy = Date.now();
   try{ await ozPrintLabelsThermalImpl(); }
   catch(e){ console.error(e); toast('Ошибка печати: ' + (e && e.message ? e.message : e)); }
+  finally{ if(ozThermalBusy === mine) ozThermalBusy = 0; }
 }
 async function ozPrintLabelsThermalImpl(){
   const tab = ozonView==='ship' ? 'ship' : 'new';
-  const rows = ozTargets(tab).slice().sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||''));
+  const seenPn = new Set();
+  const rows = ozTargets(tab).filter(o=>{ if(seenPn.has(o.postingNumber)) return false; seenPn.add(o.postingNumber); return true; }).sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||''));
   if(!rows.length){ toast('Нет отправлений для печати'); return; }
   if(!await connectThermalPrinter()) return;
   const groups = {};
@@ -923,9 +926,12 @@ async function ozPrintLabelsThermalImpl(){
   toast(`Готово: напечатано на принтере ${groupList.length} карточек товара`);
 }
 // Одна этикетка отправления — сразу на термопринтер; если QZ Tray недоступен, открывается PDF
+const ozPrintingOne = new Set();
 async function ozPrintOne(pn, btn){
   const order = ozonOrders.find(o=>o.postingNumber===pn);
   if(!order) return;
+  if(ozPrintingOne.has(pn)){ toast('Этикетка этого отправления уже печатается'); return; }
+  ozPrintingOne.add(pn);
   if(btn) btn.disabled = true;
   try{
     toast('Запрашиваю этикетку у Ozon…');
@@ -938,7 +944,7 @@ async function ozPrintOne(pn, btn){
       toast(`🖨 Этикетка ${pn} отправлена на печать`);
     }
   }catch(e){ console.error(e); toast('Ошибка печати этикетки: ' + (e.message||e)); }
-  finally{ if(btn) btn.disabled = false; }
+  finally{ ozPrintingOne.delete(pn); if(btn) btn.disabled = false; }
 }
 // старая кнопка «Этикетка» из 05-fbs.js — теперь тоже печатает через новый метод
 function getOzonSticker(pn){ return ozPrintOne(pn); }
