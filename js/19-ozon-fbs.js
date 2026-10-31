@@ -336,24 +336,27 @@ async function shipAllOzonOrders(){
   if(ozonShipAllBusy) return;
   const list = ozTargets('new');
   if(!list.length){ toast('Нет отправлений, ожидающих сборки'); return; }
+  // Переводим ВСЕ отправления (в том числе с отметкой «нужен КИЗ») в «Ожидают отгрузки»: КИЗ вносится позже в режиме сборки на той вкладке.
   const withKiz = list.filter(ozNeedsKiz);
-  const plain = list.filter(o=>!ozNeedsKiz(o));
-  if(!plain.length){ toast('Все выбранные отправления требуют КИЗ — соберите их в режиме сборки со сканером'); return; }
-  if(!await customConfirm(`Собрать и отгрузить ${plain.length} отправл.?\nОстатки будут списаны, сборка подтверждена в Ozon.${withKiz.length?`\n\nС КИЗ (${withKiz.length} шт) пропускаются — их собирайте в режиме сборки.`:''}\nОтправления без остатка или без сопоставления товара пропускаются.`, {danger:false, okText:'Собрать'})) return;
+  const multi = list.filter(o=>(o.qty||1)>1);
+  if(!await customConfirm(`Перевести в «Ожидают отгрузки» ${list.length} отправл.?\nСборка будет подтверждена в Ozon, остатки списаны.${multi.length?`\n\nОтправления на 2 шт и больше (${multi.length}) сначала разделятся на отдельные по 1 шт.`:''}${withKiz.length?`\n\nС отметкой «нужен КИЗ» (${withKiz.length}) — КИЗ внесёте потом, на вкладке «Ожидают отгрузки» в режиме сборки.`:''}\n\nОтправления без остатка или без сопоставления товара пропускаются.`, {danger:false, okText:'Перевести'})) return;
   ozonShipAllBusy = true;
   let ok = 0; const fails = [];
-  for(let i=0;i<plain.length;i++){
-    toast(`Собираю ${i+1} из ${plain.length}…`);
-    const r = await ozAssemble(plain[i], []);
-    if(r.ok) ok++; else fails.push(`${plain[i].postingNumber}: ${r.message}`);
-    if(i<plain.length-1) await new Promise(res=>setTimeout(res,400));
+  try{
+    for(let i=0;i<list.length;i++){
+      toast(`Перевожу ${i+1} из ${list.length}…`);
+      const r = await ozAssemble(list[i], []);
+      if(r.ok) ok++; else fails.push(`${list[i].postingNumber}: ${r.message}`);
+      if(i<list.length-1) await new Promise(res=>setTimeout(res,400));
+    }
+  } finally {
+    ozonShipAllBusy = false;
   }
-  ozonShipAllBusy = false;
   ozSel = new Set();
   try{ await loadOzonOrders(); }catch(e){ console.error(e); }
   renderOzonBody();
-  if(fails.length) await customConfirm(`Собрано: ${ok} из ${plain.length}.\n\nНе собрано (${fails.length}):\n` + fails.slice(0,8).join('\n') + (fails.length>8?`\n…и ещё ${fails.length-8}`:''), {danger:false, okText:'Понятно', cancelText:'Закрыть'});
-  else toast(`Собрано и подтверждено: ${ok}`);
+  if(fails.length) await customConfirm(`Переведено: ${ok} из ${list.length}.\n\nНе переведено (${fails.length}):\n` + fails.slice(0,8).join('\n') + (fails.length>8?`\n…и ещё ${fails.length-8}`:''), {danger:false, okText:'Понятно', cancelText:'Закрыть'});
+  else toast(`Переведено в «Ожидают отгрузки»: ${ok}. Теперь можно собирать в режиме сборки`);
 }
 
 // ---------- режим сборки со сканером ----------
