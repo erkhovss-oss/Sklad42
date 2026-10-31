@@ -307,9 +307,13 @@ async function ozAssemble(order, kizCodes, opts){
   }catch(e){ ozInFlight.delete(order.postingNumber); return {ok:false, message:'Сбой связи при делении: ' + (e.message||e)}; }
   ozInFlight.delete(order.postingNumber);
   if(sp.error || (sp.data && sp.data.error)) return {ok:false, message:'Ozon (деление): ' + ((sp.data && sp.data.error) || await extractEdgeFunctionError(sp.data, sp.error))};
-  if(!sp.data.split) return ozAssembleOne(order, kizCodes, opts);
+  if(!sp.data.split){ order.qty = 1; return ozAssembleOne(order, kizCodes, opts); }   // у Ozon там уже 1 шт — наша запись устарела
   await loadOzonOrders();
-  const kids = (sp.data.children||[]).map(pn=>ozonOrders.find(o=>o.postingNumber===pn)).filter(Boolean);
+  const childNums = (sp.data.children||[]).slice();
+  // после деления Ozon может оставить исходный номер за одной из штук (в «ожидает сборки») — его тоже надо собрать, уже как 1 шт
+  if(sp.data.parentStatus === 'awaiting_packaging' && !childNums.includes(order.postingNumber)) childNums.unshift(order.postingNumber);
+  const kids = childNums.map(pn=>ozonOrders.find(o=>o.postingNumber===pn)).filter(Boolean);
+  kids.forEach(k=>{ if((k.qty||1) !== 1){ k.qty = 1; sb.from('ozon_orders').update({qty:1}).eq('posting_number', k.postingNumber).then(({error})=>{ if(error) console.error(error); }); } });
   if(!kids.length) return {ok:false, message:'Ozon разделил отправление, но новые отправления ещё не подтянулись — нажмите «Проверить новые»'};
   const codes = (kizCodes||[]).filter(Boolean);
   let done = 0, warning;
@@ -325,8 +329,7 @@ async function ozAssemble(order, kizCodes, opts){
 async function shipOzonOrder(postingNumber){
   const order = ozonOrders.find(o=>o.postingNumber===postingNumber);
   if(!order) return;
-  if(ozNeedsKiz(order)){ toast('Для этого товара нужен КИЗ — открываю сборку со сканером'); ozOpenWizard(order, false); return; }
-  toast('Подтверждаю сборку…');
+  toast('Перевожу в «Ожидают отгрузки»…');   // КИЗ вносится позже, на вкладке «Ожидают отгрузки» в режиме сборки
   const r = await ozAssemble(order, []);
   if(!r.ok){ toast(r.message); return; }
   toast(r.warning ? 'Собрано, но есть предупреждение: ' + r.warning : 'Отправление собрано и подтверждено');
