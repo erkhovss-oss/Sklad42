@@ -19,6 +19,7 @@ const OZ_STATUS_RU = {
   not_accepted:'Не принято', sent_by_seller:'Отправлено продавцом'
 };
 let ozMode = 'list';              // list | scan | wiz
+let ozonShipAllBusy = false;     // идёт массовый перевод («Собрать все») — раньше переменная нигде не была объявлена, из-за чего кнопка молча падала
 let ozSel = new Set();            // выбранные отправления (галочки)
 let ozScanMsg = '', ozScanErr = false;
 let ozDoneIds = new Set();        // собрано в этом сеансе сканирования
