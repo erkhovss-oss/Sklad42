@@ -522,12 +522,12 @@
     <div id="loginLoading" style="text-align:center;padding:24px 0;color:var(--ink-faint);font-size:13px">Загрузка…</div>
     <div id="loginFormWrap" style="display:none">
       <div class="eyebrow" style="margin-bottom:16px">Вход в личный кабинет</div>
-      <div class="eyebrow" style="margin-bottom:6px;color:var(--ink-soft)">Email</div>
-      <input class="search" id="loginInput" type="email" placeholder="Email" style="width:100%;margin-bottom:14px" autocomplete="email">
+      <div class="eyebrow" style="margin-bottom:6px;color:var(--ink-soft)">Логин</div>
+      <input class="search" id="loginInput" type="text" placeholder="Логин" style="width:100%;margin-bottom:14px" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
       <div class="eyebrow" style="margin-bottom:6px;color:var(--ink-soft)">Пароль</div>
       <input class="search" id="passwordInput" type="password" placeholder="Пароль" style="width:100%;margin-bottom:16px" autocomplete="current-password" onkeydown="if(event.key==='Enter') attemptLogin()">
       <button class="btn btn-accent" id="loginSubmitBtn" style="width:100%;justify-content:center" onclick="attemptLogin()">Войти</button>
-      <p id="loginError" style="font-size:12px;color:var(--warn);margin-top:12px;display:none">Неверный email или пароль</p>
+      <p id="loginError" style="font-size:12px;color:var(--warn);margin-top:12px;display:none">Неверный логин или пароль</p>
     </div>
   </div>
 </div>
@@ -1047,24 +1047,24 @@
 
 <div class="toast-wrap" id="toastWrap"></div>
 
-<script src="js/01-core.js?v=20261031d"></script>
-<script src="js/02-inventory.js?v=20261031d"></script>
-<script src="js/03-clients-storage.js?v=20261031d"></script>
-<script src="js/04-outbound-supply.js?v=20261031d"></script>
-<script src="js/05-fbs.js?v=20261031d"></script>
-<script src="js/06-outbound-boxes.js?v=20261031d"></script>
-<script src="js/07-dds-billing.js?v=20261031d"></script>
-<script src="js/08-warehouses-consumables.js?v=20261031d"></script>
-<script src="js/09-returns-journal.js?v=20261031d"></script>
-<script src="js/10-kits-company-settings.js?v=20261031d"></script>
-<script src="js/11-stocktake.js?v=20261031d"></script>
-<script src="js/12-supplies.js?v=20261031d"></script>
-<script src="js/13-employees-auth.js?v=20261031d"></script>
-<script src="js/14-load-from-supabase.js?v=20261031d"></script>
-<script src="js/16-delivery-speed.js?v=20261031d"></script>
-<script src="js/17-ozon-products.js?v=20261031d"></script>
-<script src="js/18-glove-kits.js?v=20261031d"></script>
-<script src="js/19-ozon-fbs.js?v=20261031d"></script>
-<script src="js/15-init.js?v=20261031d"></script>
+<script src="js/01-core.js?v=20261113b"></script>
+<script src="js/02-inventory.js?v=20261113b"></script>
+<script src="js/03-clients-storage.js?v=20261113b"></script>
+<script src="js/04-outbound-supply.js?v=20261113b"></script>
+<script src="js/05-fbs.js?v=20261113b"></script>
+<script src="js/06-outbound-boxes.js?v=20261113b"></script>
+<script src="js/07-dds-billing.js?v=20261113b"></script>
+<script src="js/08-warehouses-consumables.js?v=20261113b"></script>
+<script src="js/09-returns-journal.js?v=20261113b"></script>
+<script src="js/10-kits-company-settings.js?v=20261113b"></script>
+<script src="js/11-stocktake.js?v=20261113b"></script>
+<script src="js/12-supplies.js?v=20261113b"></script>
+<script src="js/13-employees-auth.js?v=20261113b"></script>
+<script src="js/14-load-from-supabase.js?v=20261113b"></script>
+<script src="js/16-delivery-speed.js?v=20261113b"></script>
+<script src="js/17-ozon-products.js?v=20261113b"></script>
+<script src="js/18-glove-kits.js?v=20261113b"></script>
+<script src="js/19-ozon-fbs.js?v=20261113b"></script>
+<script src="js/15-init.js?v=20261113b"></script>
 </body>
 </html>
