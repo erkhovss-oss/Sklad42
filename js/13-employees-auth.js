@@ -70,7 +70,12 @@ async function attemptLogin(){
   const { error } = await sb.auth.signInWithPassword({ email, password });
   if(btn){ btn.disabled = false; btn.textContent = 'Войти'; }
   if(error){
-    errorEl.textContent = /[^\x00-\x7F]/.test(loginRaw) ? 'Логин вводится латиницей' : 'Неверный логин или пароль';
+    console.error('signInWithPassword:', error);
+    // «Неверный логин или пароль» — только когда сервер действительно отклонил пару (400). Сбои связи показываем как есть.
+    const realReject = error.status === 400 || /invalid login credentials/i.test(error.message||'');
+    errorEl.textContent = /[^\x00-\x7F]/.test(loginRaw) ? 'Логин вводится латиницей'
+      : realReject ? 'Неверный логин или пароль'
+      : 'Не удалось войти: ' + (error.message || 'ошибка связи') + (error.status ? ' (код ' + error.status + ')' : '');
     errorEl.style.display = 'block';
     return;
   }
