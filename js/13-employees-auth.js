@@ -20,9 +20,24 @@ function enterApp(emp){
   `;
 }
 async function resolveCurrentEmployeeAndEnter(){
-  const { data: emp, error } = await sb.rpc('current_employee');
-  if(error || !emp){
+  let { data: emp, error } = await sb.rpc('current_employee');
+  // Временный сбой связи или сервера (плохой интернет, телефон): пробуем ещё раз и сессию НЕ сбрасываем.
+  // Раньше любая такая ошибка вызывала выход из аккаунта, и приходилось входить заново.
+  for(let attempt=0; error && attempt<3; attempt++){
     console.error(error);
+    await new Promise(r=>setTimeout(r, 1000*(attempt+1)));
+    ({ data: emp, error } = await sb.rpc('current_employee'));
+  }
+  if(error){
+    const errorEl = document.getElementById('loginError');
+    if(errorEl){
+      errorEl.textContent = 'Нет связи с сервером. Проверьте интернет и обновите страницу — входить заново не придётся.';
+      errorEl.style.display = 'block';
+    }
+    showLoginForm();
+    return;
+  }
+  if(!emp || !emp.id){
     try{ await sb.auth.signOut(); }catch(e){}
     const errorEl = document.getElementById('loginError');
     if(errorEl){
@@ -39,13 +54,15 @@ async function resolveCurrentEmployeeAndEnter(){
   await loadStaffData();
 }
 async function attemptLogin(){
-  const email = document.getElementById('loginInput').value.trim();
+  const loginRaw = document.getElementById('loginInput').value.trim();
+  // Вход по логину: «Sergey» → sergey@telepack.ru. Полный email тоже принимается.
+  const email = loginRaw.includes('@') ? loginRaw : loginRaw.toLowerCase() + '@telepack.ru';
   const password = document.getElementById('passwordInput').value;
   const errorEl = document.getElementById('loginError');
   const btn = document.getElementById('loginSubmitBtn');
   errorEl.style.display = 'none';
-  if(!email || !password){
-    errorEl.textContent = 'Введите email и пароль';
+  if(!loginRaw || !password){
+    errorEl.textContent = 'Введите логин и пароль';
     errorEl.style.display = 'block';
     return;
   }
@@ -53,7 +70,7 @@ async function attemptLogin(){
   const { error } = await sb.auth.signInWithPassword({ email, password });
   if(btn){ btn.disabled = false; btn.textContent = 'Войти'; }
   if(error){
-    errorEl.textContent = 'Неверный email или пароль';
+    errorEl.textContent = /[^\x00-\x7F]/.test(loginRaw) ? 'Логин вводится латиницей' : 'Неверный логин или пароль';
     errorEl.style.display = 'block';
     return;
   }
