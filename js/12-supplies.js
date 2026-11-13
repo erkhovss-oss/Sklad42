@@ -1392,7 +1392,12 @@ async function finalizeSupplyItemReceipt(supply, item, barcode, kizCode){
     }).catch(e=>{ console.error(e); toast('Нет связи с базой — эта позиция не сохранилась, отсканируйте её ещё раз'); });
     return;
   }
+  const hadCell = !!inv.cell;
   const cell = await ensureCellAssigned(inv);
+  // Новая ячейка сразу пишется в базу. Раньше она оставалась только в памяти страницы, и после очередной
+  // перезагрузки остатков из базы (она срабатывает на каждое изменение количества) терялась —
+  // следующий скан того же товара получал уже новую ячейку.
+  if(!hadCell && cell) await syncInventoryRow(inv.sku, inv.client, inv.size, inv.warehouseId);
   const isOver = item.receivedQty>item.qty && !wasOver;
   if(isOver){ playBeep('warn'); toast(`«${item.name}»${size?` (${size})`:''}: больше, чем заказано (${item.receivedQty} из ${item.qty}) → Ячейка ${cell}`); }
   else { playBeep('ok'); toast(`«${item.name}»${size?` (${size})`:''} → Ячейка ${cell}`); }
