@@ -2753,7 +2753,7 @@ async function shipSubmit(){
     fbsTrbxLoadedFor = '';
     closeSupplyShipment();
     toast('Поставка передана в доставку');
-    setFbsView('complete');
+    setFbsView(fbsView);   // остаёмся на текущей вкладке (раньше уходили в «В доставке»), чтобы сразу передавать следующие поставки
   }catch(e){
     if(!shipState) return;
     shipState.busy = false;
