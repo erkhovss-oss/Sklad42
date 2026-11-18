@@ -50,7 +50,10 @@ async function resolveCurrentEmployeeAndEnter(){
   const mapped = {id:emp.id, name:emp.name, login:emp.login, roleId:emp.role_id, active:emp.active, warehouseId:emp.warehouse_id||null};
   const idx = employees.findIndex(e=>e.id===mapped.id);
   if(idx>=0) employees[idx] = {...employees[idx], ...mapped}; else employees.push(mapped);
+  // Сначала роли: иначе при входе на секунду видны все разделы и роль «—», пока грузятся остальные данные
+  try{ await loadRoles(); }catch(e){ console.error(e); }
   enterApp(mapped);
+  applyNavPermissions();
   await loadStaffData();
 }
 async function attemptLogin(){
