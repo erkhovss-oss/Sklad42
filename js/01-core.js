@@ -1,7 +1,3 @@
-
-
-
-
 // ---------- SUPABASE ----------
 const SUPABASE_URL = 'https://mixsvqjlrifkcoeuuydc.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1peHN2cWpscmlma2NvZXV1eWRjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MTYyNzEsImV4cCI6MjEwMzA5MjI3MX0.qIdelCgVkSDMc20f5X1parpfx2njHB5Pe3xk3ogbCr4';
@@ -508,6 +504,8 @@ function applyNavPermissions(){
   }
 }
 let dashboardStats = null;
+let dashboardFbs = null;      // заказы FBS (WB / Ozon) по дням за выбранный период
+let dashFbsClient = '';       // фильтр по клиенту в блоке «Заказы FBS» (пусто — все)
 function setDashboardPeriod(days){
   const to = new Date();
   const from = new Date(); from.setDate(from.getDate() - (days-1));
@@ -526,10 +524,72 @@ async function loadDashboard(){
     document.getElementById('dashDateTo').value = to;
   }
   body.innerHTML = `<div class="panel empty">Загрузка…</div>`;
-  const { data, error } = await sb.rpc('get_dashboard_stats', { p_date_from: from, p_date_to: to });
+  const [statsRes, fbsRes] = await Promise.all([
+    sb.rpc('get_dashboard_stats', { p_date_from: from, p_date_to: to }),
+    sb.rpc('get_fbs_orders_stats', { p_date_from: from, p_date_to: to, p_client_name: dashFbsClient || null })
+  ]);
+  const { data, error } = statsRes;
   if(error){ console.error(error); body.innerHTML = `<div class="panel empty">Не удалось загрузить аналитику</div>`; return; }
+  if(fbsRes.error) console.error(fbsRes.error);
+  dashboardFbs = fbsRes.error ? null : fbsRes.data;
   dashboardStats = data;
   renderDashboard(data);
+}
+// смена клиента в блоке «Заказы FBS» — перезагружаем только его данные
+async function setDashFbsClient(name){
+  dashFbsClient = name || '';
+  const from = document.getElementById('dashDateFrom').value;
+  const to = document.getElementById('dashDateTo').value;
+  const { data, error } = await sb.rpc('get_fbs_orders_stats', { p_date_from: from, p_date_to: to, p_client_name: dashFbsClient || null });
+  if(error){ console.error(error); toast('Не удалось обновить заказы FBS'); return; }
+  dashboardFbs = data;
+  if(dashboardStats) renderDashboard(dashboardStats);
+}
+const FBS_WB_COLOR = '#A33FB0';
+const FBS_OZON_COLOR = '#1F6FEB';
+function renderFbsOrdersChart(rows, w, h){
+  if(!rows || !rows.length) return `<div style="color:var(--ink-faint);font-size:13px;padding:20px 0">Нет данных за период</div>`;
+  const max = Math.max(1, ...rows.map(r=>Math.max(r.wb, r.ozon)));
+  const padL = 34, padB = 22, padT = 8;
+  const innerW = w - padL, innerH = h - padB - padT;
+  const slot = innerW / rows.length;
+  const barW = Math.max(1.5, Math.min(14, slot/2 - 1));
+  const yOf = v => padT + innerH - (v / max) * innerH;
+  const grid = [0, max/2, max].map(v=>`<line x1="${padL}" x2="${w}" y1="${yOf(v)}" y2="${yOf(v)}" stroke="var(--line)" stroke-width="1"></line><text x="${padL-6}" y="${yOf(v)+4}" text-anchor="end" font-size="10" fill="var(--ink-faint)">${Math.round(v)}</text>`).join('');
+  const step = Math.max(1, Math.ceil(rows.length / 10));
+  const fmt = d => `${d.slice(8,10)}.${d.slice(5,7)}`;
+  const groups = rows.map((r, i)=>{
+    const cx = padL + i*slot + slot/2;
+    const wbH = (r.wb / max) * innerH, ozH = (r.ozon / max) * innerH;
+    const label = i % step === 0 ? `<text x="${cx}" y="${h-6}" text-anchor="middle" font-size="10" fill="var(--ink-faint)">${fmt(r.d)}</text>` : '';
+    return `<g><title>${fmt(r.d)}.${r.d.slice(0,4)}: WB ${r.wb}, Ozon ${r.ozon}</title>
+      <rect x="${padL + i*slot}" y="${padT}" width="${slot}" height="${innerH}" fill="transparent"></rect>
+      <rect x="${cx - barW - 0.5}" y="${padT + innerH - wbH}" width="${barW}" height="${wbH}" fill="${FBS_WB_COLOR}" rx="1"></rect>
+      <rect x="${cx + 0.5}" y="${padT + innerH - ozH}" width="${barW}" height="${ozH}" fill="${FBS_OZON_COLOR}" rx="1"></rect>${label}</g>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">${grid}${groups}</svg>`;
+}
+function renderDashFbsPanel(){
+  const f = dashboardFbs;
+  const clientOpts = `<option value="">Все клиенты</option>` + clients.map(c=>`<option value="${escapeHtml(c.name)}" ${c.name===dashFbsClient?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
+  const head = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div class="eyebrow">Заказы FBS за период · по дате создания, МСК</div>
+      <select class="search" style="width:230px" onchange="setDashFbsClient(this.value)">${clientOpts}</select>
+    </div>`;
+  if(!f) return `<div class="panel" style="padding:18px;margin-bottom:16px">${head}<div style="color:var(--ink-faint);font-size:13px">Не удалось загрузить заказы FBS</div></div>`;
+  const total = f.wb.total + f.ozon.total;
+  const canceled = f.wb.cancelled + f.ozon.cancelled;
+  return `<div class="panel" style="padding:18px;margin-bottom:16px">
+    ${head}
+    <div class="stat-row" style="margin-bottom:14px">
+      <div class="stat"><div class="val" style="color:${FBS_WB_COLOR}">${f.wb.total.toLocaleString('ru-RU')}</div><div class="lbl">Wildberries · из них отменено ${f.wb.cancelled.toLocaleString('ru-RU')}</div></div>
+      <div class="stat"><div class="val" style="color:${FBS_OZON_COLOR}">${f.ozon.total.toLocaleString('ru-RU')}</div><div class="lbl">Ozon · из них отменено ${f.ozon.cancelled.toLocaleString('ru-RU')}</div></div>
+      <div class="stat"><div class="val">${total.toLocaleString('ru-RU')}</div><div class="lbl">Всего заказов FBS</div></div>
+      <div class="stat"><div class="val">${(total - canceled).toLocaleString('ru-RU')}</div><div class="lbl">Без отменённых</div></div>
+    </div>
+    <div style="font-size:12px;color:var(--ink-faint);margin-bottom:6px"><span style="color:${FBS_WB_COLOR}">■</span> Wildberries &nbsp; <span style="color:${FBS_OZON_COLOR}">■</span> Ozon · заказов в день</div>
+    ${renderFbsOrdersChart(f.byDay, 900, 190)}
+  </div>`;
 }
 function renderMiniBarChart(rows, w, h){
   if(!rows.length) return `<div style="color:var(--ink-faint);font-size:13px;padding:20px 0">Нет данных за период</div>`;
@@ -558,6 +618,8 @@ function renderDashboard(s){
       <div class="stat"><div class="val">${s.totalLiters.toFixed(1)} л</div><div class="lbl">Занято на складе</div></div>
       <div class="stat"><div class="val">${s.activeClients}/${s.totalClients}</div><div class="lbl">Клиентов с остатками</div></div>
     </div>
+
+    ${renderDashFbsPanel()}
 
     <div class="panel" style="padding:18px;margin-bottom:16px">
       <div class="eyebrow" style="margin-bottom:10px">Доход / расход по дням <span style="color:var(--ok)">■</span> доход <span style="color:var(--warn)">■</span> расход</div>
