@@ -450,7 +450,7 @@ function createSupply(){
 function toggleSupplyReceiving(id){
   const supply = supplies.find(s=>s.id===id);
   if(!supply) return;
-  if(activeSupplyId !== id){ lastScanInfo = null; scanHistory = []; pendingKizItem = null; delete receivingToBrak[id]; }
+  if(activeSupplyId !== id){ supplyItemsFilter = ''; lastScanInfo = null; scanHistory = []; pendingKizItem = null; delete receivingToBrak[id]; }
   activeSupplyId = activeSupplyId===id ? null : id;
   renderSuppliesTableWrap();
 }
@@ -496,6 +496,55 @@ function adjustSupplyItem(supplyId, sku, delta, size){
   saveSupplyItemCounts(supplyId, item).then(({error})=>{
     if(error) console.error(error);
   }).catch(e=>{ console.error(e); toast('Нет связи с базой — количество не сохранилось, повторите'); });
+}
+// Приёмка без сканера: количество вводится вручную в строке товара (для товаров без штрихкода).
+// mode 'add'  — прибавить введённое число (отрицательное — убрать);
+// mode 'rest' — принять весь остаток по плану (план − уже принято).
+function addSupplyManualQty(supplyId, idx, mode){
+  const supply = supplies.find(s=>s.id===supplyId);
+  const item = supply && supply.items[idx];
+  if(!item) return;
+  let delta;
+  if(mode === 'rest'){
+    delta = item.qty - item.receivedQty;
+    if(delta <= 0){ toast('По этой позиции уже принято по плану'); return; }
+  } else {
+    const el = document.getElementById(`supplyManualQty-${supplyId}-${idx}`);
+    const raw = el ? String(el.value).trim().replace(',', '.') : '';
+    delta = Number(raw);
+    if(!raw || !Number.isInteger(delta) || delta === 0){ toast('Введите целое количество, например 24'); if(el) el.focus(); return; }
+    if(Math.abs(delta) > 100000){ toast('Слишком большое количество — проверьте число'); return; }
+  }
+  adjustSupplyItem(supplyId, item.sku, delta, item.size||'');
+  const searchEl = document.getElementById('supplyItemsSearch');
+  if(searchEl){ searchEl.focus(); searchEl.select(); }
+  if(supply.requiresKiz && delta > 0) toast('Принято вручную — КИЗ по этим единицам не фиксируются');
+}
+// Поиск по строкам поставки при приёмке: фильтр работает прямо в списке (без перерисовки окна),
+// поэтому ввод не сбивается. Ищет по названию, артикулу, штрихкоду и размеру; слова — в любом порядке.
+let supplyItemsFilter = '';
+function applySupplyItemsFilter(){
+  const tokens = String(supplyItemsFilter||'').toLowerCase().split(/\s+/).filter(Boolean);
+  let shown = 0, total = 0;
+  document.querySelectorAll('.supply-item-row').forEach(row=>{
+    total++;
+    const q = row.getAttribute('data-q') || '';
+    const ok = tokens.every(t=>q.includes(t));
+    row.style.display = ok ? '' : 'none';
+    if(ok) shown++;
+  });
+  const cnt = document.getElementById('supplyItemsFilterCount');
+  if(cnt) cnt.textContent = tokens.length ? (shown ? `Найдено ${shown} из ${total}` : 'Ничего не найдено') : '';
+}
+function filterSupplyItems(value){
+  supplyItemsFilter = value;
+  applySupplyItemsFilter();
+}
+// Enter в поиске — перейти к полю «кол-во» первой найденной строки
+function focusFirstSupplyItemQty(){
+  const row = Array.from(document.querySelectorAll('.supply-item-row')).find(r=>r.style.display!=='none');
+  const inp = row && row.querySelector('input[type=number]');
+  if(inp) inp.focus();
 }
 function finishSupplyReceiving(id){
   const supply = supplies.find(s=>s.id===id);
@@ -1031,6 +1080,7 @@ function renderSupplyReceivingPanel(s){
       </div>
       ${pendingKizItem ? `<div style="padding:8px 10px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--ink-soft);margin-bottom:8px">Ожидается КИЗ для: <b>${pendingKizItem.name}</b></div>` : ''}
       <p style="font-size:12px;color:var(--ink-faint);margin:0 0 16px 0;line-height:1.5">${s.requiresKiz ? 'Сначала штрихкод товара, затем код каждой единицы (Честный Знак). Дубли КИЗ отклоняются автоматически.' : 'Сканируйте штрихкод товара из этой поставки — сразу услышите номер ячейки голосом. Принять можно больше или меньше плана — расхождение зафиксируется при завершении.'}</p>
+      ${itemsListCollapsed ? `<button class="btn btn-ghost" style="margin:0 0 16px 0" onclick="toggleItemsListCollapse()">✋ Принять вручную, без сканера (товар без штрихкода)</button>` : `<p style="font-size:12px;color:var(--ink-faint);margin:-8px 0 16px 0;line-height:1.5">Без сканера: в строке товара впишите количество, нажмите «Принять» или Enter (число со знаком «−» уменьшает). «Всё» принимает остаток по плану.</p>`}
 
       <div class="stat-row" style="margin-bottom:16px">
         <div class="stat"><div class="val" style="color:var(--ok)">${totalFact}</div><div class="lbl">Принято</div></div>
@@ -1053,15 +1103,22 @@ function renderSupplyReceivingPanel(s){
           <h3 style="font-size:14px;color:var(--ink-soft)">Строки поставки (${s.items.length})</h3>
           <span style="font-size:12px;color:var(--ink-faint)">${itemsListCollapsed ? '▼' : '▲'}</span>
         </div>
-        ${itemsListCollapsed ? '' : sortedItems.map(it=>{
+        ${itemsListCollapsed ? '' : `<div style="padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <input class="search" id="supplyItemsSearch" type="search" value="${escapeHtml(supplyItemsFilter)}" placeholder="Поиск по названию, артикулу или штрихкоду…" style="flex:1;min-width:220px" autocomplete="off" oninput="filterSupplyItems(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();focusFirstSupplyItemQty();}">
+          <span id="supplyItemsFilterCount" style="font-size:12px;color:var(--ink-faint)"></span>
+        </div>` + sortedItems.map(it=>{
           const done = it.receivedQty >= it.qty;
           const over = it.receivedQty > it.qty;
-          return `<div class="pick-row ${done?'done':''}" ${over?'style="background:var(--warn-bg)"':''}>
+          return `<div class="pick-row supply-item-row ${done?'done':''}" data-q="${escapeHtml(((it.name||'')+' '+it.sku+' '+(it.barcode||'')+' '+(it.size||'')).toLowerCase())}" ${over?'style="background:var(--warn-bg)"':''}>
             <div><div class="sku-name">${it.name}${it.size?` · размер ${it.size}`:''}</div><div class="sku-code mono">${it.sku}${it.barcode?` · ШК ${it.barcode}`:' · без штрихкода'}</div></div>
             <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap">
               <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',-1,'${it.size||''}')">−</button>
               <div class="qty-need" style="min-width:56px;text-align:center;${over?'color:var(--warn);font-weight:700':''}">${it.receivedQty}/${it.qty}${(it.defectQty||0)>0 ? `<span style="display:block;font-size:10px;color:var(--warn);font-weight:700" title="Принято как брак — на складе «БРАК»">⚠ брак ${Math.min(it.defectQty, it.receivedQty)}</span>` : ''}</div>
               <button class="btn btn-ghost" style="padding:4px 9px" onclick="adjustSupplyItem('${s.id}','${it.sku}',1,'${it.size||''}')">+</button>
+              <span style="width:1px;height:22px;background:var(--line);margin:0 2px"></span>
+              <input class="search mono" type="number" inputmode="numeric" step="1" id="supplyManualQty-${s.id}-${s.items.indexOf(it)}" placeholder="кол-во" title="Принять вручную без сканера: впишите количество и нажмите Enter" style="width:84px;padding:5px 8px" onkeydown="if(event.key==='Enter'){event.preventDefault();addSupplyManualQty('${s.id}',${s.items.indexOf(it)},'add');}">
+              <button class="btn btn-ghost" style="padding:4px 9px" onclick="addSupplyManualQty('${s.id}',${s.items.indexOf(it)},'add')">Принять</button>
+              ${it.receivedQty<it.qty ? `<button class="btn btn-ghost" style="padding:4px 9px" title="Принять весь остаток по плану" onclick="addSupplyManualQty('${s.id}',${s.items.indexOf(it)},'rest')">Всё (${it.qty-it.receivedQty})</button>` : ''}
             </div>
           </div>`;
         }).join('')}
@@ -1279,6 +1336,7 @@ function renderSuppliesTableWrap(){
     </div>
   `;
 
+  applySupplyItemsFilter();
   if(activeSupplyId){
     const supply = supplies.find(s=>s.id===activeSupplyId);
     const input = document.getElementById('supplyScanInput-'+activeSupplyId);
