@@ -539,11 +539,32 @@ function findInventoryItem(sku, client, size, warehouseId){
   });
 }
 let inventoryBarcodes = []; // {barcode, sku, clientName, size} — доп. штрихкоды сверх основного
+function normalizeInventoryBarcode(value){
+  const raw = String(value||'').trim();
+  return /^\\d+$/.test(raw) ? raw.replace(/^0+(?=\\d)/,'') : raw;
+}
 function findInventoryItemByBarcode(barcode, client, warehouseId){
   if(!barcode) return null;
-  let item = inventory.find(i=> i.barcode===barcode && (client===undefined || (i.client||'')===(client||'')) && (warehouseId===undefined || (i.warehouseId||'MAIN')===(warehouseId||'MAIN')) );
-  if(item) return item;
-  const extra = inventoryBarcodes.find(b=> b.barcode===barcode && (client===undefined || (b.clientName||'')===(client||'')) );
+  const normalized = normalizeInventoryBarcode(barcode);
+  const candidates = inventory.filter(i=>
+    normalizeInventoryBarcode(i.barcode)===normalized &&
+    (client===undefined || (i.client||'')===(client||'')) &&
+    (warehouseId===undefined || (i.warehouseId||'MAIN')===(warehouseId||'MAIN'))
+  );
+  if(candidates.length){
+    // При совпадении EAN-13/EAN-14 выбираем исходную WB-карточку с ведущим нулём
+    // (обычно 14 цифр), а не создаём параллельную карточку из Excel поставщика.
+    const maxLength = Math.max(...candidates.map(i=>String(i.barcode||'').length));
+    const preferred = candidates.filter(i=>String(i.barcode||'').length===maxLength);
+    if(preferred.length===1) return preferred[0];
+    const exact = preferred.filter(i=>String(i.barcode||'')===String(barcode).trim());
+    if(exact.length===1) return exact[0];
+    return null; // неоднозначный штрихкод — не выбираем карточку наугад
+  }
+  const extra = inventoryBarcodes.find(b=>
+    normalizeInventoryBarcode(b.barcode)===normalized &&
+    (client===undefined || (b.clientName||'')===(client||''))
+  );
   if(extra) return findInventoryItem(extra.sku, extra.clientName, extra.size, warehouseId);
   return null;
 }
