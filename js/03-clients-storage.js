@@ -212,16 +212,15 @@ function disconnectWb(clientId){
     if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
   });
 }
-function saveWbWarehouseId(clientId){
-  const c = clients.find(x=>x.id===clientId);
-  const val = document.getElementById('wbWarehouseId-'+clientId).value.trim();
-  c.wbWarehouseId = val;
-  c.wbAutoSync = false;
-  toast('ID склада сохранён. Автосинхронизация выключена — включите её отдельно, когда будете готовы');
-  renderClients();
-  sb.from('clients').update({wb_warehouse_id: val, wb_auto_sync: false}).eq('id', clientId).then(({error})=>{
-    if(error){ console.error(error); toast('Не удалось сохранить ID склада в базе'); }
-  });
+async function saveWbWarehouseId(clientId){
+  const c=clients.find(x=>x.id===clientId); const val=document.getElementById('wbWarehouseId-'+clientId).value.trim();
+  const picker=document.getElementById('wbWarehouseMultiPicker-'+clientId); const selected=picker?Array.from(picker.selectedOptions).map(o=>String(o.value)):(c.wbWarehouseIds||[]);
+  const ids=Array.from(new Set([...(selected||[]),...(val?[val]:[])]));
+  if(!val){toast('Выберите основной склад WB');return;} if(!ids.includes(val)){toast('Основной склад должен входить в список выбранных');return;}
+  const threshold=Math.max(0,Math.floor(Number((document.getElementById('wbStockThreshold-'+clientId)||{}).value??c.wbStockSwitchThreshold??3)));
+  c.wbWarehouseId=val;c.wbWarehouseIds=ids;c.wbStockSwitchThreshold=threshold;c.wbAutoSync=false;
+  const {error}=await sb.from('clients').update({wb_warehouse_id:val,wb_warehouse_ids:ids,wb_stock_switch_threshold:threshold,wb_auto_sync:false}).eq('id',clientId);
+  if(error){console.error(error);toast('Не удалось сохранить настройки складов WB');return;} toast('Склады WB и порог переключения сохранены. Автосинхронизация выключена — включите её, когда будете готовы');renderClients();
 }
 function connectOzon(clientId){
   const client = clients.find(c=>c.id===clientId);
@@ -324,13 +323,7 @@ async function listWbWarehouses(clientId){
     toast('Не удалось вызвать серверную функцию — она ещё не развёрнута в Supabase?');
   }
 }
-function useWbWarehouseFromList(clientId){
-  const c = clients.find(x=>x.id===clientId);
-  const select = document.getElementById('wbWarehousePicker-'+clientId);
-  if(!select || !select.value) return;
-  document.getElementById('wbWarehouseId-'+clientId).value = select.value;
-  saveWbWarehouseId(clientId);
-}
+function useWbWarehouseFromList(clientId){const select=document.getElementById('wbWarehousePicker-'+clientId);if(!select||!select.value)return;const primary=document.getElementById('wbWarehouseId-'+clientId);if(primary)primary.value=select.value;const multi=document.getElementById('wbWarehouseMultiPicker-'+clientId);if(multi&&!Array.from(multi.options).some(o=>o.selected)){const opt=Array.from(multi.options).find(o=>o.value===select.value);if(opt)opt.selected=true;}saveWbWarehouseId(clientId);}
 function withButtonLoading(btn, loadingText, fn){
   if(!btn) return fn();
   const original = btn.innerHTML;
@@ -942,16 +935,18 @@ function renderClientDetail(body){
       <h3 style="font-size:18px;margin-bottom:12px">Синхронизация остатков</h3>
       <p style="font-size:12px;color:var(--ink-soft);margin:0 0 14px 0">Это уже не демо — реально обращается к Wildberries через серверную функцию. Понадобится ID склада продавца (можно получить кнопкой ниже) и штрихкоды у товаров в «Остатках».</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
-        <input class="search mono" id="wbWarehouseId-${c.id}" placeholder="ID склада WB" value="${c.wbWarehouseId||''}" style="width:200px">
-        <button class="btn btn-ghost" onclick="saveWbWarehouseId('${c.id}')">Сохранить</button>
+        <input class="search mono" id="wbWarehouseId-${c.id}" placeholder="ID основного склада WB" value="${c.wbWarehouseId||''}" style="width:220px">
+        <input class="search mono" id="wbStockThreshold-${c.id}" type="number" min="0" step="1" value="${c.wbStockSwitchThreshold??3}" style="width:100px">
+        <button class="btn btn-ghost" onclick="saveWbWarehouseId('${c.id}')">Сохранить склады и порог</button>
         <button class="btn btn-ghost" onclick="listWbWarehouses('${c.id}')">📋 Получить список складов</button>
       </div>
+      <p style="font-size:11px;color:var(--ink-faint);margin:0 0 8px">При остатке ≤ порога весь остаток публикуется только на основном складе, на дополнительных — 0.</p>
       ${(c.wbWarehousesList && c.wbWarehousesList.length) ? `
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px 12px;background:var(--bg);border-radius:8px">
-          <select class="search" id="wbWarehousePicker-${c.id}" style="flex:1;min-width:220px">
-            ${c.wbWarehousesList.map(w=>`<option value="${w.id}" ${String(c.wbWarehouseId)===String(w.id)?'selected':''}>${w.id} — ${escapeHtml(w.name)}</option>`).join('')}
-          </select>
-          <button class="btn btn-primary" onclick="useWbWarehouseFromList('${c.id}')">Использовать этот склад</button>
+        <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg);border-radius:8px">
+          <div style="font-size:12px;font-weight:600;margin-bottom:6px">Выберите склады, на которых ваш фулфилмент принимает FBS-заказы (можно несколько):</div>
+          <select class="search" id="wbWarehouseMultiPicker-${c.id}" multiple size="${Math.min(6,Math.max(2,c.wbWarehousesList.length))}" style="width:100%;min-height:90px">
+            ${c.wbWarehousesList.map(w=>`<option value="${w.id}" ${(c.wbWarehouseIds||[c.wbWarehouseId]).map(String).includes(String(w.id))?'selected':''}>${w.id} — ${escapeHtml(w.name)}</option>`).join('')}
+          </select><div style="font-size:11px;color:var(--ink-faint);margin-top:5px">Для выбора нескольких складов используйте Ctrl (Windows) или ⌘ (Mac). Основной склад укажите в поле выше.</div>
         </div>
       ` : ''}
       ${c.wbWarehouseId ? `
