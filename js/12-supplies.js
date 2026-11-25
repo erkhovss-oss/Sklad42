@@ -389,14 +389,24 @@ function handleSupplyExcelUpload(inputEl){
         const barcode = String(row[3]||'').trim();
         const qty = parseInt(row[4]) || 0;
         if(!sku || qty<=0) continue;
-        // если клиент уже выбран — ищем товар только среди его товаров, чтобы не подтянуть чужой штрихкод
-        const invItem = inventory.find(x=>x.sku===sku && (x.size||'')===size && (!client || (x.client||'')===client.name));
+        // Сначала связываем строку Excel с уже существующей карточкой по штрихкоду.
+        // Это сохраняет SKU/размер исходной карточки WB, даже если в файле другой регистр
+        // артикула, размер «—» или EAN записан без ведущего нуля.
+        const byBarcode = barcode && client ? findInventoryItemByBarcode(barcode, client.name) : null;
+        const skuMatches = inventory.filter(x=>
+          x.sku.toLowerCase()===sku.toLowerCase() &&
+          (x.client||'')===(client?client.name:(x.client||'')) &&
+          (x.size||'')===size
+        );
+        const invItem = byBarcode || (skuMatches.length===1 ? skuMatches[0] : null);
+        const resolvedSku = invItem ? invItem.sku : sku;
+        const resolvedSize = invItem ? (invItem.size||'') : size;
         const name = nameFromFile || (invItem ? invItem.name : sku);
         const finalBarcode = barcode || (invItem ? invItem.barcode||'' : '');
         if(!invItem) unmatched++;
-        const existing = items.find(d=>d.sku===sku && (d.size||'')===size);
+        const existing = items.find(d=>d.sku===resolvedSku && (d.size||'')===resolvedSize);
         if(existing) existing.qty += qty;
-        else items.push({sku, size, name, qty, barcode: finalBarcode});
+        else items.push({sku:resolvedSku, size:resolvedSize, name, qty, barcode: finalBarcode});
       }
       if(items.length===0){
         toast('В файле не найдено строк с артикулом и количеством — заполните столбец «Кол-во»');
