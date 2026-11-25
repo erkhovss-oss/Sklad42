@@ -2095,11 +2095,10 @@ function renderKizStatusLabel(o){
 }
 function renderFbsWarehouseBadge(o){
   const client = clients.find(c=>c.id===o.clientId);
-  const matches = client && client.wbWarehouseId && String(client.wbWarehouseId)===String(o.wbWarehouseId);
-  const mismatches = client && client.wbWarehouseId && !matches;
-  const color = matches ? 'var(--ok)' : (mismatches ? 'var(--warn)' : 'var(--ink-faint)');
-  const mark = matches ? ' ✓ наш' : (mismatches ? ' ⚠ чужой' : '');
-  return ` · <span style="color:${color};font-weight:${matches||mismatches?'700':'400'}">склад ${escapeHtml(o.wbWarehouseId)}${mark}</span>`;
+  const allowed = client && (client.wbWarehouseIds||[client.wbWarehouseId]).map(String).includes(String(o.wbWarehouseId));
+  const color = allowed ? 'var(--ok)' : (client ? 'var(--warn)' : 'var(--ink-faint)');
+  const mark = allowed ? ' ✓ наш' : (client ? ' ⚠ не выбран' : '');
+  return ` · <span style="color:${color};font-weight:${allowed||client?'700':'400'}">склад ${escapeHtml(o.wbWarehouseId)}${mark}</span>`;
 }
 function toggleFbsSelected(orderId, checked){
   if(checked){ if(!fbsSelectedOrders.includes(orderId)) fbsSelectedOrders.push(orderId); }
