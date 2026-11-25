@@ -977,7 +977,7 @@ function renderFbsBody(){
     const selectedRequiringKiz = rows.filter(o=>fbsSelectedOrders.includes(o.orderId) && o.requiresKiz).length;
     const wrongWarehouseCount = clientId ? rows.filter(o=>{
       const cl = clients.find(c=>c.id===clientId);
-      return cl && cl.wbWarehouseId && o.wbWarehouseId && String(o.wbWarehouseId)!==String(cl.wbWarehouseId);
+      return cl && !(cl.wbWarehouseIds||[cl.wbWarehouseId]).map(String).includes(String(o.wbWarehouseId));
     }).length : 0;
     body.innerHTML = `
       <div class="panel" style="padding:10px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -2064,8 +2064,9 @@ async function hideFbsOrder(orderId){
 }
 async function hideOrdersFromOtherWarehouse(clientId){
   const client = clients.find(c=>c.id===clientId);
-  if(!client || !client.wbWarehouseId){ toast('У клиента не указан ID склада WB'); return; }
-  const toRemove = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='new' && o.wbWarehouseId && String(o.wbWarehouseId)!==String(client.wbWarehouseId));
+  if(!client || !(client.wbWarehouseIds||[client.wbWarehouseId]).filter(Boolean).length){ toast('У клиента не выбраны склады WB'); return; }
+  const selectedIds = (client.wbWarehouseIds||[client.wbWarehouseId]).filter(Boolean).map(String);
+  const toRemove = fbsOrders.filter(o=>o.clientId===clientId && o.supplierStatus==='new' && o.wbWarehouseId && !selectedIds.includes(String(o.wbWarehouseId)));
   if(!toRemove.length){ toast('Таких заказов не найдено'); return; }
   if(!await customConfirm(`Убрать из списка ${toRemove.length} заказ(ов) с других складов? У Wildberries они останутся как есть.`)) return;
   const idsToRemove = toRemove.map(o=>o.orderId);
