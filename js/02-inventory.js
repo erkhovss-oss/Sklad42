@@ -66,30 +66,70 @@ function changeInvPageSize(val){
   invPage = 1;
   renderInventory();
 }
-// ---------- РЕЗЕРВ ПОД НОВЫЕ ЗАКАЗЫ ----------
-// Те же правила, что на сервере (get_available_stock): WB — новые заказы по штрихкоду,
-// Ozon — отправления «ожидает сборки» по артикулу. Само списание со склада происходит при сборке.
+// Резерв распределяется по строкам остатков, сначала по основному складу.
 function buildReserveMap(){
   const wb = new Map(), oz = new Map();
-  fbsOrders.forEach(o=>{
-    if(o.supplierStatus!=='new' || !o.barcode) return;
-    const k = o.clientName+'|'+o.barcode; wb.set(k, (wb.get(k)||0)+1);
-  });
-  ozonOrders.forEach(o=>{
-    if(o.status!=='awaiting_packaging' || !o.article) return;
-    const link = (typeof ozonLinkFor==='function') ? ozonLinkFor(o.clientName, o.article) : null;
-    const k = o.clientName+'|'+(link && link.invSku ? link.invSku : o.article); oz.set(k, (oz.get(k)||0)+(o.qty||1));
-  });
+  const rows = inventory.filter(i=>(i.warehouseId||'MAIN')!=='BRAK').sort((a,b)=>
+    Number((b.warehouseId||'MAIN')==='MAIN')-Number((a.warehouseId||'MAIN')==='MAIN') ||
+    (a.warehouseId||'MAIN').localeCompare(b.warehouseId||'MAIN') || (a.size||'').localeCompare(b.size||''));
+  const allocate = (group, qty, map)=>{
+    for(const [index, item] of group.entries()){
+      const key = itemKey(item);
+      const free = availableInventoryRow(item,{wb,oz});
+      const take = index===group.length-1 ? qty : Math.min(qty,free);
+      if(!take) continue;
+      map.set(key,(map.get(key)||0)+take);
+      qty -= take;
+      if(item.isKit && item.kitMode!=='assembled'){
+        for(const part of getKitComponents(item)){
+          const component = findInventoryItem(part.componentSku,item.client,part.componentSize,item.warehouseId);
+          if(component){
+            const componentKey = itemKey(component);
+            map.set(componentKey,(map.get(componentKey)||0)+take*part.qtyNeeded);
+          }
+        }
+      }
+      if(!qty) break;
+    }
+  };
+  const sameProduct = (a,b)=>a.client===b.client && a.sku===b.sku && (a.size||'')===(b.size||'');
+  for(const order of fbsOrders){
+    if(order.supplierStatus!=='new' || order.stockDeducted || ['canceled','canceled_by_client','declined_by_client'].includes(order.wbStatus) || !order.barcode) continue;
+    const code = normalizeInventoryBarcode(order.barcode);
+    const match = rows.find(i=>i.client===order.clientName && normalizeInventoryBarcode(i.barcode)===code)
+      || inventoryBarcodes.find(i=>i.clientName===order.clientName && normalizeInventoryBarcode(i.barcode)===code);
+    if(match) allocate(rows.filter(i=>sameProduct(i,{...match,client:order.clientName})),1,wb);
+  }
+  for(const order of ozonOrders){
+    if(order.status!=='awaiting_packaging' || !order.article) continue;
+    const link = typeof ozonLinkFor==='function' ? ozonLinkFor(order.clientName,order.article) : null;
+    const match = rows.find(i=>i.client===order.clientName && i.sku===(link?.invSku||order.article) &&
+      (!link?.invSku || (i.size||'')===(link.invSize||'')));
+    if(match) allocate(rows.filter(i=>sameProduct(i,match)),order.qty||1,oz);
+  }
   return {wb, oz};
 }
-function reserveHtml(i, m){
-  if(i.isKit || i.warehouseId==='BRAK') return '';
-  const w = i.barcode ? (m.wb.get(i.client+'|'+i.barcode)||0) : 0;
-  const o = m.oz.get(i.client+'|'+i.sku)||0;
-  if(!w && !o) return '';
-  const parts = [w?`WB ${w}`:'', o?`Ozon ${o}`:''].filter(Boolean).join(' · ');
-  const free = Math.max(0, i.qty - w - o);
-  return `<div style="font-size:11px;margin-top:2px;color:var(--oz,#7a5af8);font-weight:600" title="Заказы пришли, но ещё не собраны: товар лежит на складе, но на площадках уже не показывается. Списание с остатка — при сборке.">🔒 в резерве: ${w+o} (${parts}) · доступно: ${free}</div>`;
+function availableInventoryRow(item,map){
+  const unreserved = row=>{
+    const key = itemKey(row);
+    return Math.max(0, row.qty-(map.wb.get(key)||0)-(map.oz.get(key)||0));
+  };
+  if(!item.isKit || item.kitMode==='assembled') return unreserved(item);
+  const quantities = new Map();
+  for(const part of getKitComponents(item)){
+    if(part.qtyNeeded<=0) return 0;
+    const component = findInventoryItem(part.componentSku,item.client,part.componentSize,item.warehouseId);
+    if(!component || component.isKit && component.kitMode!=='assembled') return 0;
+    quantities.set(component,(quantities.get(component)||0)+part.qtyNeeded);
+  }
+  return quantities.size ? Math.min(...Array.from(quantities,([row,qty])=>Math.floor(unreserved(row)/qty))) : 0;
+}
+function reserveHtml(item, map){
+  if(item.warehouseId==='BRAK') return '';
+  const key = itemKey(item);
+  const wb = map.wb.get(key)||0, oz = map.oz.get(key)||0;
+  const free = availableInventoryRow(item,map);
+  return `<div style="font-size:11px;margin-top:2px;color:var(--oz,#7a5af8)">В резерве: ${wb+oz} · доступно: ${free}</div>`;
 }
 function renderInventory(){
   const q = (document.getElementById('invSearch').value || '').toLowerCase();
@@ -541,7 +581,7 @@ function findInventoryItem(sku, client, size, warehouseId){
 let inventoryBarcodes = []; // {barcode, sku, clientName, size} — доп. штрихкоды сверх основного
 function normalizeInventoryBarcode(value){
   const raw = String(value||'').trim();
-  return /^\\d+$/.test(raw) ? raw.replace(/^0+(?=\\d)/,'') : raw;
+  return /^\d+$/.test(raw) ? raw.replace(/^0+(?=\d)/,'') : raw;
 }
 function findInventoryItemByBarcode(barcode, client, warehouseId){
   if(!barcode) return null;
@@ -654,7 +694,7 @@ async function pushStocksToWbSilent(clientId){
     const { data, error } = await sb.functions.invoke('wb-sync-stocks-ts', { body: { clientId, action: 'push_stocks' } });
     if(error){ toast('WB (авто): ' + await extractFnErrorMessage(error)); return; }
     if(data && data.error){ toast('WB (авто): ' + data.error); return; }
-    toast(`WB: остатки обновлены автоматически (${data.sent} поз.)`);
+    if(data?.sent) toast(`WB: остатки обновлены автоматически (${data.sent} поз.)`);
   }catch(e){ /* тихо игнорируем — не спамим, если сервер недоступен */ }
 }
 document.getElementById('invSearch').addEventListener('input', resetInventoryPageAndRender);
@@ -839,8 +879,8 @@ function stockModalCtx(){
   const {sku, client, size, warehouseId} = parseItemKey(stockModal.key);
   const item = findInventoryItem(sku, client, size, warehouseId);
   const m = buildReserveMap();
-  const resW = item && item.barcode ? (m.wb.get(item.client+'|'+item.barcode)||0) : 0;
-  const resO = item ? (m.oz.get(item.client+'|'+item.sku)||0) : 0;
+  const resW = item && item.barcode ? (m.wb.get(itemKey(item))||0) : 0;
+  const resO = item ? (m.oz.get(itemKey(item))||0) : 0;
   const cl = item ? clients.find(c=>c.name===item.client) : null;
   return {item, resW, resO, cl, split: !!(cl && cl.stockAllocationMode==='split')};
 }
