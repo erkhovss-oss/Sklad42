@@ -993,10 +993,10 @@ function renderFbsBody(){
       <div class="panel">${rows.map(o=>`
       <div class="pick-row">
         <input type="checkbox" ${fbsSelectedOrders.includes(o.orderId)?'checked':''} onchange="toggleFbsSelected(${o.orderId}, this.checked)">
-        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.isB2b===true?' <span style="background:#ede9fe;color:#6d28d9;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700">Юрлицо</span>':''}${o.orderCreatedAt?` <span style="color:${(Date.now()-new Date(o.orderCreatedAt))>24*60*60*1000?'var(--warn)':'var(--accent)'};font-weight:700;font-size:12px">· ${(Date.now()-new Date(o.orderCreatedAt))>24*60*60*1000?'⚠ ':''}${timeAgoRu(o.orderCreatedAt)}</span>`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.requiresKiz?' · требует КИЗ':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}${o.wbWarehouseId ? renderFbsWarehouseBadge(o) : ' · <span style="color:var(--ink-faint)">склад не определён</span>'}</div></div>
+        <div><div class="sku-name">${(pi=>pi.name)(findLocalProductInfo(o))}${(pi=>pi.color?` · ${escapeHtml(pi.color)}`:'')(findLocalProductInfo(o))}${o.size?` · ${o.size}`:''}${o.isB2b===true?' <span style="background:#ede9fe;color:#6d28d9;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700">Юрлицо</span>':''}${o.orderCreatedAt?` <span style="color:${(Date.now()-new Date(o.orderCreatedAt))>24*60*60*1000?'var(--warn)':'var(--accent)'};font-weight:700;font-size:12px">· ${(Date.now()-new Date(o.orderCreatedAt))>24*60*60*1000?'⚠ ':''}${timeAgoRu(o.orderCreatedAt)}</span>`:''}</div><div class="sku-code mono">${o.article} · ШК ${o.barcode||'—'} · заказ №${o.orderId}${(pi=>pi.cell?` · яч. ${pi.cell}`:'')(findLocalProductInfo(o))}${o.requiresKiz?' · требует КИЗ':''}${o.stockDeducted?' · <span style="color:var(--warn);font-weight:700">Товар списан — ожидает подтверждения WB</span>':o.stockStateKnown===false?' · Состояние списания не проверено':''}${!clientId?` · ${escapeHtml(o.clientName)}`:''}${o.wbWarehouseId ? renderFbsWarehouseBadge(o) : ' · <span style="color:var(--ink-faint)">склад не определён</span>'}</div></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-accent" style="padding:6px 12px" onclick="startAssembleOrder(${o.orderId})">Собрать</button>
-          <button class="btn btn-ghost" style="padding:6px 12px" onclick="hideFbsOrder(${o.orderId})" title="Убрать только у нас, у WB заказ останется как есть">Скрыть</button>
+          <button class="btn btn-accent" style="padding:6px 12px" onclick="startAssembleOrder(${o.orderId})">${o.stockDeducted?'Повторить отправку':'Собрать'}</button>
+          <button class="btn btn-ghost" style="padding:6px 12px" onclick="hideFbsOrder(${o.orderId})" title="Убрать только у нас, у WB заказ останется как есть" ${o.stockDeducted||o.stockStateKnown===false?'disabled':''}>Скрыть</button>
           <button class="btn btn-ghost" style="padding:6px 12px;color:var(--warn)" onclick="cancelFbsOrder(${o.orderId})">Отменить</button>
         </div>
       </div>
@@ -2031,6 +2031,10 @@ function cancelAssembleOrder(){
   renderFbsBody();
 }
 async function hideFbsOrder(orderId){
+  const target = fbsOrders.find(o=>o.orderId===orderId);
+  if(!target || target.stockDeducted || target.stockStateKnown!==true){ toast('Нельзя скрыть заказ: списание выполнено или его состояние не проверено'); return; }
+  const {data,error} = await sb.from('wb_fbs_stock_operations').select('order_id,state').eq('order_id',orderId).maybeSingle();
+  if(error || data?.state==='deducted'){ toast('Нельзя скрыть заказ: проверьте состояние списания'); return; }
   if(!await customConfirm('Убрать этот заказ из списка только у нас? У Wildberries и у клиента заказ останется как есть — его должен собрать тот, кто отвечает за нужный склад.')) return;
   fbsOrders = fbsOrders.filter(o=>o.orderId!==orderId);
   fbsSelectedOrders = fbsSelectedOrders.filter(id=>id!==orderId);
@@ -3636,10 +3640,19 @@ async function loadFbsOrders(){
     allRows = allRows.concat(data);
     if(!data || data.length < pageSize) break;
   }
+  const deductedIds = new Set();
+  const newIds = allRows.filter(o=>o.supplier_status==='new').map(o=>o.order_id);
+  let stockStateKnown = true;
+  for(let i=0;i<newIds.length;i+=200){
+    const {data,error} = await sb.from('wb_fbs_stock_operations').select('order_id,state').in('order_id',newIds.slice(i,i+200)).eq('state','deducted');
+    if(error){ stockStateKnown=false; console.error(error); break; }
+    (data||[]).forEach(r=>deductedIds.add(String(r.order_id)));
+  }
   fbsOrders = allRows.map(o=>({
     orderId:o.order_id, rid:o.rid||'', clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
+    stockDeducted:deductedIds.has(String(o.order_id)), stockStateKnown,
     isB2b:o.is_b2b, kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, pickedAt:o.picked_at||null, kizUpdatedAt:o.kiz_updated_at||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
 }
