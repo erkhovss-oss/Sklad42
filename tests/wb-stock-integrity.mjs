@@ -38,6 +38,12 @@ insert into ozon_orders values ('A','C','awaiting_packaging',1);
 `);
 for(const f of fs.readdirSync('supabase/migrations').sort()) await db.exec(fs.readFileSync('supabase/migrations/'+f,'utf8'));
 const first=async (q,args)=>Object.values((await db.query(q,args)).rows[0])[0];
+for(const role of ['anon','authenticated','service_role']){
+  for(const signature of ['wb_fbs_deduct(bigint,text,text,text,text,text,text)',
+    'wb_fbs_restore(bigint,text,text,text,text,text,text,text,text)']){
+    assert.equal(await first("select has_function_privilege($1,$2,'execute')",[role,signature]),role==='service_role');
+  }
+}
 await db.exec(`select trigger_wb_fetch_new(); select trigger_wb_push_stocks(); select trigger_wb_recheck_pending_kiz();`);
 assert.equal(await first("select wb_available from get_available_stock('C') where sku='A'"),97);
 const deduct=(id,sku)=>first("select wb_fbs_deduct($1,'c',$2,'','MAIN','staff','Tester')",[id,sku]);

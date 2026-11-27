@@ -132,6 +132,15 @@ begin
 end;
 $function$;
 
+revoke all on function public.wb_fbs_deduct(bigint,text,text,text,text,text,text)
+  from public, anon, authenticated;
+grant execute on function public.wb_fbs_deduct(bigint,text,text,text,text,text,text)
+  to service_role;
+revoke all on function public.wb_fbs_restore(bigint,text,text,text,text,text,text,text,text)
+  from public, anon, authenticated;
+grant execute on function public.wb_fbs_restore(bigint,text,text,text,text,text,text,text,text)
+  to service_role;
+
 CREATE OR REPLACE FUNCTION public.get_available_stock(p_client_name text)
  RETURNS TABLE(barcode text, sku text, wb_available integer, ozon_available integer)
  LANGUAGE sql
