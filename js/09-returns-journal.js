@@ -21,7 +21,6 @@ function findReturnItem(){
   if(!code) return;
   let item = findInventoryItemByBarcode(code, clientFilter || undefined)
     || (clientFilter ? findInventoryItem(code, clientFilter, undefined) : null)
-    || findInventoryItemByBarcode(code)
     || inventory.find(i => i.sku === code && (!clientFilter || i.client === clientFilter));
   if(!item){
     foundReturnItem = null;
@@ -52,6 +51,8 @@ async function submitReturn(resolution){
   const qty = Math.max(1, parseInt(document.getElementById('returnQty').value) || 1);
   const reason = document.getElementById('returnReason').value;
   const orderId = document.getElementById('returnOrderId').value.trim();
+  const virtualKit = item.isKit && item.kitMode!=='assembled';
+  if(virtualKit && !orderId){ toast('Для возврата виртуального комплекта укажите номер заказа WB'); return; }
   if(orderId){
     const client = clients.find(c=>c.name===item.client);
     if(!client){ toast('Клиент товара не найден'); return; }
@@ -72,6 +73,7 @@ async function submitReturn(resolution){
     } catch(e){ toast('Возврат не подтверждён: '+(e.message||e)); return; }
     finally { wbReturnInFlight=false; }
   }
+  if(virtualKit){ toast('Списание комплекта не найдено. Проверьте состав и оформите возврат по компонентам'); return; }
   const id = 'RET-' + Date.now();
   const createdAt = new Date().toISOString();
   const entry = {id, sku:item.sku, name:item.name, size:item.size||'', clientName:item.client||'', warehouseId:item.warehouseId||'MAIN', qty, orderId:orderId||'', reason:reason||'', resolution, employeeName: currentUser?currentUser.name:'', createdAt};

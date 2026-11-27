@@ -766,10 +766,19 @@ function renderFbsOrders(){
   setFbsView(fbsView);
   if(!fbsAutoPollTimer){
     fbsAutoPollTimer = setInterval(()=>{
-      if(document.getElementById('tab-fbs').classList.contains('active')) fetchNewFbsOrders(true);
-    }, 30000);
+      if(document.getElementById('tab-fbs').classList.contains('active') && !fbsAssemblyScreenOpen()) refreshFbsOrders();
+    }, 10000);
   }
-  fetchNewFbsOrders(true);
+  refreshFbsOrders();
+}
+let refreshingFbsOrders = false;
+async function refreshFbsOrders(){
+  if(refreshingFbsOrders) return;
+  refreshingFbsOrders = true;
+  try {
+    await loadFbsOrders();
+    if(!fbsAssemblyScreenOpen()) renderFbsBody();
+  } finally { refreshingFbsOrders = false; }
 }
 async function syncFbsOrderStatuses(){
   const clientId = document.getElementById('fbsClientSelect').value;
@@ -2166,14 +2175,13 @@ async function finishAssembleOrder(order, kizCode, skipViewSwitch){
   if(order.supplierStatus && order.supplierStatus!=='new'){ return; }
   const client = clients.find(c=>c.id===order.clientId);
   const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
-  const available = inv ? (inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty) : 0;
   if(!inv){
     toast(`Недостаточно на складе «${order.name||order.article}» — нет в остатках`);
     return;
   }
   assemblingInFlight.add(order.orderId);
   try {
-    const res = await sb.functions.invoke('wb-orders-ts', {body:{clientId:order.clientId,action:'deduct_fbs',orderId:order.orderId,sku:inv.sku,size:inv.size||'',warehouse:inv.warehouseId||'MAIN'}});
+    const res = await sb.functions.invoke('wb-orders-ts', {body:{clientId:order.clientId,action:'deduct_fbs',orderId:order.orderId,kizCode,sku:inv.sku,size:inv.size||'',warehouse:inv.warehouseId||'MAIN'}});
     if(res.error || !res.data?.ok) throw new Error(await extractEdgeFunctionError(res.data,res.error));
     order.stockDeducted = true;
     await loadInventory();
@@ -2244,10 +2252,13 @@ async function finishAssembleOrder(order, kizCode, skipViewSwitch){
       if(!ddsEntries.find(d=>d.id===ddsId)){
         const description = `Отгрузка FBS №${order.orderId} · ${liters.toFixed(2)} л`;
         const entry = {id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, clientId:order.clientId, clientName:order.clientName, date:new Date().toISOString().slice(0,10), warehouseId: inv.warehouseId||'MAIN', createdAt:new Date().toISOString()};
-        ddsEntries.unshift(entry);
-        sb.from('dds_entries').upsert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, client_id:order.clientId, client_name:order.clientName, date:entry.date, warehouse_id: inv.warehouseId||'MAIN', employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null},{onConflict:'id',ignoreDuplicates:true}).then(({error})=>{
-          if(error) console.error(error);
-        });
+        const {error: billingError} = await sb.from('dds_entries').upsert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, client_id:order.clientId, client_name:order.clientName, date:entry.date, warehouse_id: inv.warehouseId||'MAIN', employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null},{onConflict:'id',ignoreDuplicates:true});
+        if(billingError){
+          console.error(billingError);
+          toast(`Заказ №${order.orderId} собран. Начисление не сохранено — проверьте ДДС`);
+        }else{
+          ddsEntries.unshift(entry);
+        }
       }
     }
   }
@@ -2275,18 +2286,9 @@ async function cancelFbsOrder(orderId){
   const wasConfirmed = order.supplierStatus === 'confirm';
   sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'cancel', orderId } }).then(({data, error})=>{
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
-    // Если заказ уже был собран (стало быть, остаток уже списался при сборке) и товар
-    // не был отмечен как «нет на складе» — значит, он реально стоит на полке, возвращаем.
-    // Если он был отмечен «нет на складе» — виртуальную единицу не возвращаем, её и так
-    // физически не было, восстановление тут создало бы фантомный остаток.
-    if(wasConfirmed && !order.outOfStock){
-      const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
-      if(inv) logMovement(inv.sku, inv.name, 1, `Возврат остатка — отмена собранного заказа FBS №${orderId}`, inv.client, inv.size, inv.warehouseId||'MAIN');
-    }
     order.supplierStatus = 'cancel';
     fbsOrders = fbsOrders.filter(o=>o.orderId!==orderId);
-    sb.from('wb_orders').update({supplier_status:'cancel'}).eq('order_id', orderId).then(()=>{});
-    toast(`Заказ №${orderId} отменён${(wasConfirmed && !order.outOfStock) ? ' — остаток возвращён на склад' : ''}`);
+    toast(`Заказ №${orderId} отменён${data.restored ? ' — остаток возвращён на склад' : (wasConfirmed || order.stockDeducted) && !order.outOfStock ? ' — оформите возврат по номеру заказа' : ''}`);
     renderFbsBody();
   });
 }
@@ -3656,7 +3658,7 @@ async function loadFbsOrders(){
     isB2b:o.is_b2b, kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, pickedAt:o.picked_at||null, kizUpdatedAt:o.kiz_updated_at||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
 }
-document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; fetchNewFbsOrders(true); });
+document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; refreshFbsOrders(); });
 document.getElementById('fbsCompletePageSize').addEventListener('change', function(){ changeFbsCompletePageSize(this.value); });
 
 // ---------- OZON ORDERS ----------
