@@ -5,6 +5,65 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
 process.chdir(fileURLToPath(new URL('..',import.meta.url)));
+const core = fs.readFileSync('js/01-core.js','utf8');
+const scannerCode = core.slice(core.indexOf('const US_LAYOUT_MAP'),core.indexOf('// ---------- ЗВУК'));
+const scanner = vm.createContext({});
+vm.runInContext(scannerCode,scanner);
+const gs = String.fromCharCode(29);
+const segments = ['0104607009520001211234567890123','91TEST','92'+'X'.repeat(44)];
+const fullKiz = segments.join(gs);
+for(const scan of [segments.join(''),segments[0]+gs+segments[1]+segments[2],
+  segments[0]+'\uFFFD'+segments[1]+gs+segments[2],']d2'+fullKiz]){
+  const normalized = scanner.normalizeKizInput(scan);
+  assert.equal(normalized.code,fullKiz);
+  assert.equal(normalized.gsCount,2);
+}
+assert.equal(scanner.normalizeKizInput(fullKiz).restored,false);
+const truncated = fullKiz.slice(0,-1);
+assert.equal(scanner.normalizeKizInput(truncated).code,truncated);
+
+function scanKeys(options, keys){
+  const input={dataset:{},value:'',selectionStart:0,selectionEnd:0,
+    addEventListener(_event,handler){this.handle=handler;}};
+  scanner.forceEnglishInput(input,options);
+  for(const key of keys) input.handle({...key,preventDefault(){}});
+  return input.value;
+}
+assert.equal(scanKeys({f8AsGs:true},[
+  {key:'F8'},{key:']',code:'BracketRight',ctrlKey:true},{key:'Ф',code:'KeyA',shiftKey:false},
+]),gs+gs+'a');
+assert.equal(scanKeys({},[{key:'F8'}]),'');
+
+const withQuote = ['01046070095200012112345"7890123',segments[1],segments[2]].join(gs);
+const serialized = JSON.stringify(withQuote);
+for(const input of [withQuote,serialized,JSON.stringify([withQuote]),serialized.slice(1,-1)]){
+  assert.equal(scanner.normalizeKizInput(input).code,withQuote);
+}
+assert.equal(scanner.normalizeKizInput(JSON.stringify([withQuote,fullKiz])).invalidFormat,true);
+assert.equal(scanner.normalizeKizInput(serialized.replace(/\\u001d/g,'\\\\u001d')).invalidFormat,true);
+
+const fbs = fs.readFileSync('js/05-fbs.js','utf8');
+const fbsMessages = fbs.slice(fbs.indexOf('function notifyFbsKizAccepted'),fbs.indexOf('function watchPendingKiz'));
+const signals = [];
+const messages = [];
+const notification = vm.createContext({playBeep:type=>signals.push(type),toast:message=>messages.push(message)});
+vm.runInContext(fbsMessages,notification);
+notification.notifyFbsKizAccepted(1,'filled');
+assert.deepEqual(signals,[]);
+assert.match(messages.at(-1),/без проверки/);
+notification.notifyFbsKizAccepted(1,'sgtinIntroduced');
+assert.deepEqual(signals,['ok']);
+assert.match(messages.at(-1),/КИЗ проверен WB/);
+notification.notifyFbsKizRejected(2);
+assert.deepEqual(signals,['ok','error']);
+
+const statusView = vm.createContext({});
+vm.runInContext(fbs.slice(fbs.indexOf('function renderKizStatusLabel'),fbs.indexOf('function renderFbsWarehouseBadge')),statusView);
+for(const status of ['pending','rejected','attached','verify_failed']){
+  const label = statusView.renderKizStatusLabel({requiresKiz:true,kizCode:withQuote,kizDecision:serialized,kizStatus:status});
+  assert.ok(!label.includes(segments[0].slice(0,18)));
+}
+
 const db=new PGlite();
 await db.exec(`
 create role anon; create role authenticated; create role service_role;
@@ -154,12 +213,16 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     const orders=new Map();
     let upstream=0, pushes=0, deductions=0, sentKiz;
     let supplierStatus="new", wbRequiresKiz=true;
+    let metaRows=[{orderId:1,meta:{sgtin:{status:'filled'}}}];
+    const pendingRows=[{order_id:12,kiz_code:'synthetic'}, {order_id:13,kiz_code:'synthetic'}, {order_id:14,kiz_code:'synthetic'}];
+    const verdictUpdates=[];
     let orderHandler;
     const sb={
       auth:{getUser:async()=>({data:{user:{id:'staff-auth'}}})},
       from:(table)=>{
         const query={
-          eq:()=>query, in:()=>query, not:()=>query,
+          eq:()=>query, in:()=>query, not:()=>query, is:()=>query,
+          order:()=>query, limit:async()=>({data:pendingRows}),
           maybeSingle:async()=>({data: table==='wb_orders'
             ? {order_id:1,requires_kiz:wbRequiresKiz,supplier_status:supplierStatus}
             : table==='inventory' ? {requires_kiz:true}
@@ -175,7 +238,7 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
           for(const r of fresh) orders.set(r.order_id,r);
           return {data:fresh};
         }}),
-        update:()=>query,
+        update:(patch)=>{if(patch.kiz_status) verdictUpdates.push(patch);return query;},
       }; },
       rpc:async(name)=>{
         if(name==='wb_fbs_deduct') deductions++;
@@ -188,7 +251,7 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
           sentKiz=JSON.parse(init.body).sgtins[0];
           return new Response(null,{status:204});
         }
-        if(url.endsWith('/orders/meta')) return Response.json({orders:[{orderId:1,meta:{sgtin:{status:'filled'}}}]});
+        if(url.endsWith('/orders/meta')) return Response.json({orders:metaRows});
         if(url.endsWith('/api/v3/orders/new')){
           assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
           upstream++;
@@ -225,6 +288,18 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     assert.equal(response.status,200);
     assert.equal((await response.json()).kizStatus,'attached');
     assert.equal(sentKiz,scanned);
+    verdictUpdates.length=0;
+    metaRows=[
+      {id:13,meta:{sgtin:{status:'filled'}},metaDetails:[{key:'sgtin',value:['synthetic'],decision:'sgtinNoGS'}]},
+      {id:12,metaDetails:[{key:'sgtin',value:['synthetic'],decision:'sgtinIntroduced'}]},
+      {id:14,meta:{sgtin:{value:['synthetic']}}},
+    ];
+    const recheck=await invoke(h,{action:'recheck_pending_kiz'});
+    assert.equal(recheck.status,200);
+    assert.equal((await recheck.json()).checked,3);
+    assert.deepEqual(verdictUpdates.map(patch=>[patch.kiz_status,patch.kiz_decision]),[
+      ['attached','sgtinIntroduced'],['rejected','sgtinNoGS'],['pending',null],
+    ]);
     console.log('WB orders mock: cron auth, selected warehouses, duplicate import, changed stock push, mandatory KIZ');
     continue;
   }

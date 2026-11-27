@@ -9,6 +9,19 @@ const sellerToken = (stored: string | null) => liveProject()
 const CORS = { "Access-Control-Allow-Origin":"*", "Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods":"POST, OPTIONS" };
 const json = (v:unknown,s=200)=>new Response(JSON.stringify(v),{status:s,headers:{...CORS,"Content-Type":"application/json"}});
 const errText = async (r:Response)=>{const t=await r.text();return t.slice(0,1200)||r.statusText};
+const acceptedKiz = new Set(["filled","accepted","sgtinIntroduced","sgtinSoldB2B"]);
+const rejectedKiz = new Set([
+ "required","optional","rejected","sgtinInvalidFormat","sgtinNoGS","sgtinHasInvalidSymbols",
+ "sgtinHasNonLatinSymbols","sgtinInvalidPattern","sgtinNotFound","sgtinEmitted","sgtinApplied",
+ "sgtinWrittenOff","sgtinWithdrawn","sgtinRetired","sgtinDisaggregated","sgtinDisaggregation","sgtinAppliedNotPaid"
+]);
+function kizVerdict(item:any){
+ const detail=Array.isArray(item.metaDetails) ? item.metaDetails.find((entry:any)=>entry?.key==="sgtin") : null;
+ const raw=detail?.decision ?? (item.meta||item).sgtin?.status;
+ if(acceptedKiz.has(raw)) return {status:"attached",decision:raw};
+ if(rejectedKiz.has(raw)) return {status:"rejected",decision:raw};
+ return {status:"pending",decision:raw==="deadlineExceeded" || raw==="pending" ? raw : null};
+}
 Deno.serve(async(req)=>{
  if(req.method==="OPTIONS") return new Response("ok",{headers:CORS});
  if(req.method!=="POST") return json({error:"POST required"},405);
@@ -85,6 +98,7 @@ Deno.serve(async(req)=>{
   const meta=async(id:number)=>await wb("/api/marketplace/v3/orders/meta","POST",{orders:[id]});
   const requiresKiz=(item:any)=>{
    const sgtin=(item.meta||item).sgtin;
+   if(Array.isArray(item.metaDetails) && item.metaDetails.some((entry:any)=>entry?.key==="sgtin" && entry.decision==="required")) return true;
    return sgtin?.required===true || sgtin?.status==="required" || item.isKizRequired===true ||
     (Array.isArray(item.requiredMeta) && item.requiredMeta.includes("sgtin"));
   };
@@ -333,9 +347,23 @@ Deno.serve(async(req)=>{
     return json({ok:true,found:all.length,missingCount:missing.length,inserted,skippedWrongWarehouse,allowedWarehouseIds:configuredWarehouseIds,insertError});
    }
    case "recheck_pending_kiz":{
-    const {data:rows}=await sb.from("wb_orders").select("order_id,kiz_code").eq("client_id",clientId).eq("kiz_status","pending").limit(100);
+    const {data:rows,error:readError}=await sb.from("wb_orders").select("order_id,kiz_code")
+     .eq("client_id",clientId).eq("kiz_status","pending").order("kiz_updated_at",{ascending:true,nullsFirst:true}).limit(100);
+    if(readError) throw readError;
+    if(!rows?.length) return json({ok:true,checked:0});
+    const response=await wb("/api/marketplace/v3/orders/meta","POST",{orders:rows.map(o=>Number(o.order_id))});
+    const byId=new Map((response.orders||[]).map((item:any)=>[String(item.id??item.orderId),item]));
     let checked=0;
-    for(const o of rows||[]){try{const d=await meta(Number(o.order_id));const it=(d.orders||[])[0]||{};const s=(it.meta||it).sgtin;const st=s?.status||s?.value||"pending";await updateOrder(Number(o.order_id),{kiz_status:st==="filled"||st==="accepted"?"attached":st==="rejected"?"rejected":"pending",kiz_decision:st,kiz_updated_at:new Date().toISOString()});checked++;}catch{}}
+    for(const o of rows){
+     const item=byId.get(String(o.order_id));
+     if(!item) continue;
+     const verdict=kizVerdict(item);
+     const query=sb.from("wb_orders").update({kiz_status:verdict.status,kiz_decision:verdict.decision,kiz_updated_at:new Date().toISOString()})
+      .eq("client_id",clientId).eq("order_id",o.order_id).eq("kiz_status","pending");
+     const {error}=await (o.kiz_code==null ? query.is("kiz_code",null) : query.eq("kiz_code",o.kiz_code));
+     if(error) throw error;
+     checked++;
+    }
     return json({ok:true,checked});
    }
    case "cancel_reasons": return json({reasons:[]});
@@ -348,7 +376,11 @@ Deno.serve(async(req)=>{
    if(o.supplier_status!=="confirm")throw new Error("Сначала добавьте заказ в поставку (статус confirm)");
    await wb("/api/v3/orders/"+id+"/meta/sgtin","PUT",{sgtins:[kiz]});
    let status="pending",decision=null,warning=null;
-   try{const d=await meta(id);const it=(d.orders||[])[0]||{};const s=(it.meta||it).sgtin;decision=s?.status||null;status=["filled","accepted","optional"].includes(decision)?"attached":decision==="rejected"?"rejected":"pending";}catch(e){warning=String(e);}
+   try{
+    const d=await meta(id);
+    const item=(d.orders||[]).find((row:any)=>Number(row.id??row.orderId)===id);
+    if(item) ({status,decision}=kizVerdict(item));
+   }catch(e){warning="WB пока не вернул решение по маркировке";}
    await updateOrder(id,{kiz_code:kiz,kiz_status:status,kiz_decision:decision,kiz_updated_at:new Date().toISOString(),requires_kiz:true});
    return {ok:true,kizStatus:status,decision,warning};
   }

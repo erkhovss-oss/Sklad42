@@ -1310,7 +1310,7 @@ function wizardBarcodeConfirmed(order){
   const kizInput = document.getElementById('wizardKizInput');
   if(kizInput && !kizDone){
     kizInput.disabled = false;
-    forceEnglishInput(kizInput);
+    forceEnglishInput(kizInput,{f8AsGs:true});
     kizInput.focus();
     toast('Теперь отсканируйте КИЗ этой единицы');
   } else {
@@ -1726,7 +1726,7 @@ function forceShowWizardKiz(orderId){
     <div id="wizardKizStatus" style="font-size:12px;margin-bottom:6px">${renderKizStatusLabel(order)}</div>
     <div style="margin-bottom:14px"><span style="font-size:11px;color:var(--accent);cursor:pointer" onclick="openKizScannerTest()">🔧 Проверка сканера КИЗ</span></div>
   `;
-  forceEnglishInput(document.getElementById('wizardKizInput'));
+  forceEnglishInput(document.getElementById('wizardKizInput'),{f8AsGs:true});
   document.getElementById('wizardKizInput').focus();
   wireWizardKizInput(order);
 }
@@ -1750,7 +1750,7 @@ function openKizScannerTest(){
   document.body.appendChild(overlay);
   const input = overlay.querySelector('#kizTestInput');
   const result = overlay.querySelector('#kizTestResult');
-  forceEnglishInput(input);
+  forceEnglishInput(input,{f8AsGs:true});
   let keys = [];
   input.addEventListener('keydown', (e)=>{
     if(e.key==='Enter'){
@@ -1792,6 +1792,18 @@ function openKizScannerTest(){
 // корректна» видно раньше), сами переспрашиваем WB по нарастающей и обновляем статус на экране —
 // не ждём фоновой задачи и ручного обновления страницы. Прекращаем, как только решение получено.
 const kizWatchers = {};
+function notifyFbsKizAccepted(orderId,decision){
+  if(decision==='filled'){
+    toast(`Заказ №${orderId}: КИЗ добавлен у WB без проверки`);
+    return;
+  }
+  playBeep('ok');
+  toast(`✅ Заказ №${orderId}: КИЗ проверен WB`);
+}
+function notifyFbsKizRejected(orderId){
+  playBeep('error');
+  toast(`⚠ Заказ №${orderId}: WB отклонил КИЗ — проверьте код в «Режиме сборки»`);
+}
 function watchPendingKiz(order){
   if(!order || kizWatchers[order.orderId]) return;
   kizWatchers[order.orderId] = true;
@@ -1808,12 +1820,13 @@ function watchPendingKiz(order){
           order.kizDecision = data.kiz_decision || null;
           if(data.kiz_code) order.kizCode = data.kiz_code;
           const twin = fbsOrders.find(o=>o.orderId===order.orderId);
+          const alreadyNotified = twin && twin!==order && twin.kizStatus===order.kizStatus;
           if(twin && twin!==order){ twin.kizStatus = order.kizStatus; twin.kizDecision = order.kizDecision; if(order.kizCode) twin.kizCode = order.kizCode; }
           // статус рисуем только если на экране сейчас именно этот заказ (иначе статус прошлого заказа попадал на экран следующего)
           const statusDiv = document.getElementById('wizardKizStatus');
           if(statusDiv && assemblyModeQueue[assemblyModeIndex] === order) statusDiv.innerHTML = renderKizStatusLabel(order);
-          if(data.kiz_status === 'attached'){ playBeep('ok'); toast(`✅ Заказ №${order.orderId}: КИЗ подтверждён WB`); }
-          else if(data.kiz_status === 'verify_failed'){ playBeep('warn'); toast(`⚠ Заказ №${order.orderId}: WB не подтвердил КИЗ${data.kiz_decision ? ' ('+data.kiz_decision+')' : ''}`); }
+          if(data.kiz_status === 'attached' && !alreadyNotified) notifyFbsKizAccepted(order.orderId, order.kizDecision);
+          else if(data.kiz_status === 'rejected' && !alreadyNotified) notifyFbsKizRejected(order.orderId);
           if(!fbsAssemblyScreenOpen()) renderFbsBody();
         }
       }catch(e){ /* сеть моргнула — следующая попытка или фоновая задача по расписанию */ }
@@ -1826,7 +1839,7 @@ function watchPendingKiz(order){
 // (verify_failed), «использованными» не считаются — иначе после сбоя повторный скан блокировался бы навсегда.
 function findKizOnOtherOrder(code, exceptOrderId){
   const key = kizKey(code);
-  return fbsOrders.find(o=>o.orderId!==exceptOrderId && o.kizCode && o.kizStatus!=='verify_failed' && kizKey(o.kizCode)===key) || null;
+  return fbsOrders.find(o=>o.orderId!==exceptOrderId && o.kizCode && !['verify_failed','rejected'].includes(o.kizStatus) && kizKey(o.kizCode)===key) || null;
 }
 function wireWizardKizInput(order){
   const kizInput = document.getElementById('wizardKizInput');
@@ -1839,6 +1852,12 @@ function wireWizardKizInput(order){
     // изредка теряется самый последний символ кода, и проверка у WB не проходит).
     setTimeout(()=>{
       const norm = normalizeKizInput(kizInput.value);
+      if(norm.invalidFormat){
+        playBeep('error');
+        toast('Не удалось прочитать формат КИЗ — отсканируйте код заново');
+        kizInput.select();
+        return;
+      }
       const kizCode = norm.code;
       kizInput.value='';
       if(!kizCode) return;
@@ -1871,10 +1890,8 @@ function wizardAttachKiz(order, kizCode, norm){
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus;
     order.kizDecision = data.decision || null;
-    sb.from('wb_orders').update({kiz_code:kizCode, kiz_status:data.kizStatus, requires_kiz:true}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
     if(data.kizStatus==='attached'){
-      playBeep('ok');
-      toast('✅ КИЗ подтверждён WB');
+      notifyFbsKizAccepted(order.orderId,order.kizDecision);
       const invItem = order.barcode ? inventory.find(i=>i.barcode===order.barcode && i.client===order.clientName) : null;
       if(invItem && !invItem.requiresKiz){
         invItem.requiresKiz = true;
@@ -1883,7 +1900,6 @@ function wizardAttachKiz(order, kizCode, norm){
       }
     }
     else if(data.kizStatus==='pending'){
-      playBeep('ok');
       toast('⏳ КИЗ отправлен, WB ещё проверяет — можно продолжать сборку, статус обновится сам');
       watchPendingKiz(order);
     }
@@ -2074,13 +2090,11 @@ function renderKizStatusLabel(o){
   if(!o.requiresKiz && !o.kizCode) return '';
   // Код ещё не отсканирован — никакого статуса WB показывать нельзя (раньше мог всплыть устаревший статус из памяти)
   if(!o.kizCode) return o.requiresKiz ? ' · <span style="color:var(--ink-soft)">КИЗ ещё не отсканирован</span>' : '';
-  // «pending» — штатное «идёт проверка», его пугающим английским словом не показываем; прочие ответы WB — как есть
-  const why = (o.kizDecision && o.kizDecision!=='pending') ? ` <span style="font-weight:400;font-size:11px">(WB: ${escapeHtml(o.kizDecision)})</span>` : '';
+  if(o.kizDecision==='filled') return ' · <span style="color:var(--ok);font-weight:700">✔ КИЗ добавлен у WB без проверки</span>';
   if(o.kizStatus==='attached') return ' · <span style="color:var(--ok);font-weight:700">✅ КИЗ подтверждён WB</span>';
-  // «filled» — в кабинете WB это «Добавили маркировку без проверки»: код записан на заказ, проверка и ввод в оборот позже; в оборот (sgtinIntroduced) его вводят позже, обычно при передаче поставки в доставку. Это не ошибка и не «проверка».
-  if(o.kizStatus==='pending' && o.kizDecision==='filled') return ' · <span style="color:var(--ok);font-weight:700">✔ КИЗ добавлен у WB — «маркировка без проверки»</span> <span style="font-weight:400;font-size:11px;color:var(--ink-soft)">(WB проверит и введёт в оборот позже)</span>';
-  if(o.kizStatus==='pending') return ` · <span style="color:var(--ink-soft)">⏳ WB проверяет маркировку…${why}</span>`;
-  if(o.kizStatus==='verify_failed') return ` · <span style="color:var(--warn);font-weight:700">⚠ WB не подтвердил КИЗ${why}</span>`;
+  if(o.kizStatus==='pending') return ' · <span style="color:var(--ink-soft)">⏳ WB проверяет маркировку…</span>';
+  if(o.kizStatus==='rejected') return ' · <span style="color:var(--warn);font-weight:700">⚠ WB отклонил КИЗ</span>';
+  if(o.kizStatus==='verify_failed') return ' · <span style="color:var(--warn);font-weight:700">⚠ WB не подтвердил КИЗ</span>';
   if(o.kizCode) return ' · КИЗ отправлен, статус не проверен';
   return o.requiresKiz ? ' · <span style="color:var(--warn)">КИЗ не прикреплён ⚠</span>' : '';
 }
@@ -3642,6 +3656,7 @@ async function loadFbsOrders(){
     if(error){ stockStateKnown=false; console.error(error); break; }
     (data||[]).forEach(r=>deductedIds.add(String(r.order_id)));
   }
+  const pendingKizIds = new Set(fbsOrders.filter(order=>order.kizStatus==='pending').map(order=>order.orderId));
   fbsOrders = allRows.map(o=>({
     orderId:o.order_id, rid:o.rid||'', clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
@@ -3649,6 +3664,11 @@ async function loadFbsOrders(){
     stockDeducted:deductedIds.has(String(o.order_id)), stockStateKnown,
     isB2b:o.is_b2b, kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, pickedAt:o.picked_at||null, kizUpdatedAt:o.kiz_updated_at||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
+  for(const order of fbsOrders){
+    if(!pendingKizIds.has(order.orderId)) continue;
+    if(order.kizStatus==='rejected') notifyFbsKizRejected(order.orderId);
+    if(order.kizStatus==='attached') notifyFbsKizAccepted(order.orderId,order.kizDecision);
+  }
 }
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; refreshFbsOrders(); });
 document.getElementById('fbsCompletePageSize').addEventListener('change', function(){ changeFbsCompletePageSize(this.value); });

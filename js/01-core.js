@@ -291,11 +291,27 @@ function insertTextAtCursor(input, text){
 function normalizeKizInput(raw){
   let code = String(raw||'').replace(/[\r\n]+/g,'').trim();
   code = code.replace(/^\][A-Za-z][0-9A-Za-z]/, '');
-  const gsCount = code.split(GS_CHAR).length - 1;
-  if(gsCount > 0) return {code, restored:false, gsCount};
-  const m = code.match(/^(01\d{14}21[\x21-\x7e]{13})(91[\x21-\x7e]{4})(92(?:[\x21-\x7e]{44}|[\x21-\x7e]{88}))$/);
-  if(m) return {code: m[1]+GS_CHAR+m[2]+GS_CHAR+m[3], restored:true, gsCount:2};
-  return {code, restored:false, gsCount:0};
+  const wrapped = /^(?:"01|\[\s*"01)/.test(code);
+  const escaped = !code.includes(GS_CHAR) && /\\u001d/i.test(code);
+  if(wrapped || escaped){
+    try{
+      const parsed = JSON.parse(wrapped ? code : '"'+code+'"');
+      const decoded = Array.isArray(parsed) && parsed.length===1 ? parsed[0] : parsed;
+      if(typeof decoded === 'string' && /^01\d{14}21/.test(decoded) && (decoded.includes(GS_CHAR) || !/\\u001d/i.test(decoded))){
+        code = decoded;
+      }else{
+        return {code:'', restored:false, gsCount:0, invalidFormat:true};
+      }
+    }catch{
+      return {code:'', restored:false, gsCount:0, invalidFormat:true};
+    }
+  }
+  const complete = code.match(/^(01\d{14}21[\x21-\x7e]{13})([\x1d\uFFFD]?)(91[\x21-\x7e]{4})([\x1d\uFFFD]?)(92(?:[\x21-\x7e]{44}|[\x21-\x7e]{88}))$/);
+  if(complete){
+    const normalized = complete[1]+GS_CHAR+complete[3]+GS_CHAR+complete[5];
+    return {code:normalized, restored:normalized!==code, gsCount:2};
+  }
+  return {code, restored:false, gsCount:code.split(GS_CHAR).length-1};
 }
 // Если сканер «напечатал» код при включённой русской раскладке (*DbEFl55V → *Вии2зцНП), возвращаем латиницу:
 // каждая кириллическая буква заменяется на букву той же клавиши английской раскладки.
@@ -308,11 +324,11 @@ function fromRuLayout(str){
   const s = String(str==null?'':str);
   return /[а-яёА-ЯЁ]/.test(s) ? s.replace(/[а-яёА-ЯЁ]/g, c=>RU_TO_EN_MAP[c]||c) : s;
 }
-function forceEnglishInput(input){
+function forceEnglishInput(input, {f8AsGs=false} = {}){
   if(!input || input.dataset.forceEnDone) return;
   input.dataset.forceEnDone = '1';
   input.addEventListener('keydown', function(e){
-    if((e.ctrlKey && !e.altKey && !e.metaKey && (e.code==='BracketRight' || e.key===']')) || e.key===GS_CHAR){
+    if((e.ctrlKey && !e.altKey && !e.metaKey && (e.code==='BracketRight' || e.key===']')) || e.key===GS_CHAR || (f8AsGs && e.key==='F8' && !e.ctrlKey && !e.altKey && !e.metaKey)){
       e.preventDefault();
       insertTextAtCursor(input, GS_CHAR);
       return;
