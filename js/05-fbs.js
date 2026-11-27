@@ -2168,7 +2168,6 @@ async function finishAssembleOrder(order, kizCode, skipViewSwitch){
     return;
   }
   assemblingInFlight.add(order.orderId);
-  let ddsCreatedId = null;
   try {
     const res = await sb.functions.invoke('wb-orders-ts', {body:{clientId:order.clientId,action:'deduct_fbs',orderId:order.orderId,sku:inv.sku,size:inv.size||'',warehouse:inv.warehouseId||'MAIN'}});
     if(res.error || !res.data?.ok) throw new Error(await extractEdgeFunctionError(res.data,res.error));
@@ -2179,27 +2178,11 @@ async function finishAssembleOrder(order, kizCode, skipViewSwitch){
     toast('Списание не подтверждено: '+(e.message||e)+'. Повторите сборку; остаток не возвращается автоматически.');
     return;
   }
-  if(inv.dims && inv.dims.l && inv.dims.w && inv.dims.h){
-    const liters = (inv.dims.l * inv.dims.w * inv.dims.h) / 1000;
-    const tariffPrice = getFbsTariffPrice(order.clientId, liters);
-    if(tariffPrice !== null){
-      const ddsId = 'FBS-SHIP-' + order.orderId;
-      if(!ddsEntries.find(d=>d.id===ddsId)){
-        const description = `Отгрузка FBS №${order.orderId} · ${liters.toFixed(2)} л`;
-        const entry = {id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, clientId:order.clientId, clientName:order.clientName, date:new Date().toISOString().slice(0,10), warehouseId: inv.warehouseId||'MAIN', createdAt:new Date().toISOString()};
-        ddsEntries.unshift(entry);
-        ddsCreatedId = ddsId;
-        sb.from('dds_entries').insert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, client_id:order.clientId, client_name:order.clientName, date:entry.date, warehouse_id: inv.warehouseId||'MAIN', employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
-          if(error) console.error(error);
-        });
-      }
-    }
-  }
   assemblingOrder = null;
   toast(`Заказ №${order.orderId} отправлен на сборку`);
   renderFbsBody();
 
-  // WB иногда отвечает 429 «Too Many Requests» (лимит запросов) — это не отказ по заказу: ждём и повторяем до 4 раз, и только потом откатываем
+  // WB иногда отвечает 429 «Too Many Requests» (лимит запросов) — это не отказ по заказу: ждём и повторяем до 4 раз, без автоматического возврата товара
   const invokeAssemble = async ()=>{
     let res = null;
     for(let attempt=0; attempt<4; attempt++){
@@ -2249,6 +2232,21 @@ async function finishAssembleOrder(order, kizCode, skipViewSwitch){
       renderFbsBody();
       return;
     }
+  if(inv.dims && inv.dims.l && inv.dims.w && inv.dims.h){
+    const liters = (inv.dims.l * inv.dims.w * inv.dims.h) / 1000;
+    const tariffPrice = getFbsTariffPrice(order.clientId, liters);
+    if(tariffPrice !== null){
+      const ddsId = 'FBS-SHIP-' + order.orderId;
+      if(!ddsEntries.find(d=>d.id===ddsId)){
+        const description = `Отгрузка FBS №${order.orderId} · ${liters.toFixed(2)} л`;
+        const entry = {id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, clientId:order.clientId, clientName:order.clientName, date:new Date().toISOString().slice(0,10), warehouseId: inv.warehouseId||'MAIN', createdAt:new Date().toISOString()};
+        ddsEntries.unshift(entry);
+        sb.from('dds_entries').upsert({id:ddsId, type:'income', category:'Отгрузка FBS', amount:tariffPrice, description, client_id:order.clientId, client_name:order.clientName, date:entry.date, warehouse_id: inv.warehouseId||'MAIN', employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null},{onConflict:'id',ignoreDuplicates:true}).then(({error})=>{
+          if(error) console.error(error);
+        });
+      }
+    }
+  }
     order.supplierStatus = 'confirm';
     order.wbSupplyId = data.wbSupplyId;
     order.kizCode = kizCode;
