@@ -994,7 +994,7 @@ function renderFbsBody(){
           <input type="checkbox" ${allSelected?'checked':''} onchange="toggleAllFbsSelected(this.checked)"> Выбрать все
         </label>
         ${fbsSelectedOrders.length ? `
-          <span style="font-size:13px;font-weight:600">Выбрано: ${fbsSelectedOrders.length}${selectedRequiringKiz?` (из них с КИЗ: ${selectedRequiringKiz} — соберутся отдельно, вручную)`:''}</span>
+          <span style="font-size:13px;font-weight:600">Выбрано: ${fbsSelectedOrders.length}${selectedRequiringKiz?` (из них с КИЗ: ${selectedRequiringKiz} — сканируются в режиме сборки)`:''}</span>
           <button class="btn btn-accent" onclick="bulkAssembleSelectedFbsOrders()">Собрать выбранные</button>
         ` : ''}
         ${wrongWarehouseCount ? `<button class="btn btn-ghost" style="color:var(--warn)" onclick="hideOrdersFromOtherWarehouse('${clientId}')">🧹 Убрать заказы не с этого склада (${wrongWarehouseCount})</button>` : ''}
@@ -1421,7 +1421,7 @@ function renderAssemblyModeStep(){
     return;
   }
   const order = assemblyModeQueue[assemblyModeIndex];
-  const localKiz = findLocalRequiresKiz(order);
+  const localKiz = order.requiresKiz ? true : findLocalRequiresKiz(order);
   if(localKiz !== null){
     order.requiresKiz = localKiz;
     renderAssemblyModeStepContent(order, localKiz);
@@ -2069,7 +2069,7 @@ async function hideOrdersFromOtherWarehouse(clientId){
     if(error){ console.error(error); toast('Не удалось удалить часть заказов в базе'); }
   });
 }
-function kizIsMissing(o){ return !!o.requiresKiz && (!o.kizCode || o.kizStatus==='verify_failed'); }
+function kizIsMissing(o){ return !!o.requiresKiz && (!o.kizCode || ['verify_failed','rejected'].includes(o.kizStatus)); }
 function renderKizStatusLabel(o){
   if(!o.requiresKiz && !o.kizCode) return '';
   // Код ещё не отсканирован — никакого статуса WB показывать нельзя (раньше мог всплыть устаревший статус из памяти)
@@ -2105,22 +2105,17 @@ function toggleAllFbsSelected(checked){
 async function bulkAssembleSelectedFbsOrders(){
   const clientId = document.getElementById('fbsClientSelect').value;
   const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && o.supplierStatus==='new' && fbsSelectedOrders.includes(o.orderId));
-  const withoutKiz = rows.filter(o=>!o.requiresKiz);
-  const withKiz = rows.filter(o=>o.requiresKiz);
-  if(!withoutKiz.length){
-    toast('Все выбранные заказы требуют КИЗ — соберите их по одному кнопкой «Собрать»');
-    return;
-  }
+  if(!rows.length) return;
   if(window.__bulkAssembling){ toast('Сборка уже идёт — дождитесь окончания'); return; }
   window.__bulkAssembling = true;
-  toast(`Собираем ${withoutKiz.length} заказ(ов)…`);
+  toast(`Собираем ${rows.length} заказ(ов)…`);
   // Раньше заказы отправлялись строго по одному с паузой 300 мс (30 заказов ≈ минута).
   // Теперь по 5 одновременно: WB спокойно выдерживает, а время сборки партии сокращается в разы.
   // Первый заказ каждого клиента идёт отдельно (он создаёт поставку у WB — параллельно это даёт лишние поставки и лимит запросов 429),
   // остальные — по 3 одновременно.
   const firstDone = new Set();
-  const firstOrders = withoutKiz.filter(o=>{ if(firstDone.has(o.clientId)) return false; firstDone.add(o.clientId); return true; });
-  const restOrders = withoutKiz.filter(o=>!firstOrders.includes(o));
+  const firstOrders = rows.filter(o=>{ if(firstDone.has(o.clientId)) return false; firstDone.add(o.clientId); return true; });
+  const restOrders = rows.filter(o=>!firstOrders.includes(o));
   const runOne = async (order)=>{
     try{ await finishAssembleOrder(order, null, true); }
     catch(e){ console.error(e); toast(`Ошибка при сборке заказа №${order.orderId}: ${e.message||e}`); }
@@ -2131,13 +2126,9 @@ async function bulkAssembleSelectedFbsOrders(){
     const worker = async ()=>{ while(nextIdx < restOrders.length) await runOne(restOrders[nextIdx++]); };
     await Promise.all(Array.from({length: Math.min(3, restOrders.length)}, worker));
   } finally { window.__bulkAssembling = false; }
-  fbsSelectedOrders = withKiz.map(o=>o.orderId);
-  if(withKiz.length){
-    toast(`Готово. Осталось собрать с КИЗ вручную: ${withKiz.length}`);
-    renderFbsBody();
-  } else {
-    setFbsView('confirm');
-  }
+  fbsSelectedOrders = rows.filter(o=>o.supplierStatus==='new').map(o=>o.orderId);
+  if(fbsSelectedOrders.length) renderFbsBody();
+  else setFbsView('confirm');
 }
 async function extractEdgeFunctionError(data, error, fallback){
   let msg = data && data.error ? data.error : (error ? error.message : (fallback||'ошибка'));
@@ -2787,7 +2778,8 @@ async function closeFbsSupply(explicitClientId, explicitSupplyId){
   if(missingKiz.length){
     const names = missingKiz.slice(0,5).map(o=>`«${o.name||o.article}» (заказ №${o.orderId})`).join(', ');
     const more = missingKiz.length>5 ? ` и ещё ${missingKiz.length-5}` : '';
-    if(!await customConfirm(`⚠ У ${missingKiz.length} заказ(ов) не привязан КИЗ, хотя он требуется: ${names}${more}.\n\nОтгружать без КИЗ рискованно — WB может отклонить поставку или заблокировать продажу. Всё равно продолжить?`)) return;
+    toast(`Отсканируйте обязательный КИЗ в «Режиме сборки»: ${names}${more}`);
+    return;
   }
   // Частичная отгрузка (отмечены галочками не все заказы) — всегда спрашиваем отдельно: остальные заказы WB перенесёт в другую поставку.
   if(isPartial){

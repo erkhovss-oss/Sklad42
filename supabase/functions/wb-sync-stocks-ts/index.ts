@@ -97,9 +97,12 @@ export default {
       const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
       const sb = createClient(supabaseUrl, serviceKey);
       const token = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+      const cronHeader = req.headers.get('x-wms-cron-token');
       const cronToken = Deno.env.get('WMS_WB_CRON_TOKEN');
-      const internal = Boolean(serviceKey && token === serviceKey ||
-        cronToken && req.headers.get('x-wms-cron-token') === cronToken);
+      const internal = Boolean(serviceKey && token === serviceKey || cronHeader && (
+        cronToken ? cronHeader === cronToken :
+        (await sb.rpc('check_wb_cron_token', { p_token: cronHeader })).data === true
+      ));
       const stockAction = !action || action === 'push_stocks';
       if (!stockAction || !internal) {
         if (!token) return json({ error: 'Требуется авторизация' }, 401);

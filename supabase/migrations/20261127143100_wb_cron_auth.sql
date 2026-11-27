@@ -1,4 +1,17 @@
--- Provision the same wms_wb_cron_token in Vault and WMS_WB_CRON_TOKEN in Edge secrets before applying.
+-- Seed wms_wb_cron_token and wms_wb_project_url in Vault before enabling the jobs.
+create or replace function public.check_wb_cron_token(p_token text)
+returns boolean
+language sql stable security definer
+set search_path = ''
+as $$
+  select coalesce(length(p_token) >= 32 and exists (
+    select 1 from vault.decrypted_secrets
+    where name = 'wms_wb_cron_token' and decrypted_secret = p_token
+  ), false);
+$$;
+revoke all on function public.check_wb_cron_token(text) from public, anon, authenticated;
+grant execute on function public.check_wb_cron_token(text) to service_role;
+
 CREATE OR REPLACE FUNCTION public.trigger_wb_backfill_supply_ids()
  RETURNS void
  LANGUAGE plpgsql

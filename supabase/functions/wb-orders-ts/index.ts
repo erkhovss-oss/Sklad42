@@ -25,8 +25,12 @@ Deno.serve(async(req)=>{
    if(u?.user){const {data}=await au.rpc("is_active_staff");staff=!!data; if(staff) staffUid=u.user.id;}
   }
   const background=["fetch_new","sync_order_statuses","backfill_supply_ids","discover_missing_orders","recheck_pending_kiz"];
+  const cronHeader=req.headers.get("x-wms-cron-token");
   const cronToken=Deno.env.get("WMS_WB_CRON_TOKEN");
-  const internal=Boolean(service && token===service || cronToken && req.headers.get("x-wms-cron-token")===cronToken);
+  const internal=Boolean(service && token===service || cronHeader && (
+   cronToken ? cronHeader===cronToken :
+   (await sb.rpc("check_wb_cron_token",{p_token:cronHeader})).data===true
+  ));
   if(!staff && !(internal && background.includes(action))) return json({error:"Требуется авторизация"},401);
   if(staff && action!=="restore_fbs"){
    const au=createClient(url,Deno.env.get("SUPABASE_ANON_KEY")!,{global:{headers:{Authorization:"Bearer "+token}}});
@@ -83,17 +87,6 @@ Deno.serve(async(req)=>{
    const sgtin=(item.meta||item).sgtin;
    return sgtin?.required===true || sgtin?.status==="required" || item.isKizRequired===true ||
     (Array.isArray(item.requiredMeta) && item.requiredMeta.includes("sgtin"));
-  };
-  const checkKiz=async(o:any,id:number,code:unknown)=>{
-   if(o.requires_kiz!==true && o.requires_kiz!==false){
-    const response=await meta(id);
-    const item=(response.orders||[]).find((x:any)=>Number(x.orderId??x.id)===id);
-    if(!item) throw new Error("WB не подтвердил требования маркировки заказа");
-    o.requires_kiz=requiresKiz(item);
-    await updateOrder(id,{requires_kiz:o.requires_kiz});
-   }
-   if(o.requires_kiz && (typeof code!=="string" || !code.trim()))
-    throw new Error("Отсканируйте КИЗ перед сборкой");
   };
   const updateOrder=async(id:number,patch:any)=>{const {error}=await sb.from("wb_orders").update(patch).eq("client_id",clientId).eq("order_id",id);if(error)throw error;};
   const getSupply=async(id:string)=>await wb("/api/v3/supplies/"+encodeURIComponent(id));
@@ -208,7 +201,6 @@ Deno.serve(async(req)=>{
       o.requires_kiz=true;
      }
     }
-    await checkKiz(o,id,b.kizCode);
     const {data,error}=await sb.rpc("wb_fbs_deduct",{p_order_id:id,p_client_id:clientId,p_sku:b.sku,p_size:String(b.size??""),p_warehouse:warehouse,p_employee_id:emp.id,p_employee_name:emp.name});
     if(error) return json({error:error.message},409);
     return json({ok:true,...data});
@@ -231,7 +223,6 @@ Deno.serve(async(req)=>{
       if(!role.data?.permissions?.employees) return json({error:"Нет доступа к складу"},403);
      }
     }
-    await checkKiz(o,id,b.kizCode||o.kiz_code);
     if(o.supplier_status==="confirm" && o.wb_supply_id){
      const k=b.kizCode && o.kiz_status!=="attached" ? await attachKiz(id,String(b.kizCode)) : null;
      return json({ok:true,wbSupplyId:o.wb_supply_id,kizStatus:k?.kizStatus||o.kiz_status,warning:k?.warning});

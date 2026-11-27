@@ -23,7 +23,7 @@ export default {
     if (req.method !== 'POST') return json({ error: 'POST required' }, 405);
     try {
       const body = await req.json();
-      const { clientId, action, orderId, kizCode } = body;
+      const { clientId, action, orderId } = body;
       if (!clientId) return json({ error: 'clientId обязателен' }, 400);
       const url = Deno.env.get('SUPABASE_URL')!;
       const sb = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
@@ -42,15 +42,11 @@ export default {
       if (!orderId) return json({ error: 'orderId обязателен' }, 400);
 
       const { data: orderRow, error: orderRowErr } = await sb.from('wb_orders')
-        .select('wb_warehouse_id, supplier_status, wb_status, requires_kiz, wb_supply_id').eq('order_id', orderId).eq('client_id', clientId).maybeSingle();
+        .select('wb_warehouse_id, supplier_status, wb_status, wb_supply_id').eq('order_id', orderId).eq('client_id', clientId).maybeSingle();
       if (orderRowErr || !orderRow?.wb_warehouse_id) return json({ error: 'Не удалось определить склад заказа WB' }, 400);
       if (!['new', 'confirm'].includes(orderRow.supplier_status) ||
           ['canceled', 'canceled_by_client', 'declined_by_client'].includes(orderRow.wb_status)) {
         return json({ error: 'Заказ закрыт' }, 409);
-      }
-      if (orderRow.requires_kiz !== false &&
-          (orderRow.requires_kiz !== true || typeof kizCode !== 'string' || !kizCode.trim())) {
-        return json({ error: 'Проверьте требования маркировки и отсканируйте КИЗ' }, 409);
       }
       const { data: operation, error: operationError } = await sb.from('wb_fbs_stock_operations')
         .select('state, items').eq('order_id', orderId).eq('client_id', clientId).maybeSingle();
