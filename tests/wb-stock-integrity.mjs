@@ -154,12 +154,16 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     const orders=new Map();
     let upstream=0, pushes=0, deductions=0, sentKiz;
     let supplierStatus="new", wbRequiresKiz=true;
+    let metaRows=[{orderId:1,meta:{sgtin:{status:'filled'}}}];
+    const pendingRows=[{order_id:12,kiz_code:'synthetic'}, {order_id:13,kiz_code:'synthetic'}, {order_id:14,kiz_code:'synthetic'}];
+    const verdictUpdates=[];
     let orderHandler;
     const sb={
       auth:{getUser:async()=>({data:{user:{id:'staff-auth'}}})},
       from:(table)=>{
         const query={
-          eq:()=>query, in:()=>query, not:()=>query,
+          eq:()=>query, in:()=>query, not:()=>query, is:()=>query,
+          order:()=>query, limit:async()=>({data:pendingRows}),
           maybeSingle:async()=>({data: table==='wb_orders'
             ? {order_id:1,requires_kiz:wbRequiresKiz,supplier_status:supplierStatus}
             : table==='inventory' ? {requires_kiz:true}
@@ -175,7 +179,7 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
           for(const r of fresh) orders.set(r.order_id,r);
           return {data:fresh};
         }}),
-        update:()=>query,
+        update:(patch)=>{if(patch.kiz_status) verdictUpdates.push(patch);return query;},
       }; },
       rpc:async(name)=>{
         if(name==='wb_fbs_deduct') deductions++;
@@ -188,7 +192,7 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
           sentKiz=JSON.parse(init.body).sgtins[0];
           return new Response(null,{status:204});
         }
-        if(url.endsWith('/orders/meta')) return Response.json({orders:[{orderId:1,meta:{sgtin:{status:'filled'}}}]});
+        if(url.endsWith('/orders/meta')) return Response.json({orders:metaRows});
         if(url.endsWith('/api/v3/orders/new')){
           assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
           upstream++;
@@ -225,6 +229,18 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     assert.equal(response.status,200);
     assert.equal((await response.json()).kizStatus,'attached');
     assert.equal(sentKiz,scanned);
+    verdictUpdates.length=0;
+    metaRows=[
+      {id:13,meta:{sgtin:{status:'filled'}},metaDetails:[{key:'sgtin',value:['synthetic'],decision:'sgtinNoGS'}]},
+      {id:12,metaDetails:[{key:'sgtin',value:['synthetic'],decision:'sgtinIntroduced'}]},
+      {id:14,meta:{sgtin:{value:['synthetic']}}},
+    ];
+    const recheck=await invoke(h,{action:'recheck_pending_kiz'});
+    assert.equal(recheck.status,200);
+    assert.equal((await recheck.json()).checked,3);
+    assert.deepEqual(verdictUpdates.map(patch=>[patch.kiz_status,patch.kiz_decision]),[
+      ['attached','sgtinIntroduced'],['rejected','sgtinNoGS'],['pending',null],
+    ]);
     console.log('WB orders mock: cron auth, selected warehouses, duplicate import, changed stock push, mandatory KIZ');
     continue;
   }

@@ -1792,6 +1792,10 @@ function openKizScannerTest(){
 // корректна» видно раньше), сами переспрашиваем WB по нарастающей и обновляем статус на экране —
 // не ждём фоновой задачи и ручного обновления страницы. Прекращаем, как только решение получено.
 const kizWatchers = {};
+function notifyFbsKizRejected(orderId){
+  playBeep('error');
+  toast(`⚠ Заказ №${orderId}: WB отклонил КИЗ — проверьте код в «Режиме сборки»`);
+}
 function watchPendingKiz(order){
   if(!order || kizWatchers[order.orderId]) return;
   kizWatchers[order.orderId] = true;
@@ -1808,12 +1812,13 @@ function watchPendingKiz(order){
           order.kizDecision = data.kiz_decision || null;
           if(data.kiz_code) order.kizCode = data.kiz_code;
           const twin = fbsOrders.find(o=>o.orderId===order.orderId);
+          const alreadyNotified = twin && twin!==order && twin.kizStatus==='rejected';
           if(twin && twin!==order){ twin.kizStatus = order.kizStatus; twin.kizDecision = order.kizDecision; if(order.kizCode) twin.kizCode = order.kizCode; }
           // статус рисуем только если на экране сейчас именно этот заказ (иначе статус прошлого заказа попадал на экран следующего)
           const statusDiv = document.getElementById('wizardKizStatus');
           if(statusDiv && assemblyModeQueue[assemblyModeIndex] === order) statusDiv.innerHTML = renderKizStatusLabel(order);
           if(data.kiz_status === 'attached'){ playBeep('ok'); toast(`✅ Заказ №${order.orderId}: КИЗ подтверждён WB`); }
-          else if(data.kiz_status === 'verify_failed'){ playBeep('warn'); toast(`⚠ Заказ №${order.orderId}: WB не подтвердил КИЗ${data.kiz_decision ? ' ('+data.kiz_decision+')' : ''}`); }
+          else if(data.kiz_status === 'rejected' && !alreadyNotified) notifyFbsKizRejected(order.orderId);
           if(!fbsAssemblyScreenOpen()) renderFbsBody();
         }
       }catch(e){ /* сеть моргнула — следующая попытка или фоновая задача по расписанию */ }
@@ -1826,7 +1831,7 @@ function watchPendingKiz(order){
 // (verify_failed), «использованными» не считаются — иначе после сбоя повторный скан блокировался бы навсегда.
 function findKizOnOtherOrder(code, exceptOrderId){
   const key = kizKey(code);
-  return fbsOrders.find(o=>o.orderId!==exceptOrderId && o.kizCode && o.kizStatus!=='verify_failed' && kizKey(o.kizCode)===key) || null;
+  return fbsOrders.find(o=>o.orderId!==exceptOrderId && o.kizCode && !['verify_failed','rejected'].includes(o.kizStatus) && kizKey(o.kizCode)===key) || null;
 }
 function wireWizardKizInput(order){
   const kizInput = document.getElementById('wizardKizInput');
@@ -2074,13 +2079,11 @@ function renderKizStatusLabel(o){
   if(!o.requiresKiz && !o.kizCode) return '';
   // Код ещё не отсканирован — никакого статуса WB показывать нельзя (раньше мог всплыть устаревший статус из памяти)
   if(!o.kizCode) return o.requiresKiz ? ' · <span style="color:var(--ink-soft)">КИЗ ещё не отсканирован</span>' : '';
-  // «pending» — штатное «идёт проверка», его пугающим английским словом не показываем; прочие ответы WB — как есть
-  const why = (o.kizDecision && o.kizDecision!=='pending') ? ` <span style="font-weight:400;font-size:11px">(WB: ${escapeHtml(o.kizDecision)})</span>` : '';
+  if(o.kizDecision==='filled') return ' · <span style="color:var(--ok);font-weight:700">✔ КИЗ добавлен у WB без проверки</span>';
   if(o.kizStatus==='attached') return ' · <span style="color:var(--ok);font-weight:700">✅ КИЗ подтверждён WB</span>';
-  // «filled» — в кабинете WB это «Добавили маркировку без проверки»: код записан на заказ, проверка и ввод в оборот позже; в оборот (sgtinIntroduced) его вводят позже, обычно при передаче поставки в доставку. Это не ошибка и не «проверка».
-  if(o.kizStatus==='pending' && o.kizDecision==='filled') return ' · <span style="color:var(--ok);font-weight:700">✔ КИЗ добавлен у WB — «маркировка без проверки»</span> <span style="font-weight:400;font-size:11px;color:var(--ink-soft)">(WB проверит и введёт в оборот позже)</span>';
-  if(o.kizStatus==='pending') return ` · <span style="color:var(--ink-soft)">⏳ WB проверяет маркировку…${why}</span>`;
-  if(o.kizStatus==='verify_failed') return ` · <span style="color:var(--warn);font-weight:700">⚠ WB не подтвердил КИЗ${why}</span>`;
+  if(o.kizStatus==='pending') return ' · <span style="color:var(--ink-soft)">⏳ WB проверяет маркировку…</span>';
+  if(o.kizStatus==='rejected') return ' · <span style="color:var(--warn);font-weight:700">⚠ WB отклонил КИЗ</span>';
+  if(o.kizStatus==='verify_failed') return ' · <span style="color:var(--warn);font-weight:700">⚠ WB не подтвердил КИЗ</span>';
   if(o.kizCode) return ' · КИЗ отправлен, статус не проверен';
   return o.requiresKiz ? ' · <span style="color:var(--warn)">КИЗ не прикреплён ⚠</span>' : '';
 }
@@ -3642,6 +3645,7 @@ async function loadFbsOrders(){
     if(error){ stockStateKnown=false; console.error(error); break; }
     (data||[]).forEach(r=>deductedIds.add(String(r.order_id)));
   }
+  const pendingKizIds = new Set(fbsOrders.filter(order=>order.kizStatus==='pending').map(order=>order.orderId));
   fbsOrders = allRows.map(o=>({
     orderId:o.order_id, rid:o.rid||'', clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
@@ -3649,6 +3653,9 @@ async function loadFbsOrders(){
     stockDeducted:deductedIds.has(String(o.order_id)), stockStateKnown,
     isB2b:o.is_b2b, kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, pickedAt:o.picked_at||null, kizUpdatedAt:o.kiz_updated_at||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
+  for(const order of fbsOrders){
+    if(order.kizStatus==='rejected' && pendingKizIds.has(order.orderId)) notifyFbsKizRejected(order.orderId);
+  }
 }
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; refreshFbsOrders(); });
 document.getElementById('fbsCompletePageSize').addEventListener('change', function(){ changeFbsCompletePageSize(this.value); });
