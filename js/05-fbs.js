@@ -2210,7 +2210,7 @@ async function finishAssembleOrder(order, kizCode, skipViewSwitch){
         let lastB2bErr = null;
         try{
           for(let t=0; t<5; t++){
-            const b = await sb.functions.invoke('wb-b2b-supply-ts', { body: { clientId: order.clientId, action:'add_order', orderId: order.orderId } });
+            const b = await sb.functions.invoke('wb-b2b-supply-ts', { body: { clientId: order.clientId, action:'add_order', orderId: order.orderId, kizCode } });
             if(!(b.error || (b.data && b.data.error))){
               const out = { data: { ok:true, wbSupplyId: b.data.wbSupplyId, separateSupply:true }, error: null };
               if(kizCode){
@@ -2266,7 +2266,6 @@ async function finishAssembleOrder(order, kizCode, skipViewSwitch){
     order.wbSupplyId = data.wbSupplyId;
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus || null;
-    sb.from('wb_orders').update({supplier_status:'confirm', wb_supply_id:data.wbSupplyId, kiz_code:kizCode, kiz_status:data.kizStatus||null}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
     if(data.kizStatus === 'attached') toast(`Заказ №${order.orderId}: КИЗ прикреплён и подтверждён у WB ✅`);
     else if(data.kizStatus === 'pending'){ toast(`Заказ №${order.orderId}: КИЗ отправлен, WB ещё проверяет — можно продолжать ⏳`); watchPendingKiz(order); }
     else if(data.kizStatus === 'verify_failed') toast(`Заказ №${order.orderId}: собран, но КИЗ WB не подтвердил — ${data.warning||'проверьте вручную'} ⚠`);

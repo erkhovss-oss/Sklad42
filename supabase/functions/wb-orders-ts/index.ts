@@ -213,7 +213,16 @@ Deno.serve(async(req)=>{
     if(!supply){supply=await openSupply("main",String(o.wb_warehouse_id||client.wb_warehouse_id||""));}
     try{await wb("/api/marketplace/v3/supplies/"+encodeURIComponent(supply)+"/orders","PATCH",{orders:[id]});}
     catch(e){throw new Error("Не удалось добавить заказ в поставку "+supply+": "+String(e));}
-    await updateOrder(id,{supplier_status:"confirm",wb_supply_id:supply});
+    const {data:confirmed,error:confirmError}=await sb.from("wb_orders")
+      .update({supplier_status:"confirm",wb_supply_id:supply})
+      .eq("client_id",clientId).eq("order_id",id).eq("supplier_status",o.supplier_status)
+      .select("order_id").maybeSingle();
+    if(confirmError) throw confirmError;
+    if(!confirmed){
+     const latest=await getOrder(id);
+     if(latest.supplier_status!=="confirm" || latest.wb_supply_id!==supply)
+      return json({error:"Статус заказа изменился во время сборки — сверьте его с WB"},409);
+    }
     let kizStatus=null,warning=null;
     if(b.kizCode){
      try{const k=await attachKiz(id,String(b.kizCode));kizStatus=k.kizStatus;warning=k.warning;}

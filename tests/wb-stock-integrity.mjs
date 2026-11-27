@@ -81,10 +81,34 @@ assert.equal(await manualReturn(requestId,'defect'),false);
 assert.equal(await qty('A','BRAK'),6);
 assert.equal(await qty('A'),96);
 console.log('Postgres: reservations, deduction, changed BOM, cancellation, duplicate retries, defect, legacy regular return, rollback, cron functions');
-for(const slug of ['wb-orders-ts','wb-sync-stocks-ts']){
+for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
   const src=fs.readFileSync('supabase/functions/'+slug+'/index.ts','utf8');
   const result=ts.transpileModule(src,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},reportDiagnostics:true});
   assert.equal(result.diagnostics.length,0);
+  if(slug==='wb-b2b-supply-ts'){
+    let allowed=false, status='new', attached=false;
+    const query={
+      select:()=>query, eq:()=>query, update:()=>query,
+      single:async()=>({data:{wb_key:'synthetic'}}),
+      maybeSingle:async()=>({data:attached ? null : {wb_warehouse_id:'1', supplier_status:status,
+        requires_kiz:true, wb_status:null, wb_supply_id:null}}),
+    };
+    const sb={auth:{getUser:async()=>({data:{user:{id:'staff-auth'}}})},from:()=>query,
+      rpc:async()=>({data:allowed})};
+    const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{env:{get:()=>''}},Response,Request,
+      fetch:async()=>{attached=true;throw Error('Unexpected marketplace call');}};
+    vm.runInNewContext(result.outputText,sandbox);
+    const invoke=()=>sandbox.exports.default.fetch(new Request('https://invalid.example',{method:'POST',
+      headers:{Authorization:'Bearer synthetic'},body:JSON.stringify({clientId:'c',orderId:1,action:'add_order'})}));
+    assert.equal((await invoke()).status,403);
+    allowed=true;
+    assert.match((await (await invoke()).json()).error,/КИЗ/);
+    status='cancel';
+    assert.match((await (await invoke()).json()).error,/закрыт/);
+    assert.equal(attached,false);
+    console.log('WB B2B mock: permission, KIZ and canceled order gates');
+    continue;
+  }
   if(slug==='wb-orders-ts'){
     const orders=new Map();
     let upstream=0, pushes=0, deductions=0;
