@@ -179,7 +179,7 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
       rpc:async(name,args)=>({data:name==='next_wb_supply_name' ? 'Телепак - 10.10.2026 - 1' : name==='current_employee'
         ? {id:'staff',warehouse_id:employeeWarehouse} : args.permission_name==='fbs' && allowed}),
     };
-    const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{env:{get:key=>({SUPABASE_URL:'https://invalid.example',WMS_WB_TEST_TOKEN:'sandbox-only'})[key]}},Response,Request,URL,
+    const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{env:{get:key=>({SUPABASE_URL:'https://invalid.example',WMS_WB_TEST_TOKEN:'sandbox-only'})[key]}},Response,Request,URL,URLSearchParams,
       fetch:async(url,init)=>{
         assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
         calls.push(init.method);
@@ -211,6 +211,8 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
   }
   if(slug==='wb-orders-ts'){
     const orders=new Map();
+    const historyCursors=[];
+    const statusRequests=[];
     let upstream=0, pushes=0, deductions=0, sentKiz;
     let supplierStatus="new", wbRequiresKiz=true;
     let metaRows=[{orderId:1,meta:{sgtin:{status:'filled'}}}];
@@ -220,8 +222,10 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     const sb={
       auth:{getUser:async()=>({data:{user:{id:'staff-auth'}}})},
       from:(table)=>{
+        let requested;
         const query={
-          eq:()=>query, in:()=>query, not:()=>query, is:()=>query,
+          then:resolve=>Promise.resolve({data:requested?.filter(id=>orders.has(id)).map(id=>({order_id:id}))}).then(resolve),
+          eq:()=>query, in:(_field,ids)=>{requested=ids;return query;}, not:()=>query, is:()=>query,
           order:()=>query, limit:async()=>({data:pendingRows}),
           maybeSingle:async()=>({data: table==='wb_orders'
             ? {order_id:1,requires_kiz:wbRequiresKiz,supplier_status:supplierStatus}
@@ -245,13 +249,31 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
         return {data:name==='get_available_stock'?[{barcode:'10',wb_available:100-orders.size}]:true};
       },
     };
-    const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{serve:handler=>{orderHandler=handler;},env:{get:k=>({SUPABASE_URL:'https://invalid.example',SUPABASE_SERVICE_ROLE_KEY:'test-token',WMS_WB_CRON_TOKEN:'cron-test',WMS_WB_TEST_TOKEN:'sandbox-only'})[k]}},Response,Request,URL,
+    const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{serve:handler=>{orderHandler=handler;},env:{get:k=>({SUPABASE_URL:'https://invalid.example',SUPABASE_SERVICE_ROLE_KEY:'test-token',WMS_WB_CRON_TOKEN:'cron-test',WMS_WB_TEST_TOKEN:'sandbox-only'})[k]}},Response,Request,URL,URLSearchParams,
       fetch:async(url, init)=>{
         if(url.endsWith('/meta/sgtin')){
           sentKiz=JSON.parse(init.body).sgtins[0];
           return new Response(null,{status:204});
         }
         if(url.endsWith('/orders/meta')) return Response.json({orders:metaRows});
+        const parsedUrl = new URL(url);
+        if(parsedUrl.pathname==='/api/v3/orders'){
+          const params=parsedUrl.searchParams;
+          assert.equal(params.get('limit'),'1000');
+          assert.ok(params.has('next'));
+          assert.equal(Number(params.get('dateTo'))-Number(params.get('dateFrom')),30*86400-1);
+          const next=params.get('next');
+          historyCursors.push(next);
+          return next==='0'
+            ? Response.json({next:12,orders:[{id:1,warehouseId:1},{id:20,warehouseId:2,supplyId:'synthetic'},{id:21,warehouseId:5}]})
+            : Response.json({next:0,orders:[{id:22,warehouseId:2},{id:23,warehouseId:2}]});
+        }
+        if(parsedUrl.pathname==='/api/v3/orders/status'){
+          const ids=JSON.parse(init.body).orders;
+          statusRequests.push(...ids);
+          return Response.json({orders:[{id:20,supplierStatus:'complete',wbStatus:'sold'},
+            {id:22,supplierStatus:'cancel',wbStatus:'canceled'}]});
+        }
         if(url.endsWith('/api/v3/orders/new')){
           assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
           upstream++;
@@ -272,6 +294,15 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     assert.equal(orders.get(2).requires_kiz,null);
     assert.equal((await (await invoke(h)).json()).fetched,0);
     assert.equal(pushes,1);
+    const recovered=await (await invoke(h,{action:'discover_missing_orders'})).json();
+    assert.deepEqual(historyCursors,['0','12']);
+    assert.deepEqual(statusRequests,[20,22,23]);
+    assert.equal(recovered.inserted,2);
+    assert.equal(recovered.skippedWithoutStatus,1);
+    assert.equal(orders.get(20).supplier_status,'complete');
+    assert.equal(orders.get(20).wb_supply_id,'synthetic');
+    assert.equal(orders.get(22).supplier_status,'cancel');
+    assert.equal(orders.has(23),false);
     const staff={Authorization:'Bearer staff-test'};
     const deduction={action:'deduct_fbs',orderId:1,warehouse:'MAIN',sku:'A'};
     assert.equal((await invoke(staff,deduction)).status,200);
