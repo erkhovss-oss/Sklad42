@@ -1792,6 +1792,14 @@ function openKizScannerTest(){
 // корректна» видно раньше), сами переспрашиваем WB по нарастающей и обновляем статус на экране —
 // не ждём фоновой задачи и ручного обновления страницы. Прекращаем, как только решение получено.
 const kizWatchers = {};
+function notifyFbsKizAccepted(orderId,decision){
+  if(decision==='filled'){
+    toast(`Заказ №${orderId}: КИЗ добавлен у WB без проверки`);
+    return;
+  }
+  playBeep('ok');
+  toast(`✅ Заказ №${orderId}: КИЗ проверен WB`);
+}
 function notifyFbsKizRejected(orderId){
   playBeep('error');
   toast(`⚠ Заказ №${orderId}: WB отклонил КИЗ — проверьте код в «Режиме сборки»`);
@@ -1812,12 +1820,12 @@ function watchPendingKiz(order){
           order.kizDecision = data.kiz_decision || null;
           if(data.kiz_code) order.kizCode = data.kiz_code;
           const twin = fbsOrders.find(o=>o.orderId===order.orderId);
-          const alreadyNotified = twin && twin!==order && twin.kizStatus==='rejected';
+          const alreadyNotified = twin && twin!==order && twin.kizStatus===order.kizStatus;
           if(twin && twin!==order){ twin.kizStatus = order.kizStatus; twin.kizDecision = order.kizDecision; if(order.kizCode) twin.kizCode = order.kizCode; }
           // статус рисуем только если на экране сейчас именно этот заказ (иначе статус прошлого заказа попадал на экран следующего)
           const statusDiv = document.getElementById('wizardKizStatus');
           if(statusDiv && assemblyModeQueue[assemblyModeIndex] === order) statusDiv.innerHTML = renderKizStatusLabel(order);
-          if(data.kiz_status === 'attached'){ playBeep('ok'); toast(`✅ Заказ №${order.orderId}: КИЗ подтверждён WB`); }
+          if(data.kiz_status === 'attached' && !alreadyNotified) notifyFbsKizAccepted(order.orderId, order.kizDecision);
           else if(data.kiz_status === 'rejected' && !alreadyNotified) notifyFbsKizRejected(order.orderId);
           if(!fbsAssemblyScreenOpen()) renderFbsBody();
         }
@@ -1876,10 +1884,8 @@ function wizardAttachKiz(order, kizCode, norm){
     order.kizCode = kizCode;
     order.kizStatus = data.kizStatus;
     order.kizDecision = data.decision || null;
-    sb.from('wb_orders').update({kiz_code:kizCode, kiz_status:data.kizStatus, requires_kiz:true}).eq('order_id', order.orderId).then(({error})=>{ if(error) console.error(error); });
     if(data.kizStatus==='attached'){
-      playBeep('ok');
-      toast('✅ КИЗ подтверждён WB');
+      notifyFbsKizAccepted(order.orderId,order.kizDecision);
       const invItem = order.barcode ? inventory.find(i=>i.barcode===order.barcode && i.client===order.clientName) : null;
       if(invItem && !invItem.requiresKiz){
         invItem.requiresKiz = true;
@@ -1888,7 +1894,6 @@ function wizardAttachKiz(order, kizCode, norm){
       }
     }
     else if(data.kizStatus==='pending'){
-      playBeep('ok');
       toast('⏳ КИЗ отправлен, WB ещё проверяет — можно продолжать сборку, статус обновится сам');
       watchPendingKiz(order);
     }
@@ -3654,7 +3659,9 @@ async function loadFbsOrders(){
     isB2b:o.is_b2b, kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, pickedAt:o.picked_at||null, kizUpdatedAt:o.kiz_updated_at||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
   for(const order of fbsOrders){
-    if(order.kizStatus==='rejected' && pendingKizIds.has(order.orderId)) notifyFbsKizRejected(order.orderId);
+    if(!pendingKizIds.has(order.orderId)) continue;
+    if(order.kizStatus==='rejected') notifyFbsKizRejected(order.orderId);
+    if(order.kizStatus==='attached') notifyFbsKizAccepted(order.orderId,order.kizDecision);
   }
 }
 document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; refreshFbsOrders(); });

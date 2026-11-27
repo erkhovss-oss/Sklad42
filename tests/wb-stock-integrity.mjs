@@ -5,6 +5,38 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
 process.chdir(fileURLToPath(new URL('..',import.meta.url)));
+const core = fs.readFileSync('js/01-core.js','utf8');
+const scannerCode = core.slice(core.indexOf('const GS_CHAR'),core.indexOf('const RU_TO_EN_MAP'));
+const scanner = vm.createContext({});
+vm.runInContext(scannerCode,scanner);
+const gs = String.fromCharCode(29);
+const segments = ['0104607009520001211234567890123','91TEST','92'+'X'.repeat(44)];
+const fullKiz = segments.join(gs);
+for(const scan of [segments.join(''),segments[0]+gs+segments[1]+segments[2],
+  segments[0]+'\uFFFD'+segments[1]+gs+segments[2],']d2'+fullKiz]){
+  const normalized = scanner.normalizeKizInput(scan);
+  assert.equal(normalized.code,fullKiz);
+  assert.equal(normalized.gsCount,2);
+}
+assert.equal(scanner.normalizeKizInput(fullKiz).restored,false);
+const truncated = fullKiz.slice(0,-1);
+assert.equal(scanner.normalizeKizInput(truncated).code,truncated);
+
+const fbs = fs.readFileSync('js/05-fbs.js','utf8');
+const fbsMessages = fbs.slice(fbs.indexOf('function notifyFbsKizAccepted'),fbs.indexOf('function watchPendingKiz'));
+const signals = [];
+const messages = [];
+const notification = vm.createContext({playBeep:type=>signals.push(type),toast:message=>messages.push(message)});
+vm.runInContext(fbsMessages,notification);
+notification.notifyFbsKizAccepted(1,'filled');
+assert.deepEqual(signals,[]);
+assert.match(messages.at(-1),/без проверки/);
+notification.notifyFbsKizAccepted(1,'sgtinIntroduced');
+assert.deepEqual(signals,['ok']);
+assert.match(messages.at(-1),/КИЗ проверен WB/);
+notification.notifyFbsKizRejected(2);
+assert.deepEqual(signals,['ok','error']);
+
 const db=new PGlite();
 await db.exec(`
 create role anon; create role authenticated; create role service_role;

@@ -291,11 +291,12 @@ function insertTextAtCursor(input, text){
 function normalizeKizInput(raw){
   let code = String(raw||'').replace(/[\r\n]+/g,'').trim();
   code = code.replace(/^\][A-Za-z][0-9A-Za-z]/, '');
-  const gsCount = code.split(GS_CHAR).length - 1;
-  if(gsCount > 0) return {code, restored:false, gsCount};
-  const m = code.match(/^(01\d{14}21[\x21-\x7e]{13})(91[\x21-\x7e]{4})(92(?:[\x21-\x7e]{44}|[\x21-\x7e]{88}))$/);
-  if(m) return {code: m[1]+GS_CHAR+m[2]+GS_CHAR+m[3], restored:true, gsCount:2};
-  return {code, restored:false, gsCount:0};
+  const complete = code.match(/^(01\d{14}21[\x21-\x7e]{13})([\x1d\uFFFD]?)(91[\x21-\x7e]{4})([\x1d\uFFFD]?)(92(?:[\x21-\x7e]{44}|[\x21-\x7e]{88}))$/);
+  if(complete){
+    const normalized = complete[1]+GS_CHAR+complete[3]+GS_CHAR+complete[5];
+    return {code:normalized, restored:normalized!==code, gsCount:2};
+  }
+  return {code, restored:false, gsCount:code.split(GS_CHAR).length-1};
 }
 // Если сканер «напечатал» код при включённой русской раскладке (*DbEFl55V → *Вии2зцНП), возвращаем латиницу:
 // каждая кириллическая буква заменяется на букву той же клавиши английской раскладки.
