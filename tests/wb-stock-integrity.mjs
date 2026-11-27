@@ -29,7 +29,7 @@ create table kit_components(kit_sku text,kit_size text,kit_client_name text,kit_
 create table ozon_orders(article text,client_name text,status text,qty int);
 create table ozon_offers(offer_id text,client_name text,inv_sku text,inv_size text,status text);
 insert into clients(id,name,stock_allocation_mode,wb_connected,wb_key,wb_auto_sync,wb_warehouse_id) values('c','C','shared',true,'synthetic',true,'1');
-insert into vault.decrypted_secrets values ('wms_wb_cron_token','synthetic');
+insert into vault.decrypted_secrets values ('wms_wb_cron_token','synthetic'), ('wms_wb_project_url','https://invalid.example');
 insert into inventory(sku,client_name,size,warehouse_id,qty,name,barcode,is_kit,kit_mode) values
 ('A','C','','MAIN',100,'A','10',false,null),('B','C','','MAIN',5,'B','20',false,null),('K','C','','MAIN',0,'K','30',true,'virtual');
 insert into kit_components values ('K','','C','MAIN','A','',2),('K','','C','MAIN','B','',1);
@@ -95,7 +95,7 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     };
     const sb={auth:{getUser:async()=>({data:{user:{id:'staff-auth'}}})},from:()=>query,
       rpc:async()=>({data:allowed})};
-    const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{env:{get:()=>''}},Response,Request,
+    const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{env:{get:key=>({SUPABASE_URL:'https://invalid.example',WMS_WB_TEST_TOKEN:'sandbox-only'})[key]}},Response,Request,URL,
       fetch:async()=>{attached=true;throw Error('Unexpected marketplace call');}};
     vm.runInNewContext(result.outputText,sandbox);
     const invoke=()=>sandbox.exports.default.fetch(new Request('https://invalid.example',{method:'POST',
@@ -139,9 +139,10 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
         return {data:name==='get_available_stock'?[{barcode:'10',wb_available:100-orders.size}]:true};
       },
     };
-    const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{serve:handler=>{orderHandler=handler;},env:{get:k=>({SUPABASE_URL:'https://invalid.example',SUPABASE_SERVICE_ROLE_KEY:'test-token',WMS_WB_CRON_TOKEN:'cron-test'})[k]}},Response,Request,
+    const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{serve:handler=>{orderHandler=handler;},env:{get:k=>({SUPABASE_URL:'https://invalid.example',SUPABASE_SERVICE_ROLE_KEY:'test-token',WMS_WB_CRON_TOKEN:'cron-test',WMS_WB_TEST_TOKEN:'sandbox-only'})[k]}},Response,Request,URL,
       fetch:async(url)=>{
         if(url.endsWith('/api/v3/orders/new')){
+          assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
           upstream++;
           return Response.json({orders:[{id:1,warehouseId:1,skus:['10']},{id:2,warehouseId:2,skus:['10']},{id:3,warehouseId:3,skus:['10']}]});
         }
@@ -176,7 +177,8 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     rpc:async(name)=>{if(name==='claim_wb_stock_sync'){if(leased)return {data:false};leased=true;return {data:true};}
      return {data:[{barcode:'10',wb_available:desired}]};}};
 
-  const sandbox={exports:{},require:()=>({createClient:()=>dbMock}),Deno:{env:{get:k=>({SUPABASE_URL:'https://invalid.example',SUPABASE_SERVICE_ROLE_KEY:'test-token',WMS_WB_CRON_TOKEN:'cron-test'})[k]}},Response,Request,crypto,fetch:async(url,opts)=>{
+  const sandbox={exports:{},require:()=>({createClient:()=>dbMock}),Deno:{env:{get:k=>({SUPABASE_URL:'https://invalid.example',SUPABASE_SERVICE_ROLE_KEY:'test-token',WMS_WB_CRON_TOKEN:'cron-test',WMS_WB_TEST_TOKEN:'sandbox-only'})[k]}},Response,Request,URL,crypto,fetch:async(url,opts)=>{
+    assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
     const warehouse=url.split('/').at(-1); const body=JSON.parse(opts.body);
     if(opts.method==='POST') return Response.json({stocks:body.chrtIds.map(chrtId=>({chrtId,amount:current[warehouse]}))});
     assert.equal(body.stocks[0].chrtId,123);

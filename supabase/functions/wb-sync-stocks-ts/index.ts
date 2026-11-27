@@ -11,6 +11,13 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+const liveProject = () => new URL(Deno.env.get('SUPABASE_URL')!).hostname === 'mixsvqjlrifkcoeuuydc.supabase.co';
+const marketplace = () => liveProject()
+  ? 'https://marketplace-api.wildberries.ru'
+  : 'https://marketplace-api-sandbox.wildberries.ru';
+const sellerToken = (stored: string | null) => liveProject()
+  ? stored : Deno.env.get('WMS_WB_TEST_TOKEN');
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -24,20 +31,21 @@ function json(body: unknown, status = 200) {
 }
 
 async function loadCards(key: string) {
+  const contentApi = liveProject() ? 'https://content-api.wildberries.ru' : 'https://content-api-sandbox.wildberries.ru';
   const LIMIT = 100;
   const byNmId = new Map<string, any>();
   let cursor: Record<string, unknown> = { limit: LIMIT };
   let pages = 0;
   while (pages < 40) {
     pages++;
-    let resp = await fetch('https://content-api.wildberries.ru/content/v2/get/cards/list', {
+    let resp = await fetch(contentApi + '/content/v2/get/cards/list', {
       method: 'POST',
       headers: { Authorization: key, 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: { cursor, filter: { withPhoto: -1 } } }),
     });
     if (resp.status === 429) {
       await new Promise((r) => setTimeout(r, 3000));
-      resp = await fetch('https://content-api.wildberries.ru/content/v2/get/cards/list', {
+      resp = await fetch(contentApi + '/content/v2/get/cards/list', {
         method: 'POST',
         headers: { Authorization: key, 'Content-Type': 'application/json' },
         body: JSON.stringify({ settings: { cursor, filter: { withPhoto: -1 } } }),
@@ -114,12 +122,13 @@ export default {
         .single();
 
       if (clientErr || !client) return json({ error: 'Клиент не найден' }, 404);
-      if (!client.wb_key) return json({ error: 'У клиента не сохранён API-ключ Wildberries' }, 400);
+      const wbKey = sellerToken(client.wb_key);
+      if (!wbKey) return json({ error: 'У клиента не сохранён API-ключ Wildberries' }, 400);
 
       // ---------- список складов продавца ----------
       if (action === 'list_warehouses') {
-        const resp = await fetch('https://marketplace-api.wildberries.ru/api/v3/warehouses', {
-          headers: { Authorization: client.wb_key },
+        const resp = await fetch(marketplace() + '/api/v3/warehouses', {
+          headers: { Authorization: wbKey },
         });
         const text = await resp.text();
         if (!resp.ok) return json({ error: `WB ответил ошибкой (${resp.status}): ${text}` }, 502);
@@ -128,7 +137,7 @@ export default {
 
       // ---------- список карточек товаров (Content API) ----------
       if (action === 'list_cards') {
-        return json(await loadCards(client.wb_key));
+        return json(await loadCards(wbKey));
       }
 
       // ---------- отправка остатков (действие по умолчанию) ----------
@@ -173,7 +182,7 @@ export default {
       const age = Date.now() - Date.parse(cached?.updated_at || '');
       const hasMissing = requested.some((row: any) => !Object.hasOwn(sizeIds, row.barcode));
       if (!cached || age >= 24*60*60*1000 || (hasMissing && age >= 5*60*1000)) {
-        sizeIds = barcodeSizeIds((await loadCards(client.wb_key)).cards);
+        sizeIds = barcodeSizeIds((await loadCards(wbKey)).cards);
         const { error } = await sb.from('wb_stock_size_cache').upsert({
           client_id: clientId, size_ids: sizeIds, updated_at: new Date().toISOString(),
         });
@@ -202,9 +211,9 @@ export default {
         // и не пополнять дополнительные склады на низком остатке.
         for (let i = 0; i < baseStocks.length; i += 1000) {
           const chrtIds = baseStocks.slice(i, i + 1000).map(row => row.chrtId);
-          const response = await fetch(`https://marketplace-api.wildberries.ru/api/v3/stocks/${warehouseId}`, {
+          const response = await fetch(`${marketplace()}/api/v3/stocks/${warehouseId}`, {
             method: 'POST',
-            headers: { Authorization: client.wb_key, 'Content-Type': 'application/json' },
+            headers: { Authorization: wbKey, 'Content-Type': 'application/json' },
             body: JSON.stringify({ chrtIds }),
           });
           if (!response.ok) throw new Error(`Не удалось получить остатки склада ${warehouseId}: WB ${response.status}`);
@@ -234,9 +243,9 @@ export default {
           let errText = '';
           for (let attempt = 0; attempt < 3; attempt++) {
             if (!batch.length) break;
-            resp = await fetch(`https://marketplace-api.wildberries.ru/api/v3/stocks/${warehouseId}`, {
+            resp = await fetch(`${marketplace()}/api/v3/stocks/${warehouseId}`, {
               method: 'PUT',
-              headers: { Authorization: client.wb_key, 'Content-Type': 'application/json' },
+              headers: { Authorization: wbKey, 'Content-Type': 'application/json' },
               body: JSON.stringify({ stocks: batch }),
             });
             if (resp.status === 200 || resp.status === 204) break;

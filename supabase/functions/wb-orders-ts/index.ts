@@ -1,6 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const liveProject = () => new URL(Deno.env.get('SUPABASE_URL')!).hostname === 'mixsvqjlrifkcoeuuydc.supabase.co';
+const marketplace = () => liveProject()
+  ? 'https://marketplace-api.wildberries.ru'
+  : 'https://marketplace-api-sandbox.wildberries.ru';
+const sellerToken = (stored: string | null) => liveProject()
+  ? stored : Deno.env.get('WMS_WB_TEST_TOKEN');
 const CORS = { "Access-Control-Allow-Origin":"*", "Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods":"POST, OPTIONS" };
-const WB = "https://marketplace-api.wildberries.ru";
 const json = (v:unknown,s=200)=>new Response(JSON.stringify(v),{status:s,headers:{...CORS,"Content-Type":"application/json"}});
 const errText = async (r:Response)=>{const t=await r.text();return t.slice(0,1200)||r.statusText};
 Deno.serve(async(req)=>{
@@ -29,10 +35,11 @@ Deno.serve(async(req)=>{
   }
   const {data:client,error:ce}=await sb.from("clients").select("id,name,wb_key,wb_warehouse_id,wb_warehouse_ids").eq("id",clientId).maybeSingle();
   if(ce||!client) return json({error:"Клиент не найден"},404);
-  if(!client.wb_key) return json({error:"У клиента не сохранён API-ключ Wildberries"},400);
-  const headers={Authorization:client.wb_key,"Content-Type":"application/json"};
+  const wbKey=sellerToken(client.wb_key);
+  if(!wbKey) return json({error:"У клиента не сохранён API-ключ Wildberries"},400);
+  const headers={Authorization:wbKey,"Content-Type":"application/json"};
   const wb=async(path:string,method="GET",body?:unknown)=>{
-   const r=await fetch(WB+path,{method,headers, ...(body===undefined?{}:{body:JSON.stringify(body)})});
+   const r=await fetch(marketplace()+path,{method,headers, ...(body===undefined?{}:{body:JSON.stringify(body)})});
    if(!r.ok) throw new Error("WB "+r.status+": "+await errText(r));
    if(r.status===204) return {};
    const t=await r.text(); return t?JSON.parse(t):{};

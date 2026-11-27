@@ -2,6 +2,13 @@
 // Вызывать может только вошедший сотрудник.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+const liveProject = () => new URL(Deno.env.get('SUPABASE_URL')!).hostname === 'mixsvqjlrifkcoeuuydc.supabase.co';
+const marketplace = () => liveProject()
+  ? 'https://marketplace-api.wildberries.ru'
+  : 'https://marketplace-api-sandbox.wildberries.ru';
+const sellerToken = (stored: string | null) => liveProject()
+  ? stored : Deno.env.get('WMS_WB_TEST_TOKEN');
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -9,7 +16,6 @@ const corsHeaders = {
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
-const WB = 'https://marketplace-api.wildberries.ru';
 
 export default {
   async fetch(req: Request): Promise<Response> {
@@ -29,8 +35,9 @@ export default {
       if (allowed !== true) return json({ error: 'Нет доступа' }, 403);
       const { data: client, error: clientErr } = await sb.from('clients').select('*').eq('id', clientId).single();
       if (clientErr || !client) return json({ error: 'Клиент не найден' }, 404);
-      if (!client.wb_key) return json({ error: 'У клиента не сохранён API-ключ Wildberries' }, 400);
-      const headers = { Authorization: client.wb_key, 'Content-Type': 'application/json' };
+      const wbKey = sellerToken(client.wb_key);
+      if (!wbKey) return json({ error: 'У клиента не сохранён API-ключ Wildberries' }, 400);
+      const headers = { Authorization: wbKey, 'Content-Type': 'application/json' };
       if (action !== 'add_order') return json({ error: 'Неизвестное действие: ' + action }, 400);
       if (!orderId) return json({ error: 'orderId обязателен' }, 400);
 
@@ -71,7 +78,7 @@ export default {
         .order('created_at', { ascending: false });
       for (const row of rows || []) {
         try {
-          const infoResp = await fetch(`${WB}/api/v3/supplies/${row.id}`, { headers });
+          const infoResp = await fetch(`${marketplace()}/api/v3/supplies/${row.id}`, { headers });
           if (infoResp.status === 404) {
             await sb.from('wb_supplies').update({ status: 'closed', closed_at: new Date().toISOString() }).eq('id', row.id);
             continue;
@@ -79,7 +86,7 @@ export default {
           if (!infoResp.ok) continue;
           const info = await infoResp.json();
           if (!info || info.done !== false || info.isB2b === false || info.isB2B === false) continue;
-          const idsResp = await fetch(`${WB}/api/marketplace/v3/supplies/${row.id}/order-ids`, { headers });
+          const idsResp = await fetch(`${marketplace()}/api/marketplace/v3/supplies/${row.id}/order-ids`, { headers });
           if (!idsResp.ok) continue;
           const idsData = await idsResp.json();
           const ids: number[] = idsData.orders || idsData.orderIds || [];
@@ -93,7 +100,7 @@ export default {
         } catch (_e) { /* skip unverifiable supply */ }
       }
       if (!supplyId) {
-        const cr = await fetch(`${WB}/api/v3/supplies`, {
+        const cr = await fetch(`${marketplace()}/api/v3/supplies`, {
           method: 'POST', headers,
           body: JSON.stringify({ name: 'Юрлица — ' + new Date().toISOString().slice(0, 10) }),
         });
@@ -106,13 +113,13 @@ export default {
         supplyId = made.id;
         created = true;
       }
-      const addResp = await fetch(`${WB}/api/marketplace/v3/supplies/${supplyId}/orders`, {
+      const addResp = await fetch(`${marketplace()}/api/marketplace/v3/supplies/${supplyId}/orders`, {
         method: 'PATCH', headers, body: JSON.stringify({ orders: [Number(orderId)] }),
       });
       if (!addResp.ok) {
         const t = await addResp.text();
         if (created && addResp.status >= 400 && addResp.status < 500 && ![408, 429].includes(addResp.status)) {
-          await fetch(`${WB}/api/v3/supplies/${supplyId}`, { method: 'DELETE', headers }).catch(() => {});
+          await fetch(`${marketplace()}/api/v3/supplies/${supplyId}`, { method: 'DELETE', headers }).catch(() => {});
           await sb.from('wb_supplies').delete().eq('id', supplyId);
         }
         return json({ error: `WB (добавление в поставку для юрлиц): ${addResp.status} ${t.slice(0, 300)}` }, 502);
