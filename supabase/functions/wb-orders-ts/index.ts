@@ -198,6 +198,16 @@ Deno.serve(async(req)=>{
     if(emp.warehouse_id && emp.warehouse_id!==warehouse && !role.permissions.employees) return json({error:"Нет доступа к складу"},403);
     const o=await getOrder(id);
     if(["canceled","canceled_by_client","declined_by_client"].includes(o.wb_status)) return json({error:"Заказ отменён покупателем"},409);
+    if(o.requires_kiz!==true){
+     const {data:product,error:productError}=await sb.from("inventory").select("requires_kiz")
+      .eq("client_name",client.name).eq("sku",b.sku).eq("size",String(b.size??""))
+      .eq("warehouse_id",warehouse).maybeSingle();
+     if(productError) throw productError;
+     if(product?.requires_kiz===true){
+      await updateOrder(id,{requires_kiz:true});
+      o.requires_kiz=true;
+     }
+    }
     await checkKiz(o,id,b.kizCode);
     const {data,error}=await sb.rpc("wb_fbs_deduct",{p_order_id:id,p_client_id:clientId,p_sku:b.sku,p_size:String(b.size??""),p_warehouse:warehouse,p_employee_id:emp.id,p_employee_name:emp.name});
     if(error) return json({error:error.message},409);

@@ -144,7 +144,7 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
   if(slug==='wb-orders-ts'){
     const orders=new Map();
     let upstream=0, pushes=0, deductions=0, sentKiz;
-    let supplierStatus="new";
+    let supplierStatus="new", wbRequiresKiz=true;
     let orderHandler;
     const sb={
       auth:{getUser:async()=>({data:{user:{id:'staff-auth'}}})},
@@ -152,7 +152,8 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
         const query={
           eq:()=>query, in:()=>query, not:()=>query,
           maybeSingle:async()=>({data: table==='wb_orders'
-            ? {order_id:1,requires_kiz:true,supplier_status:supplierStatus}
+            ? {order_id:1,requires_kiz:wbRequiresKiz,supplier_status:supplierStatus}
+            : table==='inventory' ? {requires_kiz:true}
             : {id:'c',name:'C',wb_key:'synthetic',wb_warehouse_id:'1',wb_warehouse_ids:['1','2']}}),
           single:async()=>({data:table==='employees'
             ? {id:'staff',name:'Tester',role_id:'test',warehouse_id:'MAIN'}
@@ -201,6 +202,9 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     assert.equal(pushes,1);
     const staff={Authorization:'Bearer staff-test'};
     const deduction={action:'deduct_fbs',orderId:1,warehouse:'MAIN',sku:'A'};
+    assert.equal((await invoke(staff,deduction)).status,500);
+    assert.equal(deductions,0);
+    wbRequiresKiz=false;
     assert.equal((await invoke(staff,deduction)).status,500);
     assert.equal(deductions,0);
     assert.equal((await invoke(staff,{...deduction,kizCode:'synthetic-kiz'})).status,200);
