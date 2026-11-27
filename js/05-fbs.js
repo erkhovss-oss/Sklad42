@@ -2157,19 +2157,28 @@ function undoAssembleDeduction(inv, order, ddsCreated){
     }
   }catch(e){ console.error(e); }
 }
-function finishAssembleOrder(order, kizCode, skipViewSwitch){
+async function finishAssembleOrder(order, kizCode, skipViewSwitch){
   if(assemblingInFlight.has(order.orderId)){ toast(`Заказ №${order.orderId} уже отправляется на сборку — подождите`); return; }
   if(order.supplierStatus && order.supplierStatus!=='new'){ return; }
   const client = clients.find(c=>c.id===order.clientId);
   const inv = order.barcode ? findInventoryItemByBarcode(order.barcode, order.clientName) : findInventoryItem(order.article, order.clientName, order.size||'');
   const available = inv ? (inv.isKit && inv.kitMode!=='assembled' ? computeKitAvailability(inv).available : inv.qty) : 0;
-  if(!inv || available < 1){
+  if(!inv){
     toast(`Недостаточно на складе «${order.name||order.article}» — нет в остатках`);
     return;
   }
   assemblingInFlight.add(order.orderId);
   let ddsCreatedId = null;
-  deductStockForShipment(inv, 1, `Сборка заказа FBS №${order.orderId}`);
+  try {
+    const res = await sb.functions.invoke('wb-orders-ts', {body:{clientId:order.clientId,action:'deduct_fbs',orderId:order.orderId,sku:inv.sku,size:inv.size||'',warehouse:inv.warehouseId||'MAIN'}});
+    if(res.error || !res.data?.ok) throw new Error(await extractEdgeFunctionError(res.data,res.error));
+    order.stockDeducted = true;
+    await loadInventory();
+  } catch(e) {
+    assemblingInFlight.delete(order.orderId);
+    toast('Списание не подтверждено: '+(e.message||e)+'. Повторите сборку; остаток не возвращается автоматически.');
+    return;
+  }
   if(inv.dims && inv.dims.l && inv.dims.w && inv.dims.h){
     const liters = (inv.dims.l * inv.dims.w * inv.dims.h) / 1000;
     const tariffPrice = getFbsTariffPrice(order.clientId, liters);
@@ -2236,8 +2245,7 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
     assemblingInFlight.delete(order.orderId);
     if(error || (data && data.error)){
       const msg = await extractEdgeFunctionError(data, error);
-      undoAssembleDeduction(inv, order, ddsCreatedId);
-      toast(`WB (сборка заказа №${order.orderId}): ${msg}. Остаток возвращён — заказ остался в «Новых», повторите позже`);
+      toast(`WB (сборка заказа №${order.orderId}): ${msg}. Товар списан и заблокирован — повторите сборку после проверки WB`);
       renderFbsBody();
       return;
     }
@@ -2254,8 +2262,7 @@ function finishAssembleOrder(order, kizCode, skipViewSwitch){
     else renderFbsBody();
   }).catch(e=>{
     assemblingInFlight.delete(order.orderId);
-    undoAssembleDeduction(inv, order, ddsCreatedId);
-    toast(`Сборка заказа №${order.orderId}: ${e.message||e}. Остаток возвращён`);
+    toast(`Сборка заказа №${order.orderId}: ${e.message||e}. Товар остаётся заблокированным`);
     renderFbsBody();
   });
 }
