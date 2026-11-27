@@ -1898,59 +1898,37 @@ function wizardSkipOrder(){
   assemblyModeIndex++;
   renderAssemblyModeStep();
 }
-function askMoveTarget(count, clientName){
-  return new Promise((resolve)=>{
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
-    overlay.innerHTML = `
-      <div style="background:#fff;border-radius:12px;padding:24px;max-width:440px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.2)">
-        <div style="font-size:15px;font-weight:700;margin-bottom:6px">Перенести заказы: ${count} шт</div>
-        <div style="font-size:13px;color:var(--ink-soft);margin-bottom:16px">Клиент «${escapeHtml(clientName||'')}». Куда перенести выбранные заказы?</div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          <button class="btn btn-primary" id="mvMain">📦 В основную поставку</button>
-          <button class="btn btn-ghost" id="mvHold">🕓 В отдельную (отложенную) поставку</button>
-          <button class="btn btn-ghost" id="mvCancel">Отмена</button>
-        </div>
-      </div>`;
+function askMoveTarget(count, clientName, supplies){
+  return new Promise(resolve=>{
+    const overlay=document.createElement('div');
+    overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+    overlay.innerHTML=`<div style="background:#fff;border-radius:12px;padding:24px;max-width:440px;width:90%;max-height:85vh;overflow:auto"><div style="font-weight:700;margin-bottom:8px">Перенести заказы: ${count} шт</div><div style="margin-bottom:12px">Клиент «${escapeHtml(clientName||'')}». Выберите поставку:</div><div id="mvTargets" style="display:flex;flex-direction:column;gap:8px"></div></div>`;
     document.body.appendChild(overlay);
-    const done = (v)=>{ overlay.remove(); resolve(v); };
-    overlay.querySelector('#mvMain').onclick = ()=>done('main');
-    overlay.querySelector('#mvHold').onclick = ()=>done('hold');
-    overlay.querySelector('#mvCancel').onclick = ()=>done(null);
-    overlay.addEventListener('click', (e)=>{ if(e.target===overlay) done(null); });
+    const done=v=>{overlay.remove();resolve(v);};
+    const add=(label,value)=>{const b=document.createElement('button');b.className='btn btn-ghost';b.textContent=label;b.onclick=()=>done(value);overlay.querySelector('#mvTargets').appendChild(b);};
+    for(const s of supplies) add((({main:'Основная',b2b:'Юрлица',holding:'Отложенная'})[s.purpose]||'Поставка')+' · '+s.id,{targetSupplyId:s.id});
+    add('＋ Создать отложенную поставку',{createHolding:true});
+    add('Отмена',null);
+    overlay.addEventListener('click',e=>{if(e.target===overlay)done(null);});
   });
 }
 async function moveSelectedOrders(){
-  const sel = fbsOrders.filter(o=>o.supplierStatus==='confirm' && fbsCloseSelectedOrders.includes(o.orderId));
-  if(!sel.length){ toast('Отметьте галочками слева заказы, которые нужно перенести'); return; }
-  const clientIds = [...new Set(sel.map(o=>o.clientId))];
-  if(clientIds.length>1){ toast('Выбраны заказы разных клиентов — переносите по одному клиенту'); return; }
-  const clientId = clientIds[0];
-  const target = await askMoveTarget(sel.length, sel[0].clientName);
-  if(!target) return;
+  const sel=fbsOrders.filter(o=>o.supplierStatus==='confirm'&&fbsCloseSelectedOrders.includes(o.orderId));
+  if(!sel.length){toast('Отметьте заказы для переноса');return;}
+  const clientId=sel[0].clientId;
+  if(sel.some(o=>o.clientId!==clientId)){toast('Выберите заказы одного клиента');return;}
+  const list=await sb.functions.invoke('wb-supply-return-ts',{body:{clientId,action:'list_targets'}});
+  if(list.error||list.data?.error){toast('Не удалось загрузить поставки: '+await extractEdgeFunctionError(list.data,list.error));return;}
+  const target=await askMoveTarget(sel.length,sel[0].clientName,(list.data.supplies||[]).filter(s=>!sel.every(o=>o.wbSupplyId===s.id)));
+  if(!target)return;
   toast('Переносим заказы…');
-  if(target==='main'){
-    const { data, error } = await sb.functions.invoke('wb-supply-return-ts', { body: { clientId, orderIds: sel.map(o=>o.orderId) } });
-    if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
-    if(!data.total){ toast(data.message || 'Нечего переносить'); return; }
-    fbsCloseSelectedOrders = [];
-    await loadFbsOrders();
-    renderFbsBody();
-    const bad = (data.failed||[]).length;
-    toast(`Перенесено в основную поставку ${data.mainSupplyId}: ${data.moved} из ${data.total}${bad?` · не удалось: ${bad}`:''}`);
-  } else {
-    let ok = 0;
-    for(const o of sel){
-      const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'move_to_holding_supply', orderId: o.orderId } });
-      if(error || (data && data.error)){
-        toast('WB: не удалось перенести заказ №' + o.orderId + ' — ' + (data && data.error ? data.error : (error?error.message:'ошибка')));
-        break;
-      }
-      o.wbSupplyId = data.holdingSupplyId; ok++;
-      sb.from('wb_orders').update({wb_supply_id:data.holdingSupplyId}).eq('order_id', o.orderId).then(()=>{});
-    }
-    if(ok){ fbsCloseSelectedOrders = []; renderFbsBody(); toast(`Перенесено в отдельную поставку: ${ok} из ${sel.length}`); }
-  }
+  const {data,error}=await sb.functions.invoke('wb-supply-return-ts',{body:{clientId,orderIds:sel.map(o=>o.orderId),...target}});
+  if(error||data?.error){toast('WB: '+await extractEdgeFunctionError(data,error));return;}
+  fbsCloseSelectedOrders=[];
+  await loadFbsOrders();
+  renderFbsBody();
+  const failed=data.failed||[];
+  toast(`Перенесено: ${data.moved} из ${data.total}${failed.length?' · Ошибка: '+failed[0].error:''}`);
 }
 function moveFbsOrderToHolding(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
