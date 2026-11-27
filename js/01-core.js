@@ -291,6 +291,21 @@ function insertTextAtCursor(input, text){
 function normalizeKizInput(raw){
   let code = String(raw||'').replace(/[\r\n]+/g,'').trim();
   code = code.replace(/^\][A-Za-z][0-9A-Za-z]/, '');
+  const wrapped = /^(?:"01|\[\s*"01)/.test(code);
+  const escaped = !code.includes(GS_CHAR) && /\\u001d/i.test(code);
+  if(wrapped || escaped){
+    try{
+      const parsed = JSON.parse(wrapped ? code : '"'+code+'"');
+      const decoded = Array.isArray(parsed) && parsed.length===1 ? parsed[0] : parsed;
+      if(typeof decoded === 'string' && /^01\d{14}21/.test(decoded) && (decoded.includes(GS_CHAR) || !/\\u001d/i.test(decoded))){
+        code = decoded;
+      }else{
+        return {code:'', restored:false, gsCount:0, invalidFormat:true};
+      }
+    }catch{
+      return {code:'', restored:false, gsCount:0, invalidFormat:true};
+    }
+  }
   const complete = code.match(/^(01\d{14}21[\x21-\x7e]{13})([\x1d\uFFFD]?)(91[\x21-\x7e]{4})([\x1d\uFFFD]?)(92(?:[\x21-\x7e]{44}|[\x21-\x7e]{88}))$/);
   if(complete){
     const normalized = complete[1]+GS_CHAR+complete[3]+GS_CHAR+complete[5];

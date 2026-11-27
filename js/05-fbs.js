@@ -1852,6 +1852,12 @@ function wireWizardKizInput(order){
     // изредка теряется самый последний символ кода, и проверка у WB не проходит).
     setTimeout(()=>{
       const norm = normalizeKizInput(kizInput.value);
+      if(norm.invalidFormat){
+        playBeep('error');
+        toast('Не удалось прочитать формат КИЗ — отсканируйте код заново');
+        kizInput.select();
+        return;
+      }
       const kizCode = norm.code;
       kizInput.value='';
       if(!kizCode) return;

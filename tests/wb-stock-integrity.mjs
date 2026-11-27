@@ -22,6 +22,14 @@ assert.equal(scanner.normalizeKizInput(fullKiz).restored,false);
 const truncated = fullKiz.slice(0,-1);
 assert.equal(scanner.normalizeKizInput(truncated).code,truncated);
 
+const withQuote = ['01046070095200012112345"7890123',segments[1],segments[2]].join(gs);
+const serialized = JSON.stringify(withQuote);
+for(const input of [withQuote,serialized,JSON.stringify([withQuote]),serialized.slice(1,-1)]){
+  assert.equal(scanner.normalizeKizInput(input).code,withQuote);
+}
+assert.equal(scanner.normalizeKizInput(JSON.stringify([withQuote,fullKiz])).invalidFormat,true);
+assert.equal(scanner.normalizeKizInput(serialized.replace(/\\u001d/g,'\\\\u001d')).invalidFormat,true);
+
 const fbs = fs.readFileSync('js/05-fbs.js','utf8');
 const fbsMessages = fbs.slice(fbs.indexOf('function notifyFbsKizAccepted'),fbs.indexOf('function watchPendingKiz'));
 const signals = [];
@@ -36,6 +44,13 @@ assert.deepEqual(signals,['ok']);
 assert.match(messages.at(-1),/КИЗ проверен WB/);
 notification.notifyFbsKizRejected(2);
 assert.deepEqual(signals,['ok','error']);
+
+const statusView = vm.createContext({});
+vm.runInContext(fbs.slice(fbs.indexOf('function renderKizStatusLabel'),fbs.indexOf('function renderFbsWarehouseBadge')),statusView);
+for(const status of ['pending','rejected','attached','verify_failed']){
+  const label = statusView.renderKizStatusLabel({requiresKiz:true,kizCode:withQuote,kizDecision:serialized,kizStatus:status});
+  assert.ok(!label.includes(segments[0].slice(0,18)));
+}
 
 const db=new PGlite();
 await db.exec(`
