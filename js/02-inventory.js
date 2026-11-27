@@ -75,7 +75,7 @@ function buildReserveMap(){
   const allocate = (group, qty, map)=>{
     for(const [index, item] of group.entries()){
       const key = itemKey(item);
-      const free = Math.max(0, item.qty-(wb.get(key)||0)-(oz.get(key)||0));
+      const free = availableInventoryRow(item,{wb,oz});
       const take = index===group.length-1 ? qty : Math.min(qty,free);
       if(!take) continue;
       map.set(key,(map.get(key)||0)+take);
@@ -109,12 +109,26 @@ function buildReserveMap(){
   }
   return {wb, oz};
 }
+function availableInventoryRow(item,map){
+  const unreserved = row=>{
+    const key = itemKey(row);
+    return Math.max(0, row.qty-(map.wb.get(key)||0)-(map.oz.get(key)||0));
+  };
+  if(!item.isKit || item.kitMode==='assembled') return unreserved(item);
+  const quantities = new Map();
+  for(const part of getKitComponents(item)){
+    if(part.qtyNeeded<=0) return 0;
+    const component = findInventoryItem(part.componentSku,item.client,part.componentSize,item.warehouseId);
+    if(!component || component.isKit && component.kitMode!=='assembled') return 0;
+    quantities.set(component,(quantities.get(component)||0)+part.qtyNeeded);
+  }
+  return quantities.size ? Math.min(...Array.from(quantities,([row,qty])=>Math.floor(unreserved(row)/qty))) : 0;
+}
 function reserveHtml(item, map){
   if(item.warehouseId==='BRAK') return '';
   const key = itemKey(item);
   const wb = map.wb.get(key)||0, oz = map.oz.get(key)||0;
-  const physical = item.isKit && item.kitMode!=='assembled' ? computeKitAvailability(item).available : item.qty;
-  const free = Math.max(0, physical-wb-oz);
+  const free = availableInventoryRow(item,map);
   return `<div style="font-size:11px;margin-top:2px;color:var(--oz,#7a5af8)">В резерве: ${wb+oz} · доступно: ${free}</div>`;
 }
 function renderInventory(){

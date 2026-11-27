@@ -6,6 +6,7 @@ async function loadReturns(){
 }
 let returns_ = [];
 let foundReturnItem = null;
+let manualReturnRequest = null;
 function populateReturnClientFilter(){
   const sel = document.getElementById('returnClientFilter');
   if(!sel) return;
@@ -30,6 +31,7 @@ function findReturnItem(){
     return;
   }
   foundReturnItem = item;
+  manualReturnRequest = null;
   renderReturnForm();
 }
 function cancelReturnItem(){ foundReturnItem = null; renderReturnForm(); }
@@ -74,37 +76,27 @@ async function submitReturn(resolution){
     finally { wbReturnInFlight=false; }
   }
   if(virtualKit){ toast('Списание комплекта не найдено. Проверьте состав и оформите возврат по компонентам'); return; }
-  const id = 'RET-' + Date.now();
-  const createdAt = new Date().toISOString();
-  const entry = {id, sku:item.sku, name:item.name, size:item.size||'', clientName:item.client||'', warehouseId:item.warehouseId||'MAIN', qty, orderId:orderId||'', reason:reason||'', resolution, employeeName: currentUser?currentUser.name:'', createdAt};
-  returns_.unshift(entry);
-  sb.from('returns').insert({id, sku:item.sku, name:item.name, size:item.size||null, client_name:item.client||null, warehouse_id:item.warehouseId||'MAIN', qty, order_id:orderId||null, reason:reason||null, resolution, employee_id: currentUser?currentUser.id:null, employee_name: currentUser?currentUser.name:null}).then(({error})=>{
-    if(error){ console.error(error); toast('Не удалось сохранить возврат в базе'); }
-  });
-  if(resolution==='restock'){
-    item.qty += qty;
-    logMovement(item.sku, item.name, qty, 'Возврат на склад' + (reason?(': '+reason):''), item.client, item.size, item.warehouseId||'MAIN');
-    toast(`Возврат оформлен: +${qty} шт на склад`);
-  } else {
-    // Товар физически возвращается на склад, но не для продажи — отдельным
-    // виртуальным складом «БРАК», чтобы он был виден в «Остатках», но не попадал
-    // в число, которое уходит на WB/Ozon (это учитывается автоматически: расчёт
-    // доступного для продажи остатка исключает склад с id 'BRAK').
-    ensureBrakWarehouse();
-    const brakKey = itemKey({sku:item.sku, client:item.client, size:item.size, warehouseId:'BRAK'});
-    let brakItem = inventory.find(i=>itemKey(i)===brakKey);
-    if(!brakItem){
-      brakItem = {sku:item.sku, name:item.name, qty:0, client:item.client, size:item.size||'', warehouseId:'BRAK', barcode:item.barcode||''};
-      inventory.push(brakItem);
-    }
-    brakItem.qty += qty;
-    logMovement(item.sku, item.name, qty, 'Возврат: брак' + (reason?(': '+reason):''), item.client, item.size, 'BRAK');
-    toast(`Возврат оформлен как брак: +${qty} шт на склад «БРАК» (не идёт в продажу)`);
-  }
-  foundReturnItem = null;
-  document.getElementById('returnBarcode').value = '';
-  document.getElementById('returnOrderId').value = '';
-  renderReturns();
+  wbReturnInFlight = true;
+  try {
+    manualReturnRequest ??= 'RET-' + crypto.randomUUID();
+    const {data:applied,error} = await sb.rpc('record_inventory_return',{
+      p_id:manualReturnRequest, p_sku:item.sku, p_client_name:item.client||'', p_size:item.size||'',
+      p_warehouse:item.warehouseId||'MAIN', p_qty:qty, p_order_id:orderId||null,
+      p_reason:reason, p_resolution:resolution
+    });
+    if(error) throw error;
+    await Promise.all([loadInventory(),loadReturns()]);
+    if(applied && resolution==='restock') scheduleWbAutoSync(item.client);
+    manualReturnRequest = null;
+    foundReturnItem = null;
+    document.getElementById('returnBarcode').value = '';
+    document.getElementById('returnOrderId').value = '';
+    renderReturns();
+    toast(!applied ? 'Возврат уже оформлен ранее' : resolution==='restock'
+      ? `Возврат оформлен: +${qty} шт на склад` : `Возврат оформлен: +${qty} шт на склад «БРАК»`);
+  } catch(e) {
+    toast('Возврат не подтверждён: '+(e.message||e));
+  } finally { wbReturnInFlight = false; }
 }
 function renderReturnForm(){
   const wrap = document.getElementById('returnFoundWrap');

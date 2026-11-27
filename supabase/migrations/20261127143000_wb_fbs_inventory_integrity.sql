@@ -162,18 +162,18 @@ AS $function$;
     group by 1,2,3,4
   ),
   code_map as (
-    select distinct on (b.barcode) b.barcode, b.sku, b.size
+    select distinct on (b.code) b.code, b.sku, b.size
     from (
-      select barcode, sku, coalesce(size,'') as size, 0 as pr from public.inventory where client_name = p_client_name and warehouse_id <> 'BRAK' and barcode is not null and barcode <> ''
+      select case when barcode ~ '^[0-9]+$' then coalesce(nullif(ltrim(barcode,'0'),''),'0') else barcode end as code, sku, coalesce(size,'') as size, 0 as pr from public.inventory where client_name = p_client_name and warehouse_id <> 'BRAK' and barcode is not null and barcode <> ''
       union all
-      select barcode, sku, coalesce(size,'') as size, 1 as pr from public.inventory_barcodes where client_name = p_client_name
+      select case when barcode ~ '^[0-9]+$' then coalesce(nullif(ltrim(barcode,'0'),''),'0') else barcode end as code, sku, coalesce(size,'') as size, 1 as pr from public.inventory_barcodes where client_name = p_client_name
     ) b
-    order by b.barcode, b.pr, b.sku
+    order by b.code, b.pr, b.sku, b.size
   ),
   wb_direct as (
     select cmap.sku, cmap.size, count(*)::numeric as cnt
     from public.wb_orders o
-    join code_map cmap on cmap.barcode = o.barcode
+    join code_map cmap on cmap.code = case when o.barcode ~ '^[0-9]+$' then coalesce(nullif(ltrim(o.barcode,'0'),''),'0') else o.barcode end
     where o.supplier_status = 'new' and o.client_name = p_client_name
       and coalesce(o.wb_status,'') not in ('canceled','canceled_by_client','declined_by_client')
       and not exists (select 1 from public.wb_fbs_stock_operations op where op.order_id=o.order_id and op.client_id=o.client_id and op.state='deducted')
@@ -236,3 +236,98 @@ AS $function$;
   where p.barcode is not null;
 $function$;
 
+create table public.wb_stock_size_cache (
+  client_id text primary key,
+  size_ids jsonb not null,
+  updated_at timestamptz not null
+);
+alter table public.wb_stock_size_cache enable row level security;
+revoke all on public.wb_stock_size_cache from public, anon, authenticated;
+grant select, insert, update on public.wb_stock_size_cache to service_role;
+
+create table public.wb_stock_sync_leases (
+  client_id text primary key,
+  lease uuid not null,
+  expires_at timestamptz not null
+);
+alter table public.wb_stock_sync_leases enable row level security;
+revoke all on public.wb_stock_sync_leases from public, anon, authenticated;
+grant select, insert, update, delete on public.wb_stock_sync_leases to service_role;
+
+create function public.claim_wb_stock_sync(p_client_id text, p_lease uuid)
+returns boolean language sql set search_path to 'public', 'pg_temp' as $$
+  with acquired as (
+    insert into public.wb_stock_sync_leases(client_id, lease, expires_at)
+    values (p_client_id, p_lease, now() + interval '8 minutes')
+    on conflict (client_id) do update
+      set lease = excluded.lease, expires_at = excluded.expires_at
+      where wb_stock_sync_leases.expires_at <= now()
+    returning 1
+  )
+  select exists(select 1 from acquired);
+$$;
+revoke all on function public.claim_wb_stock_sync(text,uuid) from public, anon, authenticated;
+grant execute on function public.claim_wb_stock_sync(text,uuid) to service_role;
+
+create function public.record_inventory_return(
+  p_id text, p_sku text, p_client_name text, p_size text, p_warehouse text,
+  p_qty integer, p_order_id bigint, p_reason text, p_resolution text
+)
+returns boolean language plpgsql set search_path to 'public', 'pg_temp' as $$
+declare
+  employee public.employees%rowtype;
+  item public.inventory%rowtype;
+  wb_order public.wb_orders%rowtype;
+  destination text;
+begin
+  employee := public.current_employee();
+  if employee.id is null or not coalesce(public.has_permission('returns'),false) then
+    raise exception 'Нет доступа к возвратам';
+  end if;
+  if employee.warehouse_id is not null and employee.warehouse_id<>p_warehouse
+      and not coalesce(public.has_permission('employees'),false) then
+    raise exception 'Нет доступа к складу';
+  end if;
+  if p_id is null or p_id !~ '^RET-[a-f0-9-]{36}$' or p_qty is null or p_qty<=0 or p_warehouse='BRAK'
+      or p_resolution is null or p_resolution not in ('restock','defect') then
+    raise exception 'Некорректные параметры возврата';
+  end if;
+  if p_order_id is not null then
+    perform pg_advisory_xact_lock(p_order_id);
+    select * into wb_order from public.wb_orders where order_id=p_order_id for update;
+    if found and (wb_order.client_name is distinct from p_client_name or
+       (coalesce(wb_order.supplier_status,'') not in ('cancel','complete') and
+       coalesce(wb_order.wb_status,'') not in ('canceled','canceled_by_client','declined_by_client','defect'))) then
+      raise exception 'Заказ активен или принадлежит другому клиенту';
+    end if;
+    if exists(select 1 from public.wb_fbs_stock_operations where order_id=p_order_id) then
+      raise exception 'Для этого заказа используйте возврат по исходному списанию';
+    end if;
+    if exists(select 1 from public.returns where client_name=p_client_name and order_id=p_order_id::text) then
+      return false;
+    end if;
+  end if;
+  select * into strict item from public.inventory
+    where (sku,client_name,size,warehouse_id)=(p_sku,p_client_name,coalesce(p_size,''),p_warehouse) for update;
+  if coalesce(item.is_kit,false) and coalesce(item.kit_mode,'virtual')<>'assembled' then
+    raise exception 'Для виртуального комплекта требуется исходное списание';
+  end if;
+  destination := case when p_resolution='defect' then 'BRAK' else p_warehouse end;
+  insert into public.returns(id,sku,name,size,client_name,warehouse_id,qty,order_id,reason,resolution,employee_id,employee_name)
+    values(p_id,item.sku,item.name,item.size,item.client_name,destination,p_qty,p_order_id::text,
+      p_reason,p_resolution,employee.id,employee.name) on conflict(id) do nothing;
+  if not found then return false; end if;
+  if destination='BRAK' then
+    insert into public.warehouses(id,name) values('BRAK','БРАК (не для продажи)') on conflict(id) do nothing;
+  end if;
+  insert into public.inventory(sku,name,qty,client_name,size,warehouse_id,barcode)
+    values(item.sku,item.name,p_qty,item.client_name,item.size,destination,item.barcode)
+    on conflict(sku,client_name,size,warehouse_id) do update set qty=inventory.qty+excluded.qty;
+  insert into public.movement_log(sku,name,delta,type,client_name,size,employee_id,employee_name)
+    values(item.sku,item.name,p_qty,case when destination='BRAK' then 'Возврат: брак' else 'Возврат на склад' end,
+      item.client_name,item.size,employee.id,employee.name);
+  return true;
+end;
+$$;
+revoke all on function public.record_inventory_return(text,text,text,text,text,integer,bigint,text,text) from public,anon;
+grant execute on function public.record_inventory_return(text,text,text,text,text,integer,bigint,text,text) to authenticated;

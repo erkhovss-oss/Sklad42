@@ -225,7 +225,11 @@ Deno.serve(async(req)=>{
     const out=await attachKiz(Number(b.orderId),String(b.kizCode||""));return json(out);
    }
    case "check_meta":{
-    const id=Number(b.orderId);const d=await meta(id);const item=(d.orders||[]).find((x:any)=>Number(x.orderId??x.id)===id)||(d.orders||[])[0]||{};
+    const id=Number(b.orderId);
+    await getOrder(id);
+    const d=await meta(id);
+    const item=(d.orders||[]).find((x:any)=>Number(x.orderId??x.id)===id);
+    if(!item) return json({error:"WB не подтвердил требования маркировки заказа"},502);
     const sgtin=(item.meta||item).sgtin;const required=!!(sgtin?.required||sgtin?.status==="required"||item.isKizRequired);
     await updateOrder(id,{requires_kiz:required});
     return json({ok:true,requiresKiz:required,meta:item.meta||item});
@@ -242,8 +246,40 @@ Deno.serve(async(req)=>{
     return json(d);
    }
    case "cancel":{
-    const id=Number(b.orderId);const old=await getOrder(id);const before=old.supplier_status==="new"?await sb.rpc("get_available_stock",{p_client_name:client.name}):null;await wb("/api/v3/orders/"+id+"/cancel","PATCH");
-    await updateOrder(id,{supplier_status:"cancel"});const stockSyncError=before?await pushChangedStock(before):null;return json({ok:true,stockSyncError});
+    const id=Number(b.orderId);
+    const old=await getOrder(id);
+    const {data:op,error:operationError}=await sb.from("wb_fbs_stock_operations")
+      .select("state,product,items").eq("order_id",id).eq("client_id",clientId).maybeSingle();
+    if(operationError) throw operationError;
+    const warehouse=op?.items?.[0]?.warehouse;
+    let employee:any=null;
+    if(warehouse){
+     const result=await sb.from("employees").select("id,name,role_id,warehouse_id").eq("auth_user_id",staffUid).eq("active",true).single();
+     if(result.error) throw result.error;
+     employee=result.data;
+     if(employee.warehouse_id && employee.warehouse_id!==warehouse){
+      const role=await sb.from("roles").select("permissions").eq("id",employee.role_id).single();
+      if(!role.data?.permissions?.employees) return json({error:"Нет доступа к складу"},403);
+     }
+    }
+    const shouldRestore=old.supplier_status==="confirm" && !old.out_of_stock && op?.state==="deducted" && op?.product;
+    const before=old.supplier_status==="new" || shouldRestore
+      ? await sb.rpc("get_available_stock",{p_client_name:client.name}):null;
+    if(old.supplier_status!=="cancel"){
+     await wb("/api/v3/orders/"+id+"/cancel","PATCH");
+     await updateOrder(id,{supplier_status:"cancel"});
+    }
+    let restored=false, restoreError=null;
+    if(shouldRestore && employee){
+     const result=await sb.rpc("wb_fbs_restore",{
+      p_order_id:id,p_client_id:clientId,p_sku:op.product.sku,p_size:op.product.size,p_warehouse:warehouse,
+      p_resolution:"restock",p_reason:"Отмена собранного заказа WB",p_employee_id:employee.id,p_employee_name:employee.name
+     });
+     restoreError=result.error?.message||null;
+     restored=result.data?.tracked===true;
+    }
+    const stockSyncError=before?await pushChangedStock(before):null;
+    return json({ok:true,restored,restoreError,stockSyncError});
    }
    case "move_to_holding_supply":{
     const id=Number(b.orderId);const o=await getOrder(id);

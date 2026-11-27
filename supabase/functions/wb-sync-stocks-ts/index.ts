@@ -23,6 +23,56 @@ function json(body: unknown, status = 200) {
   });
 }
 
+async function loadCards(key: string) {
+  const LIMIT = 100;
+  const byNmId = new Map<string, any>();
+  let cursor: Record<string, unknown> = { limit: LIMIT };
+  let pages = 0;
+  while (pages < 40) {
+    pages++;
+    let resp = await fetch('https://content-api.wildberries.ru/content/v2/get/cards/list', {
+      method: 'POST',
+      headers: { Authorization: key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { cursor, filter: { withPhoto: -1 } } }),
+    });
+    if (resp.status === 429) {
+      await new Promise((r) => setTimeout(r, 3000));
+      resp = await fetch('https://content-api.wildberries.ru/content/v2/get/cards/list', {
+        method: 'POST',
+        headers: { Authorization: key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: { cursor, filter: { withPhoto: -1 } } }),
+      });
+    }
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(`Ошибка загрузки карточек WB (${resp.status}) после ${byNmId.size} карточек`);
+    const data = JSON.parse(text);
+    const batch: any[] = data.cards || [];
+    batch.forEach((card) => byNmId.set(String(card.nmID), card));
+    const cur = data.cursor || {};
+    if (batch.length < LIMIT || !cur.updatedAt || cur.nmID == null) break;
+    cursor = { limit: LIMIT, updatedAt: cur.updatedAt, nmID: cur.nmID };
+    await new Promise((r) => setTimeout(r, 700));
+  }
+  return { cards: Array.from(byNmId.values()), pages };
+}
+
+function barcodeSizeIds(cards: any[]): Record<string, number> {
+  const byBarcode = new Map<string, number>();
+  const ambiguous = new Set<string>();
+  for (const card of cards) {
+    for (const size of card.sizes || []) {
+      if (!Number.isSafeInteger(size.chrtID) || size.chrtID <= 0) continue;
+      for (const raw of size.skus || []) {
+        const barcode = String(raw);
+        if (byBarcode.has(barcode) && byBarcode.get(barcode) !== size.chrtID) ambiguous.add(barcode);
+        byBarcode.set(barcode, size.chrtID);
+      }
+    }
+  }
+  for (const barcode of ambiguous) byBarcode.delete(barcode);
+  return Object.fromEntries(byBarcode);
+}
+
 export default {
   async fetch(req: Request): Promise<Response> {
     if (req.method === 'OPTIONS') {
@@ -30,6 +80,7 @@ export default {
     }
 
     if (req.method !== 'POST') return json({ error: 'POST required' }, 405);
+    let releaseLease: (() => Promise<void>) | undefined;
     try {
       const { clientId, action, changedBarcodes } = await req.json();
       if (!clientId) return json({ error: 'clientId обязателен' }, 400);
@@ -77,36 +128,7 @@ export default {
 
       // ---------- список карточек товаров (Content API) ----------
       if (action === 'list_cards') {
-        const LIMIT = 100;
-        const byNmId = new Map<string, any>();
-        let cursor: Record<string, unknown> = { limit: LIMIT };
-        let pages = 0;
-        while (pages < 40) {
-          pages++;
-          let resp = await fetch('https://content-api.wildberries.ru/content/v2/get/cards/list', {
-            method: 'POST',
-            headers: { Authorization: client.wb_key, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ settings: { cursor, filter: { withPhoto: -1 } } }),
-          });
-          if (resp.status === 429) {
-            await new Promise((r) => setTimeout(r, 3000));
-            resp = await fetch('https://content-api.wildberries.ru/content/v2/get/cards/list', {
-              method: 'POST',
-              headers: { Authorization: client.wb_key, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ settings: { cursor, filter: { withPhoto: -1 } } }),
-            });
-          }
-          const text = await resp.text();
-          if (!resp.ok) return json({ error: `WB ответил ошибкой (${resp.status}): ${text}`, loadedBeforeError: byNmId.size }, 502);
-          const data = JSON.parse(text);
-          const batch: any[] = data.cards || [];
-          batch.forEach((card) => byNmId.set(String(card.nmID), card));
-          const cur = data.cursor || {};
-          if (batch.length < LIMIT || !cur.updatedAt || cur.nmID == null) break;
-          cursor = { limit: LIMIT, updatedAt: cur.updatedAt, nmID: cur.nmID };
-          await new Promise((r) => setTimeout(r, 700));
-        }
-        return json({ cards: Array.from(byNmId.values()), pages });
+        return json(await loadCards(client.wb_key));
       }
 
       // ---------- отправка остатков (действие по умолчанию) ----------
@@ -122,6 +144,16 @@ export default {
       }
       const lowStockThreshold = Math.max(0, Number(client.wb_stock_switch_threshold ?? 3));
 
+      const lease = crypto.randomUUID();
+      const { data: claimed, error: leaseError } = await sb.rpc('claim_wb_stock_sync', {
+        p_client_id: clientId, p_lease: lease,
+      });
+      if (leaseError) throw leaseError;
+      if (!claimed) return json({ error: 'Синхронизация остатков этого клиента уже выполняется' }, 409);
+      releaseLease = async () => {
+        await sb.from('wb_stock_sync_leases').delete().eq('client_id', clientId).eq('lease', lease);
+      };
+
       const { data: availableRows, error: availErr } = await sb.rpc('get_available_stock', {
         p_client_name: client.name,
       });
@@ -132,75 +164,104 @@ export default {
       }
 
       const filter = Array.isArray(changedBarcodes) ? new Set(changedBarcodes.map(String)) : null;
-      const baseStocks = availableRows.filter((r:any)=>!filter||filter.has(String(r.barcode))).map((r: any) => ({ sku: r.barcode, amount: Math.max(0, Number(r.wb_available) || 0) }));
-      if(!baseStocks.length) return json({ok:true,sent:0,warehouses:[]});
+      const requested = availableRows.filter((row: any) => !filter || filter.has(String(row.barcode)));
+      if (!requested.length) return json({ ok: true, sent: 0, warehouses: [] });
+      const { data: cached, error: cacheError } = await sb.from('wb_stock_size_cache')
+        .select('size_ids,updated_at').eq('client_id', clientId).maybeSingle();
+      if (cacheError) throw cacheError;
+      let sizeIds: Record<string, number> = cached?.size_ids || {};
+      const age = Date.now() - Date.parse(cached?.updated_at || '');
+      const hasMissing = requested.some((row: any) => !Object.hasOwn(sizeIds, row.barcode));
+      if (!cached || age >= 24*60*60*1000 || (hasMissing && age >= 5*60*1000)) {
+        sizeIds = barcodeSizeIds((await loadCards(client.wb_key)).cards);
+        const { error } = await sb.from('wb_stock_size_cache').upsert({
+          client_id: clientId, size_ids: sizeIds, updated_at: new Date().toISOString(),
+        });
+        if (error) throw error;
+      }
+      const missingBarcodes: string[] = [];
+      const bySize = new Map<number, number>();
+      for (const row of requested) {
+        const chrtId = Object.hasOwn(sizeIds, row.barcode) ? sizeIds[row.barcode] : 0;
+        if (!Number.isSafeInteger(chrtId) || chrtId <= 0) {
+          missingBarcodes.push(String(row.barcode));
+          continue;
+        }
+        const amount = Math.max(0, Number(row.wb_available) || 0);
+        bySize.set(chrtId, Math.min(bySize.get(chrtId) ?? amount, amount));
+      }
+      const baseStocks = Array.from(bySize, ([chrtId, amount]) => ({ chrtId, amount }));
+      if (!baseStocks.length) return json({ error: 'Штрихкоды остатков не сопоставлены с размерами карточек WB', missingBarcodes }, 409);
       const results: any[] = [];
       const skippedAll = new Set<string>();
       for (const warehouseId of warehouseIds) {
         const isPrimary = warehouseId === primaryWarehouseId;
-        const current = new Map<string, number>();
+        const current = new Map<number, number>();
         // WB уменьшает остаток склада-источника заказа до нашей синхронизации.
         // Считываем фактические значения, чтобы не отправлять прежний остаток
         // и не пополнять дополнительные склады на низком остатке.
         for (let i = 0; i < baseStocks.length; i += 1000) {
-          const skus = baseStocks.slice(i, i + 1000).map((row: any) => row.sku);
+          const chrtIds = baseStocks.slice(i, i + 1000).map(row => row.chrtId);
           const response = await fetch(`https://marketplace-api.wildberries.ru/api/v3/stocks/${warehouseId}`, {
             method: 'POST',
             headers: { Authorization: client.wb_key, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ skus }),
+            body: JSON.stringify({ chrtIds }),
           });
           if (!response.ok) throw new Error(`Не удалось получить остатки склада ${warehouseId}: WB ${response.status}`);
           const snapshot = await response.json();
           if (!Array.isArray(snapshot.stocks)) throw new Error(`WB вернул неверный формат остатков склада ${warehouseId}`);
           for (const row of snapshot.stocks) {
-            if (typeof row.sku === 'string' && Number.isInteger(row.amount) && row.amount >= 0) {
-              current.set(row.sku, row.amount);
+            if (Number.isSafeInteger(row.chrtId) && Number.isInteger(row.amount) && row.amount >= 0) {
+              current.set(row.chrtId, row.amount);
             }
           }
         }
-        let stocks = baseStocks.flatMap((row: { sku: string; amount: number }) => {
-          const previous = current.get(row.sku);
+        const stocks = baseStocks.flatMap((row) => {
+          const previous = current.get(row.chrtId);
           const lowStockSecondary = !isPrimary && row.amount <= lowStockThreshold;
           if (lowStockSecondary && previous === undefined) return [];
           const amount = lowStockSecondary ? Math.min(previous!, row.amount) : row.amount;
-          return amount === previous ? [] : [{ sku: row.sku, amount }];
+          return amount === previous ? [] : [{ chrtId: row.chrtId, amount }];
         });
         if (!stocks.length) {
           results.push({ warehouseId, ok: true, sent: 0, skipped: 0 });
           continue;
         }
-        const skippedSgt = new Set<string>();
-        let resp: Response | null = null;
-        let errText = '';
-        for (let attempt = 0; attempt < 3; attempt++) {
-          if (!stocks.length) break;
-          resp = await fetch(`https://marketplace-api.wildberries.ru/api/v3/stocks/${warehouseId}`, {
-            method: 'PUT',
-            headers: { Authorization: client.wb_key, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ stocks }),
-          });
-          if (resp.status === 200 || resp.status === 204) break;
-          errText = await resp.text();
-          if (resp.status !== 409) break;
-          let bad: string[] = [];
-          try {
-            const parsed = JSON.parse(errText);
-            for (const e of (Array.isArray(parsed) ? parsed : [parsed])) {
-              if (e && e.code === 'CargoWarehouseRestrictionSGT' && Array.isArray(e.data)) {
-                bad = bad.concat(e.data.map((d: any) => String(d.sku)));
+        for (let i = 0; i < stocks.length; i += 1000) {
+          let batch = stocks.slice(i, i + 1000);
+          const skippedSgt = new Set<string>();
+          let resp: Response | null = null;
+          let errText = '';
+          for (let attempt = 0; attempt < 3; attempt++) {
+            if (!batch.length) break;
+            resp = await fetch(`https://marketplace-api.wildberries.ru/api/v3/stocks/${warehouseId}`, {
+              method: 'PUT',
+              headers: { Authorization: client.wb_key, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ stocks: batch }),
+            });
+            if (resp.status === 200 || resp.status === 204) break;
+            errText = await resp.text();
+            if (resp.status !== 409) break;
+            let bad: string[] = [];
+            try {
+              const parsed = JSON.parse(errText);
+              for (const e of (Array.isArray(parsed) ? parsed : [parsed])) {
+                if (e && e.code === 'CargoWarehouseRestrictionSGT' && Array.isArray(e.data)) {
+                  bad = bad.concat(e.data.map((d: any) => String(d.chrtId)));
+                }
               }
-            }
-          } catch (_e) {}
-          if (!bad.length) break;
-          bad.forEach((b) => skippedSgt.add(b));
-          stocks = stocks.filter((s: any) => !skippedSgt.has(String(s.sku)));
-        }
-        const ok = !!resp && (resp.status === 200 || resp.status === 204);
-        if (ok || (!stocks.length && skippedSgt.size)) {
-          skippedSgt.forEach(s => skippedAll.add(s));
-          results.push({ warehouseId, ok: true, sent: stocks.length, skipped: skippedSgt.size, lowStockMode: !isPrimary && baseStocks.some((s: any) => s.amount <= lowStockThreshold) });
-        } else {
-          results.push({ warehouseId, ok: false, status: resp?.status || null, error: errText.slice(0, 500) });
+            } catch (_e) {}
+            if (!bad.length) break;
+            bad.forEach((b) => skippedSgt.add(b));
+            batch = batch.filter((s: any) => !skippedSgt.has(String(s.chrtId)));
+          }
+          const ok = !!resp && (resp.status === 200 || resp.status === 204);
+          if (ok || (!batch.length && skippedSgt.size)) {
+            skippedSgt.forEach(s => skippedAll.add(s));
+            results.push({ warehouseId, ok: true, sent: batch.length, skipped: skippedSgt.size, lowStockMode: !isPrimary && baseStocks.some((s: any) => s.amount <= lowStockThreshold) });
+          } else {
+            results.push({ warehouseId, ok: false, status: resp?.status || null, error: errText.slice(0, 500) });
+          }
         }
       }
       const failed = results.filter(r => !r.ok);
@@ -209,10 +270,15 @@ export default {
         await sb.from('clients').update({ wb_last_sync_error: summary.slice(0, 500) }).eq('id', clientId);
         return json({ ok: false, warehouses: results, error: `Не удалось обновить остатки на всех выбранных складах: ${summary}` }, 502);
       }
-      await sb.from('clients').update({ wb_last_synced_at: new Date().toISOString(), wb_last_sync_error: null }).eq('id', clientId);
-      return json({ ok: true, sent: results.reduce((sum, row) => sum + row.sent, 0), skipped: skippedAll.size, skippedSgtSkus: Array.from(skippedAll), warehouses: results, primaryWarehouseId, lowStockThreshold });
+      const mappingWarning = missingBarcodes.length ? `Штрихкоды без размера WB: ${missingBarcodes.length}` : null;
+      await sb.from('clients').update({ wb_last_synced_at: new Date().toISOString(), wb_last_sync_error: mappingWarning }).eq('id', clientId);
+      return json({ ok: true, sent: results.reduce((sum, row) => sum + row.sent, 0), skipped: skippedAll.size, skippedSgtSizeIds: Array.from(skippedAll), missingBarcodes, warehouses: results, primaryWarehouseId, lowStockThreshold });
     } catch (e) {
-      return json({ error: String(e) }, 500);
+      return json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    } finally {
+      if (releaseLease) {
+        try { await releaseLease(); } catch (e) { console.error('WB stock lease release:', e); }
+      }
     }
   },
 };

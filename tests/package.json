@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "scripts": {
+    "test": "node wb-stock-integrity.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.6.1",
+    "typescript": "5.9.3"
+  }
+}

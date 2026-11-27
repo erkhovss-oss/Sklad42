@@ -767,7 +767,7 @@ function renderFbsOrders(){
   if(!fbsAutoPollTimer){
     fbsAutoPollTimer = setInterval(()=>{
       if(document.getElementById('tab-fbs').classList.contains('active') && !fbsAssemblyScreenOpen()) refreshFbsOrders();
-    }, 10000);
+    }, 30000);
   }
   refreshFbsOrders();
 }
@@ -2284,8 +2284,9 @@ async function cancelFbsOrder(orderId){
   if(!order) return;
   if(!await customConfirm(`Отменить заказ №${orderId}?`)) return;
   const wasConfirmed = order.supplierStatus === 'confirm';
-  sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'cancel', orderId } }).then(({data, error})=>{
+  sb.functions.invoke('wb-orders-ts', { body: { clientId: order.clientId, action:'cancel', orderId } }).then(async ({data, error})=>{
     if(error || (data && data.error)){ toast('WB: ' + (data && data.error ? data.error : (error?error.message:'ошибка'))); return; }
+    if(data.restored) await loadInventory();
     order.supplierStatus = 'cancel';
     fbsOrders = fbsOrders.filter(o=>o.orderId!==orderId);
     toast(`Заказ №${orderId} отменён${data.restored ? ' — остаток возвращён на склад' : (wasConfirmed || order.stockDeducted) && !order.outOfStock ? ' — оформите возврат по номеру заказа' : ''}`);
