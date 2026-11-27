@@ -44,6 +44,13 @@ for(const role of ['anon','authenticated','service_role']){
     assert.equal(await first("select has_function_privilege($1,$2,'execute')",[role,signature]),role==='service_role');
   }
 }
+const dateInMoscow = await first("select to_char(statement_timestamp() at time zone 'Europe/Moscow','DD.MM.YYYY')");
+assert.equal(await first("select next_wb_supply_name('cabinet-a')"),`Телепак - ${dateInMoscow} - 1`);
+assert.equal(await first("select next_wb_supply_name('cabinet-a')"),`Телепак - ${dateInMoscow} - 2`);
+assert.equal(await first("select next_wb_supply_name('cabinet-b')"),`Телепак - ${dateInMoscow} - 1`);
+await db.exec("insert into wb_supply_daily_numbers values ('cabinet-c', (now() at time zone 'Europe/Moscow')::date-1, 7)");
+assert.equal(await first("select next_wb_supply_name('cabinet-c')"),`Телепак - ${dateInMoscow} - 1`);
+assert.equal(await first("select has_function_privilege('authenticated','public.next_wb_supply_name(text)','execute')"),false);
 await db.exec(`select trigger_wb_fetch_new(); select trigger_wb_push_stocks(); select trigger_wb_recheck_pending_kiz();`);
 assert.equal(await first("select wb_available from get_available_stock('C') where sku='A'"),97);
 const deduct=(id,sku)=>first("select wb_fbs_deduct($1,'c',$2,'','MAIN','staff','Tester')",[id,sku]);
@@ -110,14 +117,17 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
         };
         return query;
       },
-      rpc:async(name,args)=>({data:name==='current_employee'
+      rpc:async(name,args)=>({data:name==='next_wb_supply_name' ? 'Телепак - 10.10.2026 - 1' : name==='current_employee'
         ? {id:'staff',warehouse_id:employeeWarehouse} : args.permission_name==='fbs' && allowed}),
     };
     const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{env:{get:key=>({SUPABASE_URL:'https://invalid.example',WMS_WB_TEST_TOKEN:'sandbox-only'})[key]}},Response,Request,URL,
       fetch:async(url,init)=>{
         assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
         calls.push(init.method);
-        if(init.method==='POST') return Response.json({id:'WB-GI-SAND-1'},{status:201});
+        if(init.method==='POST'){
+          assert.deepEqual(JSON.parse(init.body),{name:'Телепак - 10.10.2026 - 1'});
+          return Response.json({id:'WB-GI-SAND-1'},{status:201});
+        }
         assert.deepEqual(JSON.parse(init.body),{orders:[1]});
         return new Response(null,{status:204});
       }};

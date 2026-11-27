@@ -100,7 +100,9 @@ Deno.serve(async(req)=>{
     const {data:attached,error}=await sb.from("wb_orders").select("order_id,wb_warehouse_id").eq("client_id",clientId).in("order_id",ids);
     if(!error&&attached&&attached.length===ids.length&&(!warehouseId||attached.every((z:any)=>String(z.wb_warehouse_id||"")===String(warehouseId))))return x.id;
    }catch{}}
-   const made=await wb("/api/v3/supplies","POST",{name:(purpose==="b2b"?"Юрлица — ":"FBS — ")+new Date().toISOString().slice(0,10)});
+   const {data:supplyName,error:nameError}=await sb.rpc("next_wb_supply_name",{p_client_id:clientId});
+   if(nameError||!supplyName) throw new Error("Не удалось назначить номер поставки WB");
+   const made=await wb("/api/v3/supplies","POST",{name:supplyName});
    if(!made?.id) throw new Error("WB не вернул ID новой поставки");
    const {error}=await sb.from("wb_supplies").insert({id:made.id,client_id:clientId,client_name:client.name,status:"open",purpose});
    if(error)throw new Error("Поставка создана в WB, но не записана в базе: "+error.message);
