@@ -44,12 +44,34 @@ function ensureBrakWarehouse(){
     if(error) console.error(error);
   });
 }
-function submitReturn(resolution){
+let wbReturnInFlight = false;
+async function submitReturn(resolution){
+  if(wbReturnInFlight) return;
   if(!foundReturnItem){ toast('Сначала найдите товар'); return; }
   const item = foundReturnItem;
   const qty = Math.max(1, parseInt(document.getElementById('returnQty').value) || 1);
   const reason = document.getElementById('returnReason').value;
   const orderId = document.getElementById('returnOrderId').value.trim();
+  if(orderId){
+    const client = clients.find(c=>c.name===item.client);
+    if(!client){ toast('Клиент товара не найден'); return; }
+    if(!/^\d+$/.test(orderId)){ toast('Введите числовой номер заказа WB'); return; }
+    wbReturnInFlight = true;
+    try {
+      const res = await sb.functions.invoke('wb-orders-ts',{body:{clientId:client.id,action:'restore_fbs',orderId,sku:item.sku,size:item.size||'',warehouse:item.warehouseId||'MAIN',qty,resolution,reason}});
+      if(res.error || !res.data?.ok) throw new Error(await extractEdgeFunctionError(res.data,res.error));
+      if(res.data.tracked){
+        await Promise.all([loadInventory(),loadReturns()]);
+        foundReturnItem=null;
+        document.getElementById('returnBarcode').value='';
+        document.getElementById('returnOrderId').value='';
+        renderReturns();
+        toast(res.data.applied?(res.data.stockSyncError?'Возврат оформлен, синхронизация WB требует проверки':'Возврат оформлен сервером'):'Возврат уже оформлен ранее');
+        return;
+      }
+    } catch(e){ toast('Возврат не подтверждён: '+(e.message||e)); return; }
+    finally { wbReturnInFlight=false; }
+  }
   const id = 'RET-' + Date.now();
   const createdAt = new Date().toISOString();
   const entry = {id, sku:item.sku, name:item.name, size:item.size||'', clientName:item.client||'', warehouseId:item.warehouseId||'MAIN', qty, orderId:orderId||'', reason:reason||'', resolution, employeeName: currentUser?currentUser.name:'', createdAt};
