@@ -1310,7 +1310,7 @@ function wizardBarcodeConfirmed(order){
   const kizInput = document.getElementById('wizardKizInput');
   if(kizInput && !kizDone){
     kizInput.disabled = false;
-    forceEnglishInput(kizInput);
+    forceEnglishInput(kizInput,{f8AsGs:true});
     kizInput.focus();
     toast('Теперь отсканируйте КИЗ этой единицы');
   } else {
@@ -1726,7 +1726,7 @@ function forceShowWizardKiz(orderId){
     <div id="wizardKizStatus" style="font-size:12px;margin-bottom:6px">${renderKizStatusLabel(order)}</div>
     <div style="margin-bottom:14px"><span style="font-size:11px;color:var(--accent);cursor:pointer" onclick="openKizScannerTest()">🔧 Проверка сканера КИЗ</span></div>
   `;
-  forceEnglishInput(document.getElementById('wizardKizInput'));
+  forceEnglishInput(document.getElementById('wizardKizInput'),{f8AsGs:true});
   document.getElementById('wizardKizInput').focus();
   wireWizardKizInput(order);
 }
@@ -1750,7 +1750,7 @@ function openKizScannerTest(){
   document.body.appendChild(overlay);
   const input = overlay.querySelector('#kizTestInput');
   const result = overlay.querySelector('#kizTestResult');
-  forceEnglishInput(input);
+  forceEnglishInput(input,{f8AsGs:true});
   let keys = [];
   input.addEventListener('keydown', (e)=>{
     if(e.key==='Enter'){

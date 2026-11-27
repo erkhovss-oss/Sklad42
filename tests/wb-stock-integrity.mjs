@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
 process.chdir(fileURLToPath(new URL('..',import.meta.url)));
 const core = fs.readFileSync('js/01-core.js','utf8');
-const scannerCode = core.slice(core.indexOf('const GS_CHAR'),core.indexOf('const RU_TO_EN_MAP'));
+const scannerCode = core.slice(core.indexOf('const US_LAYOUT_MAP'),core.indexOf('// ---------- ЗВУК'));
 const scanner = vm.createContext({});
 vm.runInContext(scannerCode,scanner);
 const gs = String.fromCharCode(29);
@@ -21,6 +21,18 @@ for(const scan of [segments.join(''),segments[0]+gs+segments[1]+segments[2],
 assert.equal(scanner.normalizeKizInput(fullKiz).restored,false);
 const truncated = fullKiz.slice(0,-1);
 assert.equal(scanner.normalizeKizInput(truncated).code,truncated);
+
+function scanKeys(options, keys){
+  const input={dataset:{},value:'',selectionStart:0,selectionEnd:0,
+    addEventListener(_event,handler){this.handle=handler;}};
+  scanner.forceEnglishInput(input,options);
+  for(const key of keys) input.handle({...key,preventDefault(){}});
+  return input.value;
+}
+assert.equal(scanKeys({f8AsGs:true},[
+  {key:'F8'},{key:']',code:'BracketRight',ctrlKey:true},{key:'Ф',code:'KeyA',shiftKey:false},
+]),gs+gs+'a');
+assert.equal(scanKeys({},[{key:'F8'}]),'');
 
 const withQuote = ['01046070095200012112345"7890123',segments[1],segments[2]].join(gs);
 const serialized = JSON.stringify(withQuote);

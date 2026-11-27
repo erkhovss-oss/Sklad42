@@ -324,11 +324,11 @@ function fromRuLayout(str){
   const s = String(str==null?'':str);
   return /[а-яёА-ЯЁ]/.test(s) ? s.replace(/[а-яёА-ЯЁ]/g, c=>RU_TO_EN_MAP[c]||c) : s;
 }
-function forceEnglishInput(input){
+function forceEnglishInput(input, {f8AsGs=false} = {}){
   if(!input || input.dataset.forceEnDone) return;
   input.dataset.forceEnDone = '1';
   input.addEventListener('keydown', function(e){
-    if((e.ctrlKey && !e.altKey && !e.metaKey && (e.code==='BracketRight' || e.key===']')) || e.key===GS_CHAR){
+    if((e.ctrlKey && !e.altKey && !e.metaKey && (e.code==='BracketRight' || e.key===']')) || e.key===GS_CHAR || (f8AsGs && e.key==='F8' && !e.ctrlKey && !e.altKey && !e.metaKey)){
       e.preventDefault();
       insertTextAtCursor(input, GS_CHAR);
       return;
