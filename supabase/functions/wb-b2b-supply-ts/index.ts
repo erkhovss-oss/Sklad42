@@ -96,9 +96,11 @@ export default {
         } catch (_e) { /* skip unverifiable supply */ }
       }
       if (!supplyId) {
+        const { data: supplyName, error: nameError } = await sb.rpc('next_wb_supply_name', { p_client_id: clientId });
+        if (nameError || !supplyName) return json({ error: 'Не удалось назначить номер поставки WB' }, 500);
         const cr = await fetch(`${marketplace()}/api/v3/supplies`, {
           method: 'POST', headers,
-          body: JSON.stringify({ name: 'Юрлица — ' + new Date().toISOString().slice(0, 10) }),
+          body: JSON.stringify({ name: supplyName }),
         });
         const ct = await cr.text();
         if (!cr.ok) return json({ error: `WB (создание поставки для юрлиц): ${cr.status} ${ct.slice(0, 300)}` }, 502);
