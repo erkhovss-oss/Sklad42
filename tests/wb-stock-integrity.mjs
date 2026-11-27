@@ -92,40 +92,67 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
   const result=ts.transpileModule(src,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},reportDiagnostics:true});
   assert.equal(result.diagnostics.length,0);
   if(slug==='wb-b2b-supply-ts'){
-    let allowed=false, status='new', attached=false;
-    const query={
-      select:()=>query, eq:()=>query, update:()=>query,
-      single:async()=>({data:{wb_key:'synthetic'}}),
-      maybeSingle:async()=>({data:attached ? null : {wb_warehouse_id:'1', supplier_status:status,
-        requires_kiz:true, wb_status:null, wb_supply_id:null}}),
+    let allowed=false, status='new', employeeWarehouse='OTHER';
+    let confirmed=false;
+    const calls=[];
+    const sb={
+      auth:{getUser:async()=>({data:{user:{id:'staff-auth'}}})},
+      from:(table)=>{
+        const query={
+          select:()=>query, eq:()=>query,
+          insert:async()=>({}),
+          order:async()=>({data:[]}),
+          update:(row)=>{confirmed=row.supplier_status==='confirm';return query;},
+          single:async()=>({data:{wb_key:'synthetic'}}),
+          maybeSingle:async()=>({data:table==='wb_fbs_stock_operations'
+            ? {state:'deducted',items:[{warehouse:'MAIN'}]}
+            : confirmed ? {order_id:1} : {wb_warehouse_id:'1',supplier_status:status,requires_kiz:true,wb_status:null}}),
+        };
+        return query;
+      },
+      rpc:async(name,args)=>({data:name==='current_employee'
+        ? {id:'staff',warehouse_id:employeeWarehouse} : args.permission_name==='fbs' && allowed}),
     };
-    const sb={auth:{getUser:async()=>({data:{user:{id:'staff-auth'}}})},from:()=>query,
-      rpc:async()=>({data:allowed})};
     const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{env:{get:key=>({SUPABASE_URL:'https://invalid.example',WMS_WB_TEST_TOKEN:'sandbox-only'})[key]}},Response,Request,URL,
-      fetch:async()=>{attached=true;throw Error('Unexpected marketplace call');}};
+      fetch:async(url,init)=>{
+        assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
+        calls.push(init.method);
+        if(init.method==='POST') return Response.json({id:'WB-GI-SAND-1'},{status:201});
+        assert.deepEqual(JSON.parse(init.body),{orders:[1]});
+        return new Response(null,{status:204});
+      }};
     vm.runInNewContext(result.outputText,sandbox);
-    const invoke=()=>sandbox.exports.default.fetch(new Request('https://invalid.example',{method:'POST',
-      headers:{Authorization:'Bearer synthetic'},body:JSON.stringify({clientId:'c',orderId:1,action:'add_order'})}));
+    const invoke=(kizCode)=>sandbox.exports.default.fetch(new Request('https://invalid.example',{method:'POST',
+      headers:{Authorization:'Bearer synthetic'},body:JSON.stringify({clientId:'c',orderId:1,action:'add_order',kizCode})}));
     assert.equal((await invoke()).status,403);
     allowed=true;
     assert.match((await (await invoke()).json()).error,/КИЗ/);
     status='cancel';
     assert.match((await (await invoke()).json()).error,/закрыт/);
-    assert.equal(attached,false);
-    console.log('WB B2B mock: permission, KIZ and canceled order gates');
+    status='new';
+    assert.equal((await invoke('synthetic')).status,403);
+    assert.deepEqual(calls,[]);
+    employeeWarehouse='MAIN';
+    const accepted=await invoke('synthetic');
+    assert.equal(accepted.status,200);
+    assert.equal((await accepted.json()).wbSupplyId,'WB-GI-SAND-1');
+    assert.equal(confirmed,true);
+    assert.deepEqual(calls,['POST','PATCH']);
+    console.log('WB B2B mock: permission, warehouse, KIZ, canceled order and successful confirmation');
     continue;
   }
   if(slug==='wb-orders-ts'){
     const orders=new Map();
-    let upstream=0, pushes=0, deductions=0;
+    let upstream=0, pushes=0, deductions=0, sentKiz;
+    let supplierStatus="new";
     let orderHandler;
     const sb={
       auth:{getUser:async()=>({data:{user:{id:'staff-auth'}}})},
       from:(table)=>{
         const query={
-          eq:()=>query,
+          eq:()=>query, in:()=>query, not:()=>query,
           maybeSingle:async()=>({data: table==='wb_orders'
-            ? {order_id:1,requires_kiz:true,supplier_status:'new'}
+            ? {order_id:1,requires_kiz:true,supplier_status:supplierStatus}
             : {id:'c',name:'C',wb_key:'synthetic',wb_warehouse_id:'1',wb_warehouse_ids:['1','2']}}),
           single:async()=>({data:table==='employees'
             ? {id:'staff',name:'Tester',role_id:'test',warehouse_id:'MAIN'}
@@ -138,7 +165,7 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
           for(const r of fresh) orders.set(r.order_id,r);
           return {data:fresh};
         }}),
-        update:()=>({eq:async()=>({})}),
+        update:()=>query,
       }; },
       rpc:async(name)=>{
         if(name==='wb_fbs_deduct') deductions++;
@@ -146,11 +173,16 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
       },
     };
     const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{serve:handler=>{orderHandler=handler;},env:{get:k=>({SUPABASE_URL:'https://invalid.example',SUPABASE_SERVICE_ROLE_KEY:'test-token',WMS_WB_CRON_TOKEN:'cron-test',WMS_WB_TEST_TOKEN:'sandbox-only'})[k]}},Response,Request,URL,
-      fetch:async(url)=>{
+      fetch:async(url, init)=>{
+        if(url.endsWith('/meta/sgtin')){
+          sentKiz=JSON.parse(init.body).sgtins[0];
+          return new Response(null,{status:204});
+        }
+        if(url.endsWith('/orders/meta')) return Response.json({orders:[{orderId:1,meta:{sgtin:{status:'filled'}}}]});
         if(url.endsWith('/api/v3/orders/new')){
           assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
           upstream++;
-          return Response.json({orders:[{id:1,warehouseId:1,skus:['10']},{id:2,warehouseId:2,skus:['10']},{id:3,warehouseId:3,skus:['10']}]});
+          return Response.json({orders:[{id:1,warehouseId:1,skus:['10'],requiredMeta:['sgtin']},{id:2,warehouseId:2,skus:['10']},{id:3,warehouseId:3,skus:['10']}]});
         }
         if(url.endsWith('/wb-sync-stocks-ts')){pushes++;return Response.json({ok:true});}
         throw Error('Unexpected endpoint');
@@ -163,6 +195,8 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     const fresh=await (await invoke(h)).json();
     assert.equal(fresh.fetched,2);
     assert.equal(fresh.skippedWrongWarehouse,1);
+    assert.equal(orders.get(1).requires_kiz,true);
+    assert.equal(orders.get(2).requires_kiz,null);
     assert.equal((await (await invoke(h)).json()).fetched,0);
     assert.equal(pushes,1);
     const staff={Authorization:'Bearer staff-test'};
@@ -171,6 +205,12 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     assert.equal(deductions,0);
     assert.equal((await invoke(staff,{...deduction,kizCode:'synthetic-kiz'})).status,200);
     assert.equal(deductions,1);
+    supplierStatus='confirm';
+    const scanned='010460700952000121SYNTHETIC\u001d91TEST';
+    const response=await invoke(staff,{action:'attach_kiz',orderId:1,kizCode:scanned});
+    assert.equal(response.status,200);
+    assert.equal((await response.json()).kizStatus,'attached');
+    assert.equal(sentKiz,scanned);
     console.log('WB orders mock: cron auth, selected warehouses, duplicate import, changed stock push, mandatory KIZ');
     continue;
   }

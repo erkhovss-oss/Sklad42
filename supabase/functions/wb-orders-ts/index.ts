@@ -65,21 +65,31 @@ Deno.serve(async(req)=>{
     price:o.price??null,supplier_status:o.supplierStatus??"new",wb_status:o.wbStatus??null,
     wb_warehouse_id:String(o.warehouseId),
     is_b2b:typeof o.options?.isB2B==="boolean"?o.options.isB2B:null,
-    order_created_at:o.createdAt??null,rid:o.rid??null,requires_kiz:null
+    order_created_at:o.createdAt??null,rid:o.rid??null,requires_kiz:Array.isArray(o.requiredMeta)&&o.requiredMeta.includes("sgtin")?true:null
    }));
    const {data:insertedRows,error}=await sb.from("wb_orders").upsert(rows,{onConflict:"order_id",ignoreDuplicates:true}).select("order_id");
    if(error) throw new Error("Запись заказов: "+error.message);
    for(const row of rows){if(row.is_b2b===null)continue; const {error:be}=await sb.from("wb_orders").update({is_b2b:row.is_b2b}).eq("client_id",clientId).eq("order_id",row.order_id).is("is_b2b",null); if(be)throw new Error("Запись B2B: "+be.message);}
+   const marked=rows.filter(row=>row.requires_kiz===true).map(row=>row.order_id);
+   for(let offset=0;offset<marked.length;offset+=200){
+    const {error:markError}=await sb.from("wb_orders").update({requires_kiz:true})
+     .eq("client_id",clientId).in("order_id",marked.slice(offset,offset+200)).not("requires_kiz","is",true);
+    if(markError) throw new Error("Запись требований КИЗ: "+markError.message);
+   }
    return insertedRows?.length??0;
   };
   const meta=async(id:number)=>await wb("/api/marketplace/v3/orders/meta","POST",{orders:[id]});
+  const requiresKiz=(item:any)=>{
+   const sgtin=(item.meta||item).sgtin;
+   return sgtin?.required===true || sgtin?.status==="required" || item.isKizRequired===true ||
+    (Array.isArray(item.requiredMeta) && item.requiredMeta.includes("sgtin"));
+  };
   const checkKiz=async(o:any,id:number,code:unknown)=>{
    if(o.requires_kiz!==true && o.requires_kiz!==false){
     const response=await meta(id);
     const item=(response.orders||[]).find((x:any)=>Number(x.orderId??x.id)===id);
     if(!item) throw new Error("WB не подтвердил требования маркировки заказа");
-    const sgtin=(item.meta||item).sgtin;
-    o.requires_kiz=!!(sgtin?.required||sgtin?.status==="required"||item.isKizRequired);
+    o.requires_kiz=requiresKiz(item);
     await updateOrder(id,{requires_kiz:o.requires_kiz});
    }
    if(o.requires_kiz && (typeof code!=="string" || !code.trim()))
@@ -242,11 +252,11 @@ Deno.serve(async(req)=>{
    }
    case "check_meta":{
     const id=Number(b.orderId);
-    await getOrder(id);
+    const order=await getOrder(id);
     const d=await meta(id);
     const item=(d.orders||[]).find((x:any)=>Number(x.orderId??x.id)===id);
     if(!item) return json({error:"WB не подтвердил требования маркировки заказа"},502);
-    const sgtin=(item.meta||item).sgtin;const required=!!(sgtin?.required||sgtin?.status==="required"||item.isKizRequired);
+    const required=order.requires_kiz===true || requiresKiz(item);
     await updateOrder(id,{requires_kiz:required});
     return json({ok:true,requiresKiz:required,meta:item.meta||item});
    }
@@ -330,11 +340,10 @@ Deno.serve(async(req)=>{
    default:return json({error:"Неизвестное действие: "+action},400);
   }
   async function attachKiz(id:number,kiz:string){
-   if(!id||!kiz)throw new Error("orderId и kizCode обязательны");
+   if(!id||!kiz.trim())throw new Error("orderId и kizCode обязательны");
    const o=await getOrder(id);
    if(o.supplier_status!=="confirm")throw new Error("Сначала добавьте заказ в поставку (статус confirm)");
-   const normalized=kiz.replace(/\u001d/g,"");
-   await wb("/api/v3/orders/"+id+"/meta/sgtin","PUT",{sgtins:[normalized]});
+   await wb("/api/v3/orders/"+id+"/meta/sgtin","PUT",{sgtins:[kiz]});
    let status="pending",decision=null,warning=null;
    try{const d=await meta(id);const it=(d.orders||[])[0]||{};const s=(it.meta||it).sgtin;decision=s?.status||null;status=["filled","accepted","optional"].includes(decision)?"attached":decision==="rejected"?"rejected":"pending";}catch(e){warning=String(e);}
    await updateOrder(id,{kiz_code:kiz,kiz_status:status,kiz_decision:decision,kiz_updated_at:new Date().toISOString(),requires_kiz:true});
