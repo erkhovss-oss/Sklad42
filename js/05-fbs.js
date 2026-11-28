@@ -895,6 +895,19 @@ function toggleAllFbsCloseSelected(checked, visibleIds){
   fbsCloseSelectedOrders = checked ? [...new Set(visibleIds)] : [];
   renderFbsBody();
 }
+function fbsSupplyWarehouseLabel(orders){
+  const client = clients.find(c=>c.id===orders[0]?.clientId);
+  const ids = [...new Set(orders.map(order=>String(order.wbWarehouseId||'')))];
+  const names = new Map((client?.wbWarehousesList||[]).map(warehouse=>[String(warehouse.id),warehouse.name]));
+  const selected = (client?.wbWarehouseIds||[client?.wbWarehouseId]).map(String);
+  return ids.map(id=>{
+    if(!id) return 'Склад WB не определён';
+    const name = names.get(id);
+    const type = id===String(client?.wbWarehouseId||'') ? 'основной'
+      : selected.includes(id) ? 'дополнительный' : '';
+    return `Склад WB ${id}${name ? ' — '+name : ''}${type ? ' ('+type+')' : ''}`;
+  }).join(' · ');
+}
 function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
   if(!rows.length) return '';
   const groups = {};
@@ -936,6 +949,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
         <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;flex-wrap:wrap;gap:10px">
           <div style="cursor:pointer;flex:1" onclick="toggleFbsSupplyGroup('${escapeHtml(key)}')">
             <div style="font-weight:600;font-size:14px">${g.supplyId ? 'Поставка ' + escapeHtml(g.supplyId) : 'Без номера поставки'}${!clientId?` · ${escapeHtml(g.clientName)}`:''}</div>
+            <div style="font-size:12px;color:var(--ink-soft);margin-top:2px">${escapeHtml(fbsSupplyWarehouseLabel(g.orders))}</div>
             <div style="font-size:12px;color:var(--ink-faint)">${g.orders.length} заказ(ов)${isDelivered && fbsGroupSummary(g.orders) ? ' · ' + fbsGroupSummary(g.orders) : ''}${missingKizInGroup?` · ⚠ КИЗ не привязан: ${missingKizInGroup}`:''}${outOfStockInGroup?` · ❌ нет на складе: ${outOfStockInGroup}`:''}</div>
           </div>
           ${isDelivered && g.supplyId ? `<button class="btn btn-ghost" style="padding:6px 12px" onclick="downloadSupplyBarcode('${escapeHtml(g.supplyId)}','${escapeHtml(g.orders[0].clientId)}')">📥 QR поставки</button>` : ''}
