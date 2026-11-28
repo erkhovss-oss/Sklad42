@@ -858,7 +858,7 @@ async function discoverMissingFbsOrders(){
   const targets = clientId ? [clientId] : clients.filter(c=>c.wbConnected).map(c=>c.id);
   if(!targets.length) return;
   toast('Ищем заказы за последние 30 дней, которых нет в системе — это может занять минуту…');
-  let totalFound = 0, totalMissing = 0, totalInserted = 0;
+  let totalFound = 0, totalMissing = 0, totalInserted = 0, skippedWithoutStatus = 0;
   const errors = [];
   for(const cid of targets){
     const client = clients.find(c=>c.id===cid);
@@ -870,13 +870,19 @@ async function discoverMissingFbsOrders(){
       totalFound += data.found||0;
       totalMissing += data.missingCount||0;
       totalInserted += data.inserted||0;
+      skippedWithoutStatus += data.skippedWithoutStatus||0;
       if(data.insertError) errors.push(`«${clientLabel}»: ошибка записи в базу — ${data.insertError}`);
     }catch(e){ errors.push(`«${clientLabel}»: ${e.message||e}`); }
   }
   await loadFbsOrders();
   renderFbsBody();
-  if(errors.length) toast(`Ошибки у ${errors.length} клиент(ов): ${errors.join(' | ')}`);
-  else toast(`У WB за 30 дней: ${totalFound}. Не было в системе: ${totalMissing}. Добавлено: ${totalInserted}.`);
+  const summary = `У WB за 30 дней: ${totalFound}. Не было в системе: ${totalMissing}. Добавлено: ${totalInserted}.`;
+  if(errors.length){
+    console.error('Поиск пропущенных заказов WB', errors);
+    toast(`${summary} Ошибка у ${errors.length} из ${targets.length} клиентов. ${errors[0]}`);
+  }else{
+    toast(summary + (skippedWithoutStatus ? ` Пропущено без статуса WB: ${skippedWithoutStatus}.` : ''));
+  }
 }
 let fbsCloseSelectedOrders = [];
 function toggleFbsCloseSelected(orderId, checked){

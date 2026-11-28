@@ -80,7 +80,7 @@ Deno.serve(async(req)=>{
     nm_id:o.nmId??null,chrt_id:o.chrtId??null,article:o.article??String(o.nmId??""),
     barcode:(o.skus||[])[0]??o.barcode??null,name:o.name??null,size:o.techSize??o.size??null,
     price:o.price??null,supplier_status:o.supplierStatus??"new",wb_status:o.wbStatus??null,
-    wb_warehouse_id:String(o.warehouseId),
+    wb_warehouse_id:String(o.warehouseId),wb_supply_id:o.supplyId??null,
     is_b2b:typeof o.options?.isB2B==="boolean"?o.options.isB2B:null,
     order_created_at:o.createdAt??null,rid:o.rid??null,requires_kiz:Array.isArray(o.requiredMeta)&&o.requiredMeta.includes("sgtin")?true:null
    }));
@@ -339,12 +339,48 @@ Deno.serve(async(req)=>{
     return json({ok:true,orphans:(orphans||[]).length,matched});
    }
    case "discover_missing_orders":{
-    const from=Math.floor(Date.now()/1000)-30*86400;let next=0,all:any[]=[];
-    for(let page=0;page<10;page++){const q=await wb("/api/v3/orders?limit=1000&dateFrom="+from+(next?"&next="+next:""));all.push(...(q.orders||[]));next=q.next||0;if(!next||!(q.orders||[]).length)break;}
-    const {data:existing}=await sb.from("wb_orders").select("order_id").eq("client_id",clientId).in("order_id",all.map(x=>Number(x.id??x.orderId)).filter(Boolean));
-    const have=new Set((existing||[]).map(x=>Number(x.order_id)));const missing=all.filter(x=>!have.has(Number(x.id??x.orderId)));
-    let inserted=0,insertError=null;try{inserted=await upsertOrders(missing);}catch(e){insertError=String(e);}
-    return json({ok:true,found:all.length,missingCount:missing.length,inserted,skippedWrongWarehouse,allowedWarehouseIds:configuredWarehouseIds,insertError});
+    if(!allowedWarehouseIds.size) return json({error:"Не настроены разрешённые склады WB клиента"},400);
+    const dateTo=Math.floor(Date.now()/1000);
+    const dateFrom=dateTo-30*86400+1;
+    const eligible=new Map<number,any>();
+    let next=0,found=0;
+    for(let page=0;page<10;page++){
+     const params=new URLSearchParams({limit:"1000",next:String(next),dateFrom:String(dateFrom),dateTo:String(dateTo)});
+     const response=await wb("/api/v3/orders?"+params);
+     const rows=response.orders||[];
+     found+=rows.length;
+     for(const order of rows){
+      const id=Number(order.id??order.orderId);
+      if(Number.isSafeInteger(id)&&id>0&&allowedWarehouseIds.has(String(order.warehouseId??""))) eligible.set(id,order);
+     }
+     if(!rows.length||!response.next||response.next===next) break;
+     next=response.next;
+    }
+    const ids=Array.from(eligible.keys());
+    const missing:number[]=[];
+    for(let offset=0;offset<ids.length;offset+=200){
+     const batch=ids.slice(offset,offset+200);
+     const {data:existing,error}=await sb.from("wb_orders").select("order_id").eq("client_id",clientId).in("order_id",batch);
+     if(error) throw error;
+     const have=new Set((existing||[]).map(row=>Number(row.order_id)));
+     missing.push(...batch.filter(id=>!have.has(id)));
+    }
+    const recovered=[];
+    for(let offset=0;offset<missing.length;offset+=200){
+     const batch=missing.slice(offset,offset+200);
+     const response=await wb("/api/v3/orders/status","POST",{orders:batch});
+     const statuses=new Map((response.orders||[]).map((status:any)=>[Number(status.id),status]));
+     for(const id of batch){
+      const status:any=statuses.get(id);
+      if(typeof status?.supplierStatus!=="string"||typeof status.wbStatus!=="string") continue;
+      recovered.push({...eligible.get(id),supplierStatus:status.supplierStatus,wbStatus:status.wbStatus});
+     }
+    }
+    let inserted=0;
+    for(let offset=0;offset<recovered.length;offset+=200){
+     inserted+=await upsertOrders(recovered.slice(offset,offset+200));
+    }
+    return json({ok:true,found,missingCount:missing.length,inserted,skippedWithoutStatus:missing.length-recovered.length});
    }
    case "recheck_pending_kiz":{
     const {data:rows,error:readError}=await sb.from("wb_orders").select("order_id,kiz_code")
