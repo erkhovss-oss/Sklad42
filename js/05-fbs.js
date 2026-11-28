@@ -763,6 +763,7 @@ function setFbsView(view){
     pageSizeSelect.value = String(fbsCompletePageSize);
   }
   renderFbsBody();
+  if(isFbsHistoryView()) void loadFbsOrderHistory();
 }
 function renderFbsOrders(){
   renderFbsClientSelect();
@@ -772,16 +773,11 @@ function renderFbsOrders(){
       if(document.getElementById('tab-fbs').classList.contains('active') && !fbsAssemblyScreenOpen()) refreshFbsOrders();
     }, 30000);
   }
-  refreshFbsOrders();
+  if(Date.now()-fbsActiveLoad.updatedAt>=30000) void loadActiveFbsOrders();
 }
-let refreshingFbsOrders = false;
 async function refreshFbsOrders(){
-  if(refreshingFbsOrders) return;
-  refreshingFbsOrders = true;
-  try {
-    await loadFbsOrders();
-    if(!fbsAssemblyScreenOpen()) renderFbsBody();
-  } finally { refreshingFbsOrders = false; }
+  await loadActiveFbsOrders();
+  if(isFbsHistoryView()) await loadFbsOrderHistory();
 }
 async function syncFbsOrderStatuses(){
   const clientId = document.getElementById('fbsClientSelect').value;
@@ -826,7 +822,7 @@ async function fetchNewFbsOrders(silent){
       totalFetched += data.fetched||0;
     }catch(e){ errors.push(`«${clientLabel}»: ${e.message||e}`); }
   }
-  await loadFbsOrders();
+  await refreshFbsOrders();
   if(!silent){
     if(errors.length) toast(`Ошибки у ${errors.length} клиент(ов): ${errors.join(' | ')}`);
     else toast(`Проверено — новых заказов: ${totalFetched}`);
@@ -989,6 +985,13 @@ function renderFbsBody(){
   const clientId = document.getElementById('fbsClientSelect') ? document.getElementById('fbsClientSelect').value : '';
   const body = document.getElementById('fbsBody');
   fbsUpdateTabCounts();
+  const load = isFbsHistoryView() ? fbsHistoryLoad : fbsActiveLoad;
+  if(!load.ready){
+    body.innerHTML = load.error && !load.promise
+      ? `<div class="panel empty">Не удалось загрузить заказы <button class="btn btn-ghost" onclick="refreshFbsOrders()">Повторить</button></div>`
+      : `<div class="panel empty">Загружаем заказы…</div>`;
+    return;
+  }
   const rows = fbsOrders.filter(o=>(!clientId || o.clientId===clientId) && fbsTabOf(o)===fbsView)
     .sort((a,b)=> (a.clientName||'').localeCompare(b.clientName||'') || (a.article||'').localeCompare(b.article||'') || (a.barcode||'').localeCompare(b.barcode||''));
   // в «В доставке», «Завершённых», «Отменённых» и «Архиве» новые заказы сверху
@@ -1873,7 +1876,7 @@ function wireWizardKizInput(order){
     // Сканер иногда шлёт символы очень быстро — читаем значение поля не сразу,
     // а после того как браузер точно успел записать последний символ (иначе
     // изредка теряется самый последний символ кода, и проверка у WB не проходит).
-    setTimeout(()=>{
+    setTimeout(async ()=>{
       const norm = normalizeKizInput(kizInput.value);
       if(norm.invalidFormat){
         playBeep('error');
@@ -1890,6 +1893,12 @@ function wireWizardKizInput(order){
         toast(`Код слишком короткий (${kizCode.length} симв.) — отсканируйте ещё раз`);
         return;
       }
+      if(!fbsHistoryLoad.ready && !await loadFbsOrderHistory()){
+        playBeep('error');
+        toast('Не удалось проверить КИЗ по истории заказов. Повторите сканирование.');
+        return;
+      }
+      if(!kizInput.isConnected) return;
       const dup = findKizOnOtherOrder(kizCode, order.orderId);
       if(dup){ playBeep('error'); toast(`Этот КИЗ уже привязан к заказу №${dup.orderId} («${dup.name||dup.article}») — проверьте, тот ли код`); return; }
       wizardAttachKiz(order, kizCode, norm);
@@ -3709,13 +3718,47 @@ function printFbsSticker(orderId){
     win.document.close();
   });
 }
+const fbsActiveLoad = {ready:false,error:false,promise:null,updatedAt:0};
+const fbsHistoryLoad = {ready:false,error:false,promise:null};
+const isFbsHistoryView = ()=>fbsView!=='new' && fbsView!=='confirm';
+const isHistoricalFbsOrder = order=>['cancel','complete'].includes(order.supplierStatus);
+
 async function loadFbsOrders(){
+  await loadActiveFbsOrders();
+  await loadFbsOrderHistory();
+}
+function loadActiveFbsOrders(){ return loadFbsOrderPartition(fbsActiveLoad,false); }
+function loadFbsOrderHistory(){ return loadFbsOrderPartition(fbsHistoryLoad,true); }
+function loadFbsOrderPartition(state, history){
+  if(!state.promise){
+    state.promise = fetchFbsOrderPartition(history).then(success=>{
+      state.ready ||= success;
+      if(success && !history) state.updatedAt = Date.now();
+      state.error = !success;
+      return success;
+    }).catch(error=>{
+      console.error(error);
+      state.error = true;
+      return false;
+    }).finally(()=>{
+      state.promise = null;
+      if(isTabActive('tab-fbs') && !fbsAssemblyScreenOpen()){
+        if(history===isFbsHistoryView()) tryRealtimeRender('wb');
+        else fbsUpdateTabCounts();
+      }
+    });
+  }
+  return state.promise;
+}
+async function fetchFbsOrderPartition(history){
   let allRows = [];
   const pageSize = 1000;
   for(let from = 0; from < 15000; from += pageSize){
-    const { data, error } = await sb.from('wb_orders').select('*').order('created_at',{ascending:false}).range(from, from+pageSize-1);
-    if(error){ console.error(error); break; }
-    allRows = allRows.concat(data);
+    let query = sb.from('wb_orders').select('*').order('created_at',{ascending:false}).order('order_id',{ascending:false});
+    query = history ? query.in('supplier_status',['cancel','complete']) : query.or('supplier_status.is.null,supplier_status.not.in.(cancel,complete)');
+    const { data, error } = await query.range(from, from+pageSize-1);
+    if(error){ console.error(error); return false; }
+    allRows = allRows.concat(data || []);
     if(!data || data.length < pageSize) break;
   }
   const deductedIds = new Set();
@@ -3727,20 +3770,23 @@ async function loadFbsOrders(){
     (data||[]).forEach(r=>deductedIds.add(String(r.order_id)));
   }
   const pendingKizIds = new Set(fbsOrders.filter(order=>order.kizStatus==='pending').map(order=>order.orderId));
-  fbsOrders = allRows.map(o=>({
+  const loaded = allRows.map(o=>({
     orderId:o.order_id, rid:o.rid||'', clientId:o.client_id, clientName:o.client_name, nmId:o.nm_id, chrtId:o.chrt_id,
     article:o.article, barcode:o.barcode, name:o.name, size:o.size||'', price:o.price,
     supplierStatus:o.supplier_status, wbStatus:o.wb_status, wbSupplyId:o.wb_supply_id,
     stockDeducted:deductedIds.has(String(o.order_id)), stockStateKnown,
     isB2b:o.is_b2b, kizCode:o.kiz_code, requiresKiz:o.requires_kiz||false, wbWarehouseId:o.wb_warehouse_id||'', kizStatus:o.kiz_status||null, kizDecision:o.kiz_decision||null, stickerCode:o.sticker_code||null, pickedAt:o.picked_at||null, kizUpdatedAt:o.kiz_updated_at||null, outOfStock:o.out_of_stock||false, orderCreatedAt:o.order_created_at||null
   }));
-  for(const order of fbsOrders){
+  const loadedIds = new Set(loaded.map(order=>order.orderId));
+  fbsOrders = [...loaded,...fbsOrders.filter(order=>isHistoricalFbsOrder(order)!==history && !loadedIds.has(order.orderId))];
+  for(const order of loaded){
     if(!pendingKizIds.has(order.orderId)) continue;
     if(order.kizStatus==='rejected') notifyFbsKizRejected(order.orderId);
     if(order.kizStatus==='attached') notifyFbsKizAccepted(order.orderId,order.kizDecision);
   }
+  return true;
 }
-document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; refreshFbsOrders(); });
+document.getElementById('fbsClientSelect').addEventListener('change', ()=>{ fbsSelectedClientId = document.getElementById('fbsClientSelect').value; fbsCompletePage = 1; renderFbsBody(); });
 document.getElementById('fbsCompletePageSize').addEventListener('change', function(){ changeFbsCompletePageSize(this.value); });
 
 // ---------- OZON ORDERS ----------
