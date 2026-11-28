@@ -551,7 +551,11 @@ function tryRealtimeRender(kind){
 async function reloadRealtimeKind(kind){
   try{
     if(kind==='inventory') await loadInventory();
-    else if(kind==='wb') await loadFbsOrders();
+    else if(kind==='wb'){
+      if(isTabActive('tab-fbs')) await refreshFbsOrders();
+      else await loadActiveFbsOrders();
+      return; // загрузчик заказов сам обновляет список
+    }
     else if(kind==='ozon') await loadOzonOrders();
   }catch(e){ console.error('Realtime: не удалось обновить', kind, e); return; }
   tryRealtimeRender(kind);
@@ -589,7 +593,16 @@ function stopRealtime(){
 
 async function loadStaffData(){
   try{
-    await Promise.all([loadRoles(), loadEmployees(), loadInventory(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadClients(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadBoxSizes(), loadKizScans(), loadFbsOrders(), loadOzonOrders(), loadOzonOffers(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes(), loadConsumables(), loadKitComponents(), loadReturns()]);
+    const clientsLoaded = loadClients().then(()=>{
+      if(isTabActive('tab-fbs')){
+        renderFbsClientSelect();
+        tryRealtimeRender('wb');
+      }
+    });
+    const fbsLoaded = loadActiveFbsOrders();
+    void fbsLoaded.then(()=>loadFbsOrderHistory());
+    const inventoryLoaded = loadInventory().then(()=>tryRealtimeRender('wb'));
+    await Promise.all([clientsLoaded, fbsLoaded, inventoryLoaded, loadRoles(), loadEmployees(), loadInventoryBarcodes(), loadMovementLog(), loadWriteOffLog(), loadReceivingLog(), loadSupplies(), loadOutboundSupplies(), loadOutboundBoxes(), loadBoxSizes(), loadKizScans(), loadOzonOrders(), loadOzonOffers(), loadDdsEntries(), loadFbsTariffs(), loadTochkaSettings(), loadWarehouses(), loadCompanySettings(), loadStocktakes(), loadConsumables(), loadKitComponents(), loadReturns()]);
   }catch(err){
     console.error(err);
   }
@@ -604,7 +617,7 @@ async function loadStaffData(){
   let savedTab = null;
   try{ savedTab = localStorage.getItem('sklad42_active_tab'); }catch(e){}
   const validTabs = ['inventory','clients','storage','supplies','employees'];
-  if(savedTab && validTabs.includes(savedTab) && savedTab!=='inventory'){
+  if(savedTab && validTabs.includes(savedTab) && savedTab!=='inventory' && isTabActive('tab-inventory')){
     switchTab(savedTab);
   }
   applyNavPermissions();
