@@ -520,8 +520,10 @@ function applyNavPermissions(){
   }
 }
 let dashboardStats = null;
-let dashboardFbs = null;      // заказы FBS (WB / Ozon) по дням за выбранный период
+let dashboardFbs = null;      // заказы и начисления FBS за выбранный период
 let dashFbsClient = '';       // фильтр по клиенту в блоке «Заказы FBS» (пусто — все)
+let dashboardLoadId = 0;
+let dashFbsLoadId = 0;
 function setDashboardPeriod(days){
   const to = new Date();
   const from = new Date(); from.setDate(from.getDate() - (days-1));
@@ -530,6 +532,8 @@ function setDashboardPeriod(days){
   loadDashboard();
 }
 async function loadDashboard(){
+  const loadId = ++dashboardLoadId;
+  ++dashFbsLoadId;
   const body = document.getElementById('dashboardBody');
   let from = document.getElementById('dashDateFrom').value;
   let to = document.getElementById('dashDateTo').value;
@@ -542,27 +546,68 @@ async function loadDashboard(){
   body.innerHTML = `<div class="panel empty">Загрузка…</div>`;
   const [statsRes, fbsRes] = await Promise.all([
     sb.rpc('get_dashboard_stats', { p_date_from: from, p_date_to: to }),
-    sb.rpc('get_fbs_orders_stats', { p_date_from: from, p_date_to: to, p_client_name: dashFbsClient || null })
+    loadDashFbsData(from, to, dashFbsClient)
   ]);
+  if(loadId!==dashboardLoadId) return;
   const { data, error } = statsRes;
   if(error){ console.error(error); body.innerHTML = `<div class="panel empty">Не удалось загрузить аналитику</div>`; return; }
-  if(fbsRes.error) console.error(fbsRes.error);
-  dashboardFbs = fbsRes.error ? null : fbsRes.data;
+  dashboardFbs = fbsRes;
   dashboardStats = data;
   renderDashboard(data);
 }
 // смена клиента в блоке «Заказы FBS» — перезагружаем только его данные
 async function setDashFbsClient(name){
   dashFbsClient = name || '';
+  const loadId = ++dashFbsLoadId;
   const from = document.getElementById('dashDateFrom').value;
   const to = document.getElementById('dashDateTo').value;
-  const { data, error } = await sb.rpc('get_fbs_orders_stats', { p_date_from: from, p_date_to: to, p_client_name: dashFbsClient || null });
-  if(error){ console.error(error); toast('Не удалось обновить заказы FBS'); return; }
-  dashboardFbs = data;
+  const fbs = await loadDashFbsData(from, to, dashFbsClient);
+  if(loadId!==dashFbsLoadId) return;
+  dashboardFbs = fbs;
   if(dashboardStats) renderDashboard(dashboardStats);
+}
+async function loadDashFbsData(from, to, clientName){
+  const [orders, revenue] = await Promise.all([
+    sb.rpc('get_fbs_orders_stats', {p_date_from:from,p_date_to:to,p_client_name:clientName || null}),
+    hasPermission('dds') ? loadDashFbsRevenue(from, to, clientName) : null
+  ]);
+  if(orders.error) console.error(orders.error);
+  return {orders:orders.error ? null : orders.data,revenue};
+}
+async function loadDashFbsRevenue(from, to, clientName){
+  const warehouse = myWarehouseId();
+  const sums = {total:0,wb:0,ozon:0};
+  const pageSize = 500;
+  for(let offset=0;;offset+=pageSize){
+    let query = sb.from('dds_entries').select('id,amount').eq('type','income').eq('category','Отгрузка FBS')
+      .gte('date',from).lte('date',to).order('id');
+    if(clientName) query = query.eq('client_name',clientName);
+    if(warehouse==='MAIN') query = query.or('warehouse_id.eq.MAIN,warehouse_id.is.null');
+    else if(warehouse) query = query.eq('warehouse_id',warehouse);
+    const {data,error} = await query.range(offset,offset+pageSize-1);
+    if(error){ console.error(error); return {error:true}; }
+    for(const {id,amount} of data){
+      const kopeks = Math.round(Number(amount)*100);
+      sums.total += kopeks;
+      if(id.startsWith('FBS-SHIP-') || id.startsWith('FILE-SHIP-wb-')) sums.wb += kopeks;
+      if(id.startsWith('OZON-SHIP-') || id.startsWith('FILE-SHIP-ozon-')) sums.ozon += kopeks;
+    }
+    if(data.length<pageSize) return sums;
+  }
 }
 const FBS_WB_COLOR = '#A33FB0';
 const FBS_OZON_COLOR = '#1F6FEB';
+function renderDashFbsRevenue(revenue){
+  if(!revenue) return '';
+  const heading = '<div class="eyebrow" style="margin-bottom:8px">Выручка FBS · по дате начисления в ДДС</div>';
+  if(revenue.error) return `${heading}<div style="color:var(--ink-faint);font-size:13px;margin-bottom:14px">Не удалось загрузить выручку FBS</div>`;
+  const rubles = amount => `${(amount/100).toLocaleString('ru-RU',{maximumFractionDigits:2})} ₽`;
+  return `${heading}<div class="stat-row" style="margin-bottom:14px">
+    <div class="stat"><div class="val" style="color:${FBS_WB_COLOR}">${rubles(revenue.wb)}</div><div class="lbl">Выручка Wildberries</div></div>
+    <div class="stat"><div class="val" style="color:${FBS_OZON_COLOR}">${rubles(revenue.ozon)}</div><div class="lbl">Выручка Ozon</div></div>
+    <div class="stat"><div class="val" style="color:var(--ok)">${rubles(revenue.total)}</div><div class="lbl">Всего выручка FBS</div></div>
+  </div>`;
+}
 function renderFbsOrdersChart(rows, w, h){
   if(!rows || !rows.length) return `<div style="color:var(--ink-faint);font-size:13px;padding:20px 0">Нет данных за период</div>`;
   const max = Math.max(1, ...rows.map(r=>Math.max(r.wb, r.ozon)));
@@ -586,25 +631,25 @@ function renderFbsOrdersChart(rows, w, h){
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">${grid}${groups}</svg>`;
 }
 function renderDashFbsPanel(){
-  const f = dashboardFbs;
+  const f = dashboardFbs?.orders;
   const clientOpts = `<option value="">Все клиенты</option>` + clients.map(c=>`<option value="${escapeHtml(c.name)}" ${c.name===dashFbsClient?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
   const head = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
       <div class="eyebrow">Заказы FBS за период · по дате создания, МСК</div>
       <select class="search" style="width:230px" onchange="setDashFbsClient(this.value)">${clientOpts}</select>
     </div>`;
-  if(!f) return `<div class="panel" style="padding:18px;margin-bottom:16px">${head}<div style="color:var(--ink-faint);font-size:13px">Не удалось загрузить заказы FBS</div></div>`;
-  const total = f.wb.total + f.ozon.total;
-  const canceled = f.wb.cancelled + f.ozon.cancelled;
+  const total = f ? f.wb.total + f.ozon.total : 0;
+  const canceled = f ? f.wb.cancelled + f.ozon.cancelled : 0;
   return `<div class="panel" style="padding:18px;margin-bottom:16px">
     ${head}
-    <div class="stat-row" style="margin-bottom:14px">
+    ${f ? `<div class="stat-row" style="margin-bottom:14px">
       <div class="stat"><div class="val" style="color:${FBS_WB_COLOR}">${f.wb.total.toLocaleString('ru-RU')}</div><div class="lbl">Wildberries · из них отменено ${f.wb.cancelled.toLocaleString('ru-RU')}</div></div>
       <div class="stat"><div class="val" style="color:${FBS_OZON_COLOR}">${f.ozon.total.toLocaleString('ru-RU')}</div><div class="lbl">Ozon · из них отменено ${f.ozon.cancelled.toLocaleString('ru-RU')}</div></div>
       <div class="stat"><div class="val">${total.toLocaleString('ru-RU')}</div><div class="lbl">Всего заказов FBS</div></div>
       <div class="stat"><div class="val">${(total - canceled).toLocaleString('ru-RU')}</div><div class="lbl">Без отменённых</div></div>
-    </div>
-    <div style="font-size:12px;color:var(--ink-faint);margin-bottom:6px"><span style="color:${FBS_WB_COLOR}">■</span> Wildberries &nbsp; <span style="color:${FBS_OZON_COLOR}">■</span> Ozon · заказов в день</div>
-    ${renderFbsOrdersChart(f.byDay, 900, 190)}
+    </div>` : `<div style="color:var(--ink-faint);font-size:13px">Не удалось загрузить заказы FBS</div>`}
+    ${renderDashFbsRevenue(dashboardFbs?.revenue)}
+    ${f ? `<div style="font-size:12px;color:var(--ink-faint);margin-bottom:6px"><span style="color:${FBS_WB_COLOR}">■</span> Wildberries &nbsp; <span style="color:${FBS_OZON_COLOR}">■</span> Ozon · заказов в день</div>
+    ${renderFbsOrdersChart(f.byDay, 900, 190)}` : ''}
   </div>`;
 }
 function renderMiniBarChart(rows, w, h){
