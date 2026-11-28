@@ -51,13 +51,13 @@ function saveClientInfo(id){
   c.telegram = telegram;
   editingClientId = null;
   toast('Данные клиента сохранены');
-  renderClients();
   if(oldName !== name){
     inventory.forEach(i=>{ if(i.client===oldName) i.client = name; });
     supplies.forEach(s=>{ if(s.clientName===oldName) s.clientName = name; });
     sb.from('inventory').update({client_name:name}).eq('client_name', oldName).then(({error})=>{ if(error) console.error(error); });
     sb.from('supplies').update({client_name:name}).eq('client_name', oldName).then(({error})=>{ if(error) console.error(error); });
   }
+  renderClients();
   sb.from('clients').update({name, contact: c.contact, telegram: c.telegram}).eq('id', id).then(({error})=>{
     if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
   });
@@ -112,15 +112,14 @@ function saveTariff(clientId){
   });
   recordStorageSnapshot(c);
 }
-function saveReceivingTariff(clientId){
+async function saveReceivingTariff(clientId){
   const c = clients.find(x=>x.id===clientId);
   const price = Math.max(0, parseFloat(document.getElementById('receivingTariffPrice-'+clientId).value) || 0);
+  const {error} = await sb.from('clients').update({receiving_price_per_unit: price}).eq('id', clientId);
+  if(error){ console.error(error); toast('Не удалось сохранить цену в базе'); return; }
   c.receivingPricePerUnit = price;
   toast('Цена приёмки сохранена');
   renderClients();
-  sb.from('clients').update({receiving_price_per_unit: price}).eq('id', clientId).then(({error})=>{
-    if(error){ console.error(error); toast('Не удалось сохранить цену в базе'); }
-  });
 }
 async function loadFbsTariffs(){
   const { data, error } = await sb.from('fbs_tariffs').select('*').order('max_liters').limit(50000);
@@ -145,12 +144,11 @@ function addFbsTariff(clientId){
     renderClients();
   });
 }
-function removeFbsTariff(id){
+async function removeFbsTariff(id){
+  const {error} = await sb.from('fbs_tariffs').delete().eq('id', id);
+  if(error){ console.error(error); toast('Не удалось удалить тариф в базе'); return; }
   fbsTariffs = fbsTariffs.filter(t=>t.id!==id);
   renderClients();
-  sb.from('fbs_tariffs').delete().eq('id', id).then(({error})=>{
-    if(error){ console.error(error); toast('Не удалось удалить тариф в базе'); }
-  });
 }
 function getFbsTariffPrice(clientId, liters){
   const tiers = fbsTariffs.filter(t=>t.clientId===clientId).sort((a,b)=>a.maxLiters-b.maxLiters);
@@ -652,6 +650,19 @@ function addSelectedWbProducts(clientId){
   addWbProductsBatch(clientId, toAdd);
 }
 
+function renderClientSetupWarnings(client, items){
+  const withoutDims = new Set(items.filter(item=>item.warehouseId!=='BRAK' &&
+    ![item.dims?.l,item.dims?.w,item.dims?.h].every(value=>Number.isFinite(Number(value)) && Number(value)>0))
+    .map(item=>JSON.stringify([item.sku,item.size||'']))).size;
+  const warnings = [];
+  if(withoutDims) warnings.push(`Без габаритов · ${withoutDims} поз.`);
+  if(!(client.receivingPricePerUnit>0)) warnings.push('Не указана цена приёмки');
+  if(!fbsTariffs.some(tier=>tier.clientId===client.id)) warnings.push('Не указан тариф FBS');
+  if(!warnings.length) return '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+    ${warnings.map(message=>`<span class="chip" style="background:var(--warn-bg);color:var(--warn)">⚠ ${message}</span>`).join('')}
+  </div>`;
+}
 function renderClients(){
   const body = document.getElementById('clientsBody');
   document.getElementById('newClientBtn').style.display = activeClientId ? 'none' : 'inline-flex';
@@ -682,6 +693,7 @@ function renderClientsList(body){
         <div>
           <div class="oid">${c.name}</div>
           <div class="meta">${c.contact} · ${skus.length} товарных позиций · ${totalQty} шт · ${liters.toFixed(1)} л хранения · ${(liters*c.pricePerLiter).toFixed(0)} ₽/сутки</div>
+          ${renderClientSetupWarnings(c, skus)}
         </div>
         ${c.wbConnected
           ? `<span class="chip wb" style="margin-left:auto"><span class="dot"></span>WB подключён</span>`
@@ -731,6 +743,7 @@ function renderClientDetail(body){
           <button class="btn btn-ghost" style="color:var(--warn)" onclick="openDeleteClient('${c.id}')">Удалить</button>
         </div>
       </div>
+      ${renderClientSetupWarnings(c, skus)}
       ${isDeleting ? `
         <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
           <span style="font-size:13px;color:var(--warn)">Удалить клиента «${c.name}»?${skus.length ? ` Его товары (${skus.length} поз.) останутся на складе без привязки к клиенту.` : ''} Отменить нельзя.</span>
