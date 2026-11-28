@@ -2370,10 +2370,11 @@ async function cancelFbsOrder(orderId){
 const SHIP_CARGO_NAMES = {1:'МГТ', 2:'СГТ', 3:'КГТ+'};
 const SHIP_POINT_TYPES = {pp:'ПВЗ', sc:'СЦ', sw:'Склад'};
 let shipState = null;
+let fbsTrbxSupplyId = '';
 
 async function supplyCall(clientId, action, extra){
   // 'info' — только чтение: безопасно повторять при таймауте/429/временных ошибках WB. Остальные действия не повторяем (могут менять данные).
-  if(shipState && shipState.supplyId && shipState.clientId===clientId) extra = Object.assign({}, extra||{}, {supplyId:shipState.supplyId}); // отгружаем именно выбранную поставку
+  if(!extra?.supplyId && shipState?.supplyId && shipState.clientId===clientId) extra = {...extra,supplyId:shipState.supplyId};
   const attempts = action==='info' ? 3 : 1;
   const timeoutMs = action==='info' ? 20000 : 60000;
   let lastErr;
@@ -2394,7 +2395,7 @@ async function supplyCall(clientId, action, extra){
 }
 function shipBoxNo(id){ return String(id).replace(/^WB-(?:MP|TRBX)-/, ''); }
 // по правилам WB грузомест не больше, чем половина заказов (но хотя бы одно)
-function shipMaxBoxes(orders){ return Math.max(1, Math.floor(orders/2)); }
+function shipMaxBoxes(orders){ return orders ? Math.max(1, Math.floor(orders/2)) : 0; }
 function shipDateStr(d){ const p = n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 function shipOrdersCount(){
   const st = shipState;
@@ -2404,11 +2405,11 @@ function shipOrdersCount(){
 function shipRoom(){ const st = shipState; return Math.max(0, shipMaxBoxes(shipOrdersCount()) - st.trbxes.length); }
 
 // ----- QR грузомест: печать на этикетки 58×40 мм -----
-async function shipPrintStickers(clientId, ids){
+async function shipPrintStickers(clientId, ids, supplyId){
   if(!ids || !ids.length){ toast('Сначала создайте грузоместа'); return; }
   toast('Запрашиваем QR грузомест у WB…');
   let data;
-  try{ data = await supplyCall(clientId, 'box_stickers', {trbxIds: ids, stickerType:'svg'}); }
+  try{ data = await supplyCall(clientId, 'box_stickers', {trbxIds: ids, stickerType:'svg', supplyId}); }
   catch(e){ toast('WB: ' + e.message); return; }
   const cl = clients.find(c=>c.id===clientId);
   printBoxStickerWindow(ids, data.stickers || [], cl ? cl.name : '');
@@ -2487,13 +2488,13 @@ function printBoxStickerBrowserWindow(ids, stickers, clientName){
   <script>window.onload=function(){ setTimeout(function(){ window.print(); }, 500); };<\/script></body></html>`);
   win.document.close();
 }
-function downloadFbsTrbxLabels(clientId){ shipPrintStickers(clientId, fbsTrbxes.map(t=>t.id)); }
+function downloadFbsTrbxLabels(clientId){ shipPrintStickers(clientId, fbsTrbxes.map(t=>t.id), fbsTrbxSupplyId); }
 
 // ----- компактная панель на вкладке «На сборке» -----
 function loadFbsTrbxes(clientId){
   supplyCall(clientId, 'boxes')
-    .then(data=>{ fbsTrbxes = data.trbxes || []; })
-    .catch(e=>{ console.error(e); fbsTrbxes = []; })
+    .then(data=>{ fbsTrbxes = data.trbxes || []; fbsTrbxSupplyId = data.supplyId; })
+    .catch(e=>{ console.error(e); fbsTrbxes = []; fbsTrbxSupplyId = ''; })
     .finally(()=>{ fbsTrbxLoadedFor = clientId; renderFbsBody(); });
 }
 function renderFbsTrbxPanel(clientId){
@@ -2530,8 +2531,9 @@ async function openSupplyShipment(clientId, orders, supplyId){
     supply:null, trbxes:[], orderIds:[], fatal:false,
     points:null, pointsLoading:false, pointsError:'', pointId:null,
     shippingType:'selfShipping', shippingDt: shipDateStr(new Date()),
-    city, query:'', typeFilter:filter, amount:1, busy:false, error:'', errorOrders:[]
+    city, query:'', typeFilter:filter, amount:1, busy:false, error:'', errorOrders:[], boxesUnconfirmed:false
   };
+  const st = shipState;
   const o = document.createElement('div');
   o.id = 'shipOverlay';
   o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9990;display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow:auto';
@@ -2541,9 +2543,9 @@ async function openSupplyShipment(clientId, orders, supplyId){
   shipRender();
   try{
     const data = await supplyCall(clientId, 'info');
-    if(!shipState) return;
+    if(shipState!==st) return;
     if(!data.supply){ closeSupplyShipment(); toast('У клиента нет открытой поставки в WB — отгружать нечего'); return; }
-    const st = shipState;
+    st.supplyId = data.supply.id;
     st.supply = data.supply; st.trbxes = data.trbxes || []; st.orderIds = data.orderIds || [];
     if(data.supply.shippingType) st.shippingType = data.supply.shippingType;
     if(data.supply.shippingDt && data.supply.shippingDt >= shipDateStr(new Date())) st.shippingDt = data.supply.shippingDt;
@@ -2553,8 +2555,8 @@ async function openSupplyShipment(clientId, orders, supplyId){
     shipRender();
     shipLoadPoints();
   }catch(e){
-    if(!shipState) return;
-    shipState.fatal = true; shipState.error = 'Не удалось получить поставку у WB: ' + e.message;
+    if(shipState!==st) return;
+    st.fatal = true; st.error = 'Не удалось получить поставку у WB: ' + e.message;
     shipRender();
   }
 }
@@ -2626,9 +2628,11 @@ function shipRenderBoxes(){
       <button class="btn btn-ghost" onclick="shipStep(-1)" ${st.amount<=1?'disabled':''}>−</button>
       <input class="search mono" id="shipAmount" type="number" min="1" max="${Math.max(1,room)}" value="${st.amount}" style="width:80px;text-align:center" oninput="shipSetAmount(this.value)">
       <button class="btn btn-ghost" onclick="shipStep(1)" ${st.amount>=room?'disabled':''}>＋</button>
-      <button class="btn btn-accent" onclick="shipCreateBoxes()" ${(st.busy||room<1)?'disabled':''}>${has ? 'Добавить грузоместа' : 'Создать грузоместа'}</button>
+      <button class="btn btn-accent" onclick="shipCreateBoxes()" ${(st.busy||room<1||st.boxesUnconfirmed)?'disabled':''}>${has ? 'Добавить грузоместа' : 'Создать грузоместа'}</button>
+      ${st.boxesUnconfirmed ? `<button class="btn btn-ghost" onclick="shipCheckBoxes()" ${st.busy?'disabled':''}>Сверить грузоместа с WB</button>` : ''}
       ${room<1 ? `<span style="font-size:12px;color:var(--ink-faint)">достигнут максимум для ${n} заказов</span>` : ''}
-    </div>`;
+    </div>
+    ${st.boxError ? `<div role="status" style="color:var(--warn);font-size:13px;margin-top:8px">${escapeHtml(st.boxError)}</div>` : ''}`;
 }
 function shipSetAmount(v){
   const st = shipState; if(!st) return;
@@ -2640,19 +2644,50 @@ function shipStep(d){
   shipRenderBoxes();
 }
 async function shipCreateBoxes(){
-  const st = shipState; if(!st || st.busy) return;
-  const amount = Math.max(1, Math.min(Math.max(1, shipRoom()), st.amount));
-  st.busy = true; st.error = ''; shipRenderBoxes(); shipRenderFooter();
+  const st = shipState;
+  if(!st?.supplyId || st.busy || st.boxesUnconfirmed || shipRoom()<1) return;
+  const amount = Math.min(shipRoom(),st.amount,1000);
+  st.busy = true; st.boxError = ''; shipRender();
   try{
-    await supplyCall(st.clientId, 'create_boxes', {amount});
-    const data = await supplyCall(st.clientId, 'boxes');
-    if(!shipState) return;
-    shipState.trbxes = data.trbxes || [];
-    fbsTrbxes = shipState.trbxes; fbsTrbxLoadedFor = st.clientId;
-    toast(`Создано грузомест: ${amount} — напечатайте QR и наклейте на короба`);
-  }catch(e){ if(shipState) shipState.error = e.message; }
-  if(!shipState) return;
-  shipState.busy = false; shipRenderBoxes(); shipRenderFooter();
+    const data = await supplyCall(st.clientId,'create_boxes',{amount,supplyId:st.supplyId});
+    if(shipState!==st) return;
+    const ids = data?.supplyId===st.supplyId && Array.isArray(data.trbxIds) ? data.trbxIds : [];
+    if(!shipApplyBoxes(st,ids)){
+      st.boxesUnconfirmed = true;
+      st.boxError = 'WB не вернул номера созданных грузомест. Сверьте список перед повторной попыткой.';
+    }
+  }catch(e){
+    if(shipState!==st) return;
+    st.boxesUnconfirmed = !e.payload || /\b5\d\d\b/.test(e.message);
+    st.boxError = st.boxesUnconfirmed ? `${e.message}. Сверьте список грузомест перед повторной попыткой.` : e.message;
+  }finally{
+    if(shipState===st){ st.busy = false; shipRender(); }
+  }
+}
+function shipApplyBoxes(st, ids){
+  const existing = new Set(st.trbxes.map(box=>box.id));
+  const added = [...new Set(ids)].filter(id=>typeof id==='string' && id && !existing.has(id));
+  if(!added.length) return false;
+  st.trbxes = [...st.trbxes,...added.map(id=>({id}))];
+  if(fbsTrbxLoadedFor===st.clientId && fbsTrbxSupplyId===st.supplyId) fbsTrbxes = st.trbxes;
+  toast(`Создано грузомест: ${added.length} — напечатайте QR и наклейте на короба`);
+  return true;
+}
+async function shipCheckBoxes(){
+  const st = shipState;
+  if(!st?.boxesUnconfirmed || st.busy) return;
+  st.busy = true; shipRender();
+  try{
+    const data = await supplyCall(st.clientId,'boxes',{supplyId:st.supplyId});
+    if(shipState!==st) return;
+    const ids = data?.supplyId===st.supplyId && Array.isArray(data.trbxes) ? data.trbxes.map(box=>box.id) : [];
+    st.boxesUnconfirmed = !shipApplyBoxes(st,ids);
+    st.boxError = st.boxesUnconfirmed ? 'WB пока не показал новые грузоместа. Сверьте поставку в кабинете WB.' : '';
+  }catch(e){
+    if(shipState===st) st.boxError = e.message;
+  }finally{
+    if(shipState===st){ st.busy = false; shipRender(); }
+  }
 }
 async function shipDeleteBoxes(){
   const st = shipState; if(!st || st.busy || !st.trbxes.length) return;
@@ -2662,7 +2697,8 @@ async function shipDeleteBoxes(){
   try{
     await supplyCall(st.clientId, 'delete_boxes', {trbxIds: ids});
     if(!shipState) return;
-    shipState.trbxes = []; fbsTrbxes = []; fbsTrbxLoadedFor = st.clientId;
+    shipState.trbxes = [];
+    if(fbsTrbxLoadedFor===st.clientId && fbsTrbxSupplyId===st.supplyId) fbsTrbxes = [];
   }catch(e){ if(shipState) shipState.error = e.message; }
   if(!shipState) return;
   shipState.busy = false; shipRenderBoxes(); shipRenderFooter();
