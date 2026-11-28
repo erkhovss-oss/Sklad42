@@ -44,8 +44,15 @@ export default {
       if (targetSupplyId || createHolding) {
         if (!Array.isArray(orderIds) || !orderIds.length || (targetSupplyId && createHolding)) return json({error:'Некорректный выбор'},400);
         const ids=[...new Set(orderIds.map(Number))] as number[];
-        const {data:rows,error:re}=await sb.from('wb_orders').select('order_id,wb_supply_id,wb_warehouse_id,wb_status').eq('client_id',clientId).eq('supplier_status','confirm').in('order_id',ids);
-        if(re || !rows || rows.length!==ids.length || rows.some(r=>!r.wb_warehouse_id || r.wb_status==='declined_by_client')) return json({error:'Заказы недоступны для переноса'},400);
+        if(ids.some(id=>!Number.isSafeInteger(id)||id<=0)) return json({error:'Некорректный номер заказа'},400);
+        const rows=[];
+        for(let offset=0;offset<ids.length;offset+=100){
+          const {data,error}=await sb.from('wb_orders').select('order_id,wb_supply_id,wb_warehouse_id,wb_status')
+            .eq('client_id',clientId).eq('supplier_status','confirm').in('order_id',ids.slice(offset,offset+100));
+          if(error) return json({error:'Не удалось прочитать заказы из базы'},500);
+          rows.push(...(data||[]));
+        }
+        if(rows.length!==ids.length || rows.some(r=>!r.wb_warehouse_id || ['canceled','canceled_by_client','declined_by_client'].includes(r.wb_status))) return json({error:'Заказы недоступны для переноса'},400);
         if(new Set(rows.map(r=>r.wb_warehouse_id)).size!==1) return json({error:'Выберите заказы одного склада'},400);
         let target=targetSupplyId;
         if(createHolding){
@@ -54,6 +61,7 @@ export default {
           const cr=await fetch(WB+'/api/v3/supplies',{method:'POST',headers,body:JSON.stringify({name:supplyName})});
           if(!cr.ok) return json({error:'WB: '+cr.status+' '+(await cr.text()).slice(0,300)},502);
           target=(await cr.json()).id;
+          if(!target) return json({error:'WB не вернул номер новой поставки'},502);
           const {error}=await sb.from('wb_supplies').insert({id:target,client_id:clientId,client_name:client.name,status:'open',purpose:'holding'});
           if(error) return json({error:'Поставка создана в WB, но не сохранена: '+target},500);
         } else {
@@ -62,13 +70,48 @@ export default {
           const info=await fetch(WB+'/api/v3/supplies/'+encodeURIComponent(target),{headers});
           if(!info.ok || (await info.json()).done!==false) return json({error:'WB: поставка не открыта или недоступна'},400);
         }
-        let moved=0; const failed=[];
-        for(const row of rows){
-          if(row.wb_supply_id===target){moved++;continue;}
-          const r=await fetch(WB+'/api/marketplace/v3/supplies/'+encodeURIComponent(target)+'/orders',{method:'PATCH',headers,body:JSON.stringify({orders:[Number(row.order_id)]})});
-          if(!r.ok){failed.push({id:row.order_id,error:r.status+' '+(await r.text()).slice(0,300)});continue;}
-          const {error}=await sb.from('wb_orders').update({wb_supply_id:target}).eq('client_id',clientId).eq('order_id',row.order_id);
-          if(error) failed.push({id:row.order_id,error:'WB принял перенос, ошибка записи WMS: '+error.message}); else moved++;
+        const waiting=rows.filter(row=>row.wb_supply_id!==target).map(row=>Number(row.order_id));
+        let moved=ids.length-waiting.length;
+        const failed: {id:number; error:string}[]=[];
+        const base=WB+'/api/marketplace/v3/supplies/'+encodeURIComponent(target);
+        const saveMoved=async(batch:number[])=>{
+          if(!batch.length) return;
+          const {data,error}=await sb.from('wb_orders').update({wb_supply_id:target})
+            .eq('client_id',clientId).eq('supplier_status','confirm').in('order_id',batch).select('order_id');
+          const saved=new Set((data||[]).map(row=>Number(row.order_id)));
+          for(const id of batch){
+            if(!error && saved.has(id)) moved++;
+            else failed.push({id,error:'WB принял перенос, но WMS не сохранила его. Обновите заказы.'});
+          }
+        };
+        for(let offset=0;offset<waiting.length;offset+=100){
+          const batch=waiting.slice(offset,offset+100);
+          const response=await fetch(base+'/orders',{
+            method:'PATCH',headers,body:JSON.stringify({orders:batch})
+          }).catch(()=>null);
+          if(response?.ok){
+            await saveMoved(batch);
+            continue;
+          }
+          // With an ambiguous response, only persist orders confirmed in the destination by WB.
+          let idsAtTarget: Set<number> | undefined;
+          try{
+            const check=await fetch(base+'/order-ids',{headers});
+            if(check.ok){
+              const body=await check.json();
+              const orderIds=body.orderIds??body.orders;
+              if(Array.isArray(orderIds)) idsAtTarget=new Set(orderIds.map(Number));
+            }
+          }catch{}
+          const confirmed=batch.filter(id=>idsAtTarget?.has(id));
+          await saveMoved(confirmed);
+          const pending=batch.filter(id=>!idsAtTarget?.has(id));
+          const message=response ? 'WB вернул '+response.status : 'WB не ответил на перенос';
+          for(const id of pending) failed.push({id,error:message});
+          if(pending.length){
+            for(const id of waiting.slice(offset+batch.length)) failed.push({id,error:'Перенос остановлен после ошибки WB'});
+            break;
+          }
         }
         return json({moved,total:ids.length,failed,mainSupplyId:target});
       }

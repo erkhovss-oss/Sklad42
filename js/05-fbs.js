@@ -1959,10 +1959,10 @@ async function moveSelectedOrders(){
   toast('Переносим заказы…');
   const {data,error}=await sb.functions.invoke('wb-supply-return-ts',{body:{clientId,orderIds:sel.map(o=>o.orderId),...target}});
   if(error||data?.error){toast('WB: '+await extractEdgeFunctionError(data,error));return;}
-  fbsCloseSelectedOrders=[];
+  const failed=data.failed||[];
+  fbsCloseSelectedOrders=failed.map(order=>Number(order.id));
   await loadFbsOrders();
   renderFbsBody();
-  const failed=data.failed||[];
   toast(`Перенесено: ${data.moved} из ${data.total}${failed.length?' · Ошибка: '+failed[0].error:''}`);
 }
 function moveFbsOrderToHolding(orderId){
@@ -2814,15 +2814,19 @@ async function closeFbsSupply(explicitClientId, explicitSupplyId){
 
   if(isPartial){
     toast(`Переносим ${toHold.length} заказ(ов) в отдельную поставку…`);
-    for(const o of toHold){
-      const { data, error } = await sb.functions.invoke('wb-orders-ts', { body: { clientId, action:'move_to_holding_supply', orderId: o.orderId } });
-      if(error || (data && data.error)){
-        toast('WB: не удалось перенести заказ №' + o.orderId + ' — ' + (data && data.error ? data.error : (error?error.message:'ошибка')));
-        return;
-      }
-      o.wbSupplyId = data.holdingSupplyId;
-      sb.from('wb_orders').update({wb_supply_id:data.holdingSupplyId}).eq('order_id', o.orderId).then(()=>{});
+    const {data,error} = await sb.functions.invoke('wb-supply-return-ts', {
+      body:{clientId,orderIds:toHold.map(order=>order.orderId),createHolding:true}
+    });
+    if(error || data?.error || data?.moved!==toHold.length){
+      const message = error || data?.error
+        ? await extractEdgeFunctionError(data,error)
+        : data?.failed?.[0]?.error || 'WB не подтвердил перенос всех заказов';
+      toast('Частичная отгрузка приостановлена. '+message);
+      await loadFbsOrders();
+      renderFbsBody();
+      return;
     }
+    toHold.forEach(order=>{order.wbSupplyId=data.mainSupplyId;});
   }
 
   // дальше — окно «Отгрузка поставки»: грузоместа (для ПВЗ), пункт и дата отгрузки, передача в доставку

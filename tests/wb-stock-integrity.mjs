@@ -153,10 +153,65 @@ assert.equal(await manualReturn(requestId,'defect'),false);
 assert.equal(await qty('A','BRAK'),6);
 assert.equal(await qty('A'),96);
 console.log('Postgres: reservations, deduction, changed BOM, cancellation, duplicate retries, defect, legacy regular return, rollback, cron functions');
-for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
+for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts','wb-supply-return-ts']){
   const src=fs.readFileSync('supabase/functions/'+slug+'/index.ts','utf8');
   const result=ts.transpileModule(src,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},reportDiagnostics:true});
   assert.equal(result.diagnostics.length,0);
+  if(slug==='wb-supply-return-ts'){
+    const requestBatches=[], savedBatches=[];
+    let ambiguous=false;
+    const sb={
+      auth:{getUser:async()=>({data:{user:{id:'synthetic-user'}}})},
+      rpc:async(name)=>({data:name==='next_wb_supply_name'?'Телепак - 28.11.2026 - 1':true}),
+      from:table=>{
+        let ids=[],writing=false;
+        const q={select:()=>q,eq:()=>q,in:(_field,list)=>{ids=list;return q;},
+          update:()=>{writing=true;return q;},insert:async()=>({error:null}),
+          single:async()=>({data:{id:'c',name:'Synthetic',wb_key:'unused-live-key'}}),
+          maybeSingle:async()=>({data:{id:'WB-GI-SAND-1'}}),
+          then:resolve=>{
+            if(writing) savedBatches.push(Array.from(ids));
+            return Promise.resolve({data:ids.map(id=>({order_id:id,wb_supply_id:'old',wb_warehouse_id:'1'}))}).then(resolve);
+          }};
+        return q;
+      },
+    };
+    const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{env:{get:key=>({SUPABASE_URL:'https://invalid.example',WMS_WB_TEST_TOKEN:'sandbox-only'})[key]}},Response,Request,URL,
+      fetch:async(url,init)=>{
+        assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
+        if(init.method==='PATCH'){
+          const batch=JSON.parse(init.body).orders;
+          requestBatches.push(batch);
+          return ambiguous ? Response.json({}, {status:409}) : new Response(null,{status:204});
+        }
+        if(init.method==='POST') return Response.json({id:'WB-GI-SAND-1'},{status:201});
+        if(url.endsWith('/order-ids')) return Response.json({orderIds:[1]});
+        return Response.json({done:false});
+      }};
+    vm.runInNewContext(result.outputText,sandbox);
+    const invoke=async body=>(await sandbox.exports.default.fetch(new Request('https://invalid.example',{method:'POST',
+      headers:{Authorization:'Bearer synthetic'},body:JSON.stringify({clientId:'c',...body})}))).json();
+    const all=Array.from({length:205},(_,i)=>i+1);
+    const manual=await invoke({orderIds:all,targetSupplyId:'WB-GI-SAND-1'});
+    assert.equal(manual.moved,205);
+    assert.deepEqual(requestBatches.map(x=>x.length),[100,100,5]);
+    assert.deepEqual(savedBatches,requestBatches);
+    requestBatches.length=0;savedBatches.length=0;
+    const partial=await invoke({orderIds:all.slice(0,50),createHolding:true});
+    assert.equal(partial.moved,50);
+    assert.equal(requestBatches.length,1);
+    ambiguous=true;
+    requestBatches.length=0;savedBatches.length=0;
+    const interrupted=await invoke({orderIds:all,targetSupplyId:'WB-GI-SAND-1'});
+    assert.equal(interrupted.moved,1);
+    assert.equal(interrupted.failed.length,204);
+    assert.equal(requestBatches.length,1);
+    assert.equal(savedBatches.length,1);
+    assert.equal(savedBatches[0].join(','),'1');
+    console.log('WB transfer mock: 50 orders in one request, 205 in three, reconcile ambiguous transfer before updating WMS');
+    continue;
+  }
+
   if(slug==='wb-b2b-supply-ts'){
     let allowed=false, status='new', employeeWarehouse='OTHER';
     let confirmed=false;
