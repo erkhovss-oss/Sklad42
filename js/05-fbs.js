@@ -953,7 +953,7 @@ function renderFbsGroupedBySupply(rows, clientId, isDelivered, page, pageSize){
                 <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                   ${!isDelivered && clientId ? renderTrbxAssignControl(o) : ''}
                   ${isDelivered ? fbsStatusBadge(o) : ''}
-                  ${!isDelivered && o.kizStatus!=='attached' && o.kizStatus!=='pending' ? `<button class="btn btn-ghost" style="padding:6px 12px;color:var(--accent)" onclick="openKizForOrder(${o.orderId})">🏷 Внести КИЗ</button>` : ''}
+                  ${!isDelivered && o.supplierStatus==='confirm' ? `<button class="btn btn-ghost" style="padding:6px 12px;color:var(--accent)" onclick="openKizForOrder(${o.orderId})">🏷 ${o.kizCode ? (kizIsMissing(o) ? 'Внести КИЗ заново' : 'Изменить КИЗ') : 'Внести КИЗ'}</button>` : ''}
                   <button class="btn btn-ghost" style="padding:6px 12px" onclick="printFbsSticker(${o.orderId})">🖨 Этикетка</button>
                 </div>
               </div>
@@ -1879,7 +1879,10 @@ function wireWizardKizInput(order){
     }, 0);
   });
 }
+const sendingFbsKiz = new Set();
 function wizardAttachKiz(order, kizCode, norm){
+  if(sendingFbsKiz.has(order.orderId)) return;
+  sendingFbsKiz.add(order.orderId);
   toast(`Отправляем КИЗ на WB… (${kizCode.length} симв., разделителей GS: ${norm ? norm.gsCount : '?'}${norm && norm.restored ? ', восстановлены автоматически' : ''})`);
   // Не ждём ответа WB: сразу открываем поиск следующего заказа, проверку КИЗ ведём в фоне.
   // Если WB потом отвергнет код — громко сообщим и вернём этот заказ на экран.
@@ -1915,7 +1918,8 @@ function wizardAttachKiz(order, kizCode, norm){
     // КИЗ принят (или WB ещё проверяет — досмотрим сами): заказ готов, открываем поиск следующего.
     // Если WB КИЗ не принял — остаёмся на заказе, чтобы сразу отсканировать другой код.
     if(data.kizStatus !== 'verify_failed' && !movedOn && assemblyModeQueue[assemblyModeIndex] === order) wizardOrderDone(order);
-  });
+  }).catch(()=>backToOrder('Не удалось получить ответ WB по КИЗ. Проверьте состояние заказа и повторите.'))
+    .finally(()=>sendingFbsKiz.delete(order.orderId));
 }
 async function wizardNextOrder(){
   const order = assemblyModeQueue[assemblyModeIndex];
@@ -1989,12 +1993,13 @@ async function markOrderOutOfStock(orderId){
 // Вернуться к уже собранному заказу и внести КИЗ (забыли отметить «нужен КИЗ» при сборке)
 function openKizForOrder(orderId){
   const order = fbsOrders.find(o=>o.orderId===orderId);
-  if(!order){ toast('Заказ не найден'); return; }
+  if(!order || order.supplierStatus!=='confirm'){ toast('Заказ недоступен для изменения КИЗ'); return; }
   openOrderInWizard(order, false); // ШК повторно не нужен для КИЗ, но и «к следующему» заказу сами не прыгаем
   // экран может дорисоваться не сразу (если тип товара уточняется у WB) — ждём блок КИЗ
   let tries = 0;
   const t = setInterval(()=>{
     tries++;
+    if(assemblyModeQueue[assemblyModeIndex]?.orderId!==orderId){ clearInterval(t); return; }
     const block = document.getElementById('wizardKizBlock');
     if(block){
       clearInterval(t);
@@ -2093,6 +2098,7 @@ async function hideOrdersFromOtherWarehouse(clientId){
 }
 function kizIsMissing(o){ return !!o.requiresKiz && (!o.kizCode || ['verify_failed','rejected'].includes(o.kizStatus)); }
 function renderKizStatusLabel(o){
+  if(o.kizStatus==='missing') return ' · <span style="color:var(--warn);font-weight:700">⚠ КИЗ больше не привязан в WB</span>';
   if(!o.requiresKiz && !o.kizCode) return '';
   // Код ещё не отсканирован — никакого статуса WB показывать нельзя (раньше мог всплыть устаревший статус из памяти)
   if(!o.kizCode) return o.requiresKiz ? ' · <span style="color:var(--ink-soft)">КИЗ ещё не отсканирован</span>' : '';

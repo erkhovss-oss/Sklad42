@@ -15,6 +15,18 @@ const rejectedKiz = new Set([
  "sgtinHasNonLatinSymbols","sgtinInvalidPattern","sgtinNotFound","sgtinEmitted","sgtinApplied",
  "sgtinWrittenOff","sgtinWithdrawn","sgtinRetired","sgtinDisaggregated","sgtinDisaggregation","sgtinAppliedNotPaid"
 ]);
+function wbSgtinCodes(item:any): string[] | null {
+ const detail=Array.isArray(item.metaDetails) ? item.metaDetails.find((entry:any)=>entry?.key==="sgtin") : null;
+ const value=detail?.value ?? (item.meta||item).sgtin?.value;
+ if(value==="") return [];
+ if(Array.isArray(value)) return value.every(code=>typeof code==="string") ? value : null;
+ if(typeof value!=="string") return null;
+ if(!value.startsWith("[")) return [value];
+ try{
+  const parsed=JSON.parse(value);
+  return Array.isArray(parsed)&&parsed.every(code=>typeof code==="string") ? parsed : null;
+ }catch{return null;}
+}
 function kizVerdict(item:any){
  const detail=Array.isArray(item.metaDetails) ? item.metaDetails.find((entry:any)=>entry?.key==="sgtin") : null;
  const raw=detail?.decision ?? (item.meta||item).sgtin?.status;
@@ -383,8 +395,8 @@ Deno.serve(async(req)=>{
     return json({ok:true,found,missingCount:missing.length,inserted,skippedWithoutStatus:missing.length-recovered.length});
    }
    case "recheck_pending_kiz":{
-    const {data:rows,error:readError}=await sb.from("wb_orders").select("order_id,kiz_code")
-     .eq("client_id",clientId).eq("kiz_status","pending").order("kiz_updated_at",{ascending:true,nullsFirst:true}).limit(100);
+    const {data:rows,error:readError}=await sb.from("wb_orders").select("order_id,kiz_code,kiz_status,kiz_updated_at")
+     .eq("client_id",clientId).or("kiz_status.eq.pending,and(supplier_status.eq.confirm,kiz_status.eq.attached)").order("kiz_updated_at",{ascending:true,nullsFirst:true}).limit(100);
     if(readError) throw readError;
     if(!rows?.length) return json({ok:true,checked:0});
     const response=await wb("/api/marketplace/v3/orders/meta","POST",{orders:rows.map(o=>Number(o.order_id))});
@@ -394,8 +406,20 @@ Deno.serve(async(req)=>{
      const item=byId.get(String(o.order_id));
      if(!item) continue;
      const verdict=kizVerdict(item);
-     const query=sb.from("wb_orders").update({kiz_status:verdict.status,kiz_decision:verdict.decision,kiz_updated_at:new Date().toISOString()})
-      .eq("client_id",clientId).eq("order_id",o.order_id).eq("kiz_status","pending");
+     const codes=wbSgtinCodes(item);
+     const removed=codes?.length===0 && (verdict.decision==="required"||verdict.decision==="optional");
+     const replaced=o.kiz_status==="attached" && codes?.length && !codes.includes(o.kiz_code);
+     // A missing or different value may belong to an earlier scan while WB is processing a replacement.
+     if(o.kiz_status==="pending" && codes?.length && !codes.includes(o.kiz_code)) continue;
+     if(o.kiz_status==="pending" && removed && Date.now()-Date.parse(o.kiz_updated_at)<45000) continue;
+     if(o.kiz_status==="attached" && !removed && !replaced && verdict.status==="pending" && !verdict.decision) continue;
+     let query=sb.from("wb_orders").update({
+      kiz_code:removed||replaced ? null : o.kiz_code,
+      kiz_status:removed||replaced ? "missing" : verdict.status,
+      kiz_decision:removed||replaced ? null : verdict.decision,
+      kiz_updated_at:new Date().toISOString()
+     }).eq("client_id",clientId).eq("order_id",o.order_id).eq("kiz_status",o.kiz_status);
+     query=o.kiz_updated_at==null ? query.is("kiz_updated_at",null) : query.eq("kiz_updated_at",o.kiz_updated_at);
      const {error}=await (o.kiz_code==null ? query.is("kiz_code",null) : query.eq("kiz_code",o.kiz_code));
      if(error) throw error;
      checked++;
@@ -415,7 +439,10 @@ Deno.serve(async(req)=>{
    try{
     const d=await meta(id);
     const item=(d.orders||[]).find((row:any)=>Number(row.id??row.orderId)===id);
-    if(item) ({status,decision}=kizVerdict(item));
+    if(item){
+     const codes=wbSgtinCodes(item);
+     if(codes?.includes(kiz) || (codes===null && !o.kiz_code)) ({status,decision}=kizVerdict(item));
+    }
    }catch(e){warning="WB пока не вернул решение по маркировке";}
    await updateOrder(id,{kiz_code:kiz,kiz_status:status,kiz_decision:decision,kiz_updated_at:new Date().toISOString(),requires_kiz:true});
    return {ok:true,kizStatus:status,decision,warning};

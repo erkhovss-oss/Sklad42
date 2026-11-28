@@ -214,9 +214,10 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     const historyCursors=[];
     const statusRequests=[];
     let upstream=0, pushes=0, deductions=0, sentKiz;
-    let supplierStatus="new", wbRequiresKiz=true;
+    let supplierStatus="new", wbRequiresKiz=true, currentKiz=null;
     let metaRows=[{orderId:1,meta:{sgtin:{status:'filled'}}}];
-    const pendingRows=[{order_id:12,kiz_code:'synthetic'}, {order_id:13,kiz_code:'synthetic'}, {order_id:14,kiz_code:'synthetic'}];
+    const pendingRows=[12,13,14,15,16].map(id=>({order_id:id,kiz_code:'synthetic',
+      kiz_status:id>=15?'attached':'pending',kiz_updated_at:null}));
     const verdictUpdates=[];
     let orderHandler;
     const sb={
@@ -226,9 +227,9 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
         const query={
           then:resolve=>Promise.resolve({data:requested?.filter(id=>orders.has(id)).map(id=>({order_id:id}))}).then(resolve),
           eq:()=>query, in:(_field,ids)=>{requested=ids;return query;}, not:()=>query, is:()=>query,
-          order:()=>query, limit:async()=>({data:pendingRows}),
+          or:()=>query, order:()=>query, limit:async()=>({data:pendingRows}),
           maybeSingle:async()=>({data: table==='wb_orders'
-            ? {order_id:1,requires_kiz:wbRequiresKiz,supplier_status:supplierStatus}
+            ? {order_id:1,requires_kiz:wbRequiresKiz,supplier_status:supplierStatus,kiz_code:currentKiz}
             : table==='inventory' ? {requires_kiz:true}
             : {id:'c',name:'C',wb_key:'synthetic',wb_warehouse_id:'1',wb_warehouse_ids:['1','2']}}),
           single:async()=>({data:table==='employees'
@@ -319,18 +320,28 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts']){
     assert.equal(response.status,200);
     assert.equal((await response.json()).kizStatus,'attached');
     assert.equal(sentKiz,scanned);
+    currentKiz=scanned;
+    metaRows=[{id:1,metaDetails:[{key:'sgtin',value:JSON.stringify([scanned]),decision:'sgtinIntroduced'}]}];
+    const replacement=scanned+'NEW';
+    const retry=await invoke(staff,{action:'attach_kiz',orderId:1,kizCode:replacement});
+    assert.equal((await retry.json()).kizStatus,'pending');
+    assert.equal(sentKiz,replacement);
     verdictUpdates.length=0;
     metaRows=[
       {id:13,meta:{sgtin:{status:'filled'}},metaDetails:[{key:'sgtin',value:['synthetic'],decision:'sgtinNoGS'}]},
       {id:12,metaDetails:[{key:'sgtin',value:['synthetic'],decision:'sgtinIntroduced'}]},
       {id:14,meta:{sgtin:{value:['synthetic']}}},
+      {id:15,metaDetails:[{key:'sgtin',value:'',decision:'optional'}]},
+      {id:16,metaDetails:[{key:'sgtin',value:'["other-synthetic"]',decision:'sgtinIntroduced'}]},
     ];
     const recheck=await invoke(h,{action:'recheck_pending_kiz'});
     assert.equal(recheck.status,200);
-    assert.equal((await recheck.json()).checked,3);
+    assert.equal((await recheck.json()).checked,5);
     assert.deepEqual(verdictUpdates.map(patch=>[patch.kiz_status,patch.kiz_decision]),[
-      ['attached','sgtinIntroduced'],['rejected','sgtinNoGS'],['pending',null],
+      ['attached','sgtinIntroduced'],['rejected','sgtinNoGS'],['pending',null],['missing',null],['missing',null],
     ]);
+    assert.equal(verdictUpdates[3].kiz_code,null);
+    assert.equal(verdictUpdates[4].kiz_code,null);
     console.log('WB orders mock: cron auth, selected warehouses, duplicate import, changed stock push, mandatory KIZ');
     continue;
   }
