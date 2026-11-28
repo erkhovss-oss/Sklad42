@@ -9,6 +9,12 @@ const sellerToken = (stored: string | null) => liveProject()
 const CORS = { "Access-Control-Allow-Origin":"*", "Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods":"POST, OPTIONS" };
 const json = (v:unknown,s=200)=>new Response(JSON.stringify(v),{status:s,headers:{...CORS,"Content-Type":"application/json"}});
 const errText = async (r:Response)=>{const t=await r.text();return t.slice(0,1200)||r.statusText};
+const canceledWbStatuses = ["canceled","canceled_by_client","declined_by_client"];
+const isCanceled = (o:{supplier_status:string;wb_status:string|null})=>o.supplier_status==="cancel" ||
+ (o.wb_status!==null && canceledWbStatuses.includes(o.wb_status) &&
+  !(o.supplier_status==="complete" && o.wb_status==="canceled_by_client"));
+const canceledOrder = (o:any)=>json({error:"Заказ отменён в WB",code:"ORDER_CANCELED",
+ supplierStatus:o.supplier_status,wbStatus:o.wb_status},409);
 const acceptedKiz = new Set(["filled","accepted","sgtinIntroduced","sgtinSoldB2B"]);
 const rejectedKiz = new Set([
  "required","optional","rejected","sgtinInvalidFormat","sgtinNoGS","sgtinHasInvalidSymbols",
@@ -147,7 +153,25 @@ Deno.serve(async(req)=>{
       const result=await r.json();if(!r.ok||result.ok===false||result.error)throw new Error(String(result.error||r.status));return null;
     }catch(e){const msg=String(e).slice(0,500);await sb.from("clients").update({wb_last_sync_error:msg}).eq("id",clientId);return msg;}
   };
+  const reconcileCancellation=async(id:number)=>{
+   const current=await getOrder(id);
+   if(isCanceled(current)) return canceledOrder(current);
+   const response=await wb("/api/v3/orders/status","POST",{orders:[id]}).catch(()=>null);
+   const status=Array.isArray(response?.orders) ? response.orders.find((s:any)=>Number(s.id)===id) : null;
+   if(!status || typeof status.supplierStatus!=="string" || typeof status.wbStatus!=="string") return null;
+   const patch={supplier_status:status.supplierStatus,wb_status:status.wbStatus};
+   if(!isCanceled(patch)) return null;
+   const before=current.supplier_status==="new" ? await sb.rpc("get_available_stock",{p_client_name:client.name}) : null;
+   await updateOrder(id,patch);
+   if(before) await pushChangedStock(before);
+   return canceledOrder(patch);
+  };
   switch(action){
+   case "check_order_cancellation":{
+    const id=Number(b.orderId);
+    if(!Number.isSafeInteger(id)||id<=0) return json({error:"Некорректный номер заказа"},400);
+    return await reconcileCancellation(id) ?? json({ok:true});
+   }
    case "fetch_new":{
     const d=await wb("/api/v3/orders/new");const arr=d.orders||[];
     const before=arr.length?await sb.rpc("get_available_stock",{p_client_name:client.name}):null;
@@ -218,7 +242,7 @@ Deno.serve(async(req)=>{
     if(!Number.isSafeInteger(id)||id<=0||typeof b.sku!=="string") return json({error:"Некорректные параметры"},400);
     if(emp.warehouse_id && emp.warehouse_id!==warehouse && !role.permissions.employees) return json({error:"Нет доступа к складу"},403);
     const o=await getOrder(id);
-    if(["canceled","canceled_by_client","declined_by_client"].includes(o.wb_status)) return json({error:"Заказ отменён покупателем"},409);
+    if(isCanceled(o)) return canceledOrder(o);
     if(o.requires_kiz!==true){
      const {data:product,error:productError}=await sb.from("inventory").select("requires_kiz")
       .eq("client_name",client.name).eq("sku",b.sku).eq("size",String(b.size??""))
@@ -230,15 +254,15 @@ Deno.serve(async(req)=>{
      }
     }
     const {data,error}=await sb.rpc("wb_fbs_deduct",{p_order_id:id,p_client_id:clientId,p_sku:b.sku,p_size:String(b.size??""),p_warehouse:warehouse,p_employee_id:emp.id,p_employee_name:emp.name});
-    if(error) return json({error:error.message},409);
+    if(error) return await reconcileCancellation(id) ?? json({error:error.message},409);
     return json({ok:true,...data});
    }
    case "assemble":
    case "add_order":{
     const id=Number(b.orderId);if(!id)throw new Error("orderId обязателен");
     const o=await getOrder(id);
-    if(["cancel","complete"].includes(o.supplier_status) ||
-       ["canceled","canceled_by_client","declined_by_client"].includes(o.wb_status)) throw new Error("Заказ закрыт");
+    if(isCanceled(o)) return canceledOrder(o);
+    if(o.supplier_status==="complete") throw new Error("Заказ закрыт");
     const {data:op,error:opError}=await sb.from("wb_fbs_stock_operations").select("state,items").eq("client_id",clientId).eq("order_id",id).maybeSingle();
     if(opError) throw opError;
     if(o.supplier_status==="new" && op?.state!=="deducted") return json({error:"Сначала подтвердите списание"},409);
@@ -258,14 +282,20 @@ Deno.serve(async(req)=>{
     let supply=o.wb_supply_id;
     if(!supply){supply=await openSupply("main",String(o.wb_warehouse_id||client.wb_warehouse_id||""));}
     try{await wb("/api/marketplace/v3/supplies/"+encodeURIComponent(supply)+"/orders","PATCH",{orders:[id]});}
-    catch(e){throw new Error("Не удалось добавить заказ в поставку "+supply+": "+String(e));}
+    catch(e){
+     const canceled=await reconcileCancellation(id);
+     if(canceled) return canceled;
+     throw new Error("Не удалось добавить заказ в поставку "+supply+": "+String(e));
+    }
     const {data:confirmed,error:confirmError}=await sb.from("wb_orders")
       .update({supplier_status:"confirm",wb_supply_id:supply})
       .eq("client_id",clientId).eq("order_id",id).eq("supplier_status",o.supplier_status)
+      .or(`wb_status.is.null,wb_status.not.in.(${canceledWbStatuses.join(",")})`)
       .select("order_id").maybeSingle();
     if(confirmError) throw confirmError;
     if(!confirmed){
      const latest=await getOrder(id);
+     if(isCanceled(latest)) return canceledOrder(latest);
      if(latest.supplier_status!=="confirm" || latest.wb_supply_id!==supply)
       return json({error:"Статус заказа изменился во время сборки — сверьте его с WB"},409);
     }
