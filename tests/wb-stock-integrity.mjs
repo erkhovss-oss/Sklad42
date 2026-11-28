@@ -43,6 +43,52 @@ assert.equal(scanner.normalizeKizInput(JSON.stringify([withQuote,fullKiz])).inva
 assert.equal(scanner.normalizeKizInput(serialized.replace(/\\u001d/g,'\\\\u001d')).invalidFormat,true);
 
 const fbs = fs.readFileSync('js/05-fbs.js','utf8');
+const canceledOrder = {orderId:1,clientId:'c',supplierStatus:'new'};
+const shortageOrder = {orderId:2,clientId:'c',supplierStatus:'new'};
+const assemblyErrors = [];
+const assemblyCalls = [];
+let cancelOnAssemble = false;
+let failB2b = false;
+const canceledResponse = () => ({error:{context:Response.json({code:'ORDER_CANCELED',
+  error:'Заказ отменён в WB',supplierStatus:'new',wbStatus:'declined_by_client'},{status:409})}});
+const assembly = vm.createContext({fbsOrders:[{...canceledOrder},shortageOrder],fbsSelectedOrders:[1,2],
+  assemblingOrder:null,clients:[],window:{},loadInventory:async()=>{},renderFbsBody(){},
+  document:{getElementById:()=>({value:''})},setFbsView(){ throw Error('Неожиданное переключение вкладки'); },
+  findInventoryItem:()=>({sku:'A'}),toast:msg=>assemblyErrors.push(msg),
+  sb:{functions:{invoke:async(slug,{body})=>{
+    assemblyCalls.push(body.action);
+    if(body.orderId===2) return {data:{error:'Недостаточно товара'}};
+    if(failB2b && body.action==='assemble') return {data:{error:'FailedToAddSupplyOrder'}};
+    if(failB2b && slug==='wb-b2b-supply-ts') return {data:{error:'Заказ закрыт'}};
+    return cancelOnAssemble && body.action==='deduct_fbs' ? {data:{ok:true}} : canceledResponse();
+  }}}});
+vm.runInContext(fbs.slice(fbs.indexOf('const FBS_WB_CANCELED'),fbs.indexOf('function fbsStatusBadge')),assembly);
+vm.runInContext(fbs.slice(fbs.indexOf('async function bulkAssembleSelectedFbsOrders'),fbs.indexOf('async function cancelFbsOrder')),assembly);
+await assembly.bulkAssembleSelectedFbsOrders();
+assert.equal(assembly.fbsTabOf(assembly.fbsOrders[0]),'cancel');
+assert.deepEqual(Array.from(assembly.fbsSelectedOrders),[2]);
+assert.deepEqual(assemblyCalls,['deduct_fbs','deduct_fbs']);
+assert.match(assemblyErrors.at(-2),/перенесён в «Отменённые»/);
+assert.equal(assembly.fbsTabOf(shortageOrder),'new');
+assert.match(assemblyErrors.at(-1),/Недостаточно товара/);
+cancelOnAssemble = true;
+canceledOrder.wbStatus = null;
+await assembly.finishAssembleOrder(canceledOrder,null,true);
+assert.equal(assembly.fbsTabOf(canceledOrder),'cancel');
+assert.deepEqual(assemblyCalls.slice(-2),['deduct_fbs','assemble']);
+failB2b = true;
+canceledOrder.wbStatus = null;
+await assembly.finishAssembleOrder(canceledOrder,null,true);
+assert.equal(assembly.fbsTabOf(canceledOrder),'cancel');
+assert.deepEqual(assemblyCalls.slice(-4),['deduct_fbs','assemble','add_order','check_order_cancellation']);
+assembly.findInventoryItem=()=>null;
+canceledOrder.wbStatus = null;
+await assembly.finishAssembleOrder(canceledOrder,null,true);
+assert.equal(assembly.fbsTabOf(canceledOrder),'cancel');
+assert.equal(assemblyCalls.at(-1),'check_order_cancellation');
+assert.equal(assembly.fbsTabOf({supplierStatus:'confirm',wbStatus:'declined_by_client'}),'cancel');
+assert.equal(assembly.fbsTabOf({supplierStatus:'complete',wbStatus:'canceled_by_client'}),'done');
+
 const fbsMessages = fbs.slice(fbs.indexOf('function notifyFbsKizAccepted'),fbs.indexOf('function watchPendingKiz'));
 const signals = [];
 const messages = [];
@@ -269,7 +315,10 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts','wb-sup
     const historyCursors=[];
     const statusRequests=[];
     let upstream=0, pushes=0, deductions=0, sentKiz;
-    let supplierStatus="new", wbRequiresKiz=true, currentKiz=null;
+    let supplierStatus="new", wbStatus=null, wbRequiresKiz=true, currentKiz=null;
+    let remoteStatus, deductError;
+    let orderReserved=false;
+    const cancellationUpdates=[];
     let metaRows=[{orderId:1,meta:{sgtin:{status:'filled'}}}];
     const pendingRows=[12,13,14,15,16].map(id=>({order_id:id,kiz_code:'synthetic',
       kiz_status:id>=15?'attached':'pending',kiz_updated_at:null}));
@@ -284,7 +333,8 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts','wb-sup
           eq:()=>query, in:(_field,ids)=>{requested=ids;return query;}, not:()=>query, is:()=>query,
           or:()=>query, order:()=>query, limit:async()=>({data:pendingRows}),
           maybeSingle:async()=>({data: table==='wb_orders'
-            ? {order_id:1,requires_kiz:wbRequiresKiz,supplier_status:supplierStatus,kiz_code:currentKiz}
+            ? {order_id:1,requires_kiz:wbRequiresKiz,supplier_status:supplierStatus,wb_status:wbStatus,wb_supply_id:'test-supply',kiz_code:currentKiz}
+            : table==='wb_fbs_stock_operations' ? {state:'deducted',items:[{warehouse:'MAIN'}]}
             : table==='inventory' ? {requires_kiz:true}
             : {id:'c',name:'C',wb_key:'synthetic',wb_warehouse_id:'1',wb_warehouse_ids:['1','2']}}),
           single:async()=>({data:table==='employees'
@@ -298,11 +348,15 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts','wb-sup
           for(const r of fresh) orders.set(r.order_id,r);
           return {data:fresh};
         }}),
-        update:(patch)=>{if(patch.kiz_status) verdictUpdates.push(patch);return query;},
+        update:(patch)=>{
+          if(patch.kiz_status) verdictUpdates.push(patch);
+          if(patch.wb_status){ cancellationUpdates.push(patch); wbStatus=patch.wb_status; supplierStatus=patch.supplier_status; }
+          return query;
+        },
       }; },
       rpc:async(name)=>{
-        if(name==='wb_fbs_deduct') deductions++;
-        return {data:name==='get_available_stock'?[{barcode:'10',wb_available:100-orders.size}]:true};
+        if(name==='wb_fbs_deduct'){ deductions++; if(deductError) return {error:{message:deductError}}; }
+        return {data:name==='get_available_stock'?[{barcode:'10',wb_available:100-orders.size-Number(orderReserved && !wbStatus)}]:true};
       },
     };
     const sandbox={exports:{},require:()=>({createClient:()=>sb}),Deno:{serve:handler=>{orderHandler=handler;},env:{get:k=>({SUPABASE_URL:'https://invalid.example',SUPABASE_SERVICE_ROLE_KEY:'test-token',WMS_WB_CRON_TOKEN:'cron-test',WMS_WB_TEST_TOKEN:'sandbox-only'})[k]}},Response,Request,URL,URLSearchParams,
@@ -327,8 +381,12 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts','wb-sup
         if(parsedUrl.pathname==='/api/v3/orders/status'){
           const ids=JSON.parse(init.body).orders;
           statusRequests.push(...ids);
+          if(ids.length===1 && ids[0]===1) return Response.json({orders:remoteStatus ? [remoteStatus] : []});
           return Response.json({orders:[{id:20,supplierStatus:'complete',wbStatus:'sold'},
             {id:22,supplierStatus:'cancel',wbStatus:'canceled'}]});
+        }
+        if(parsedUrl.pathname.endsWith('/supplies/test-supply/orders') && init.method==='PATCH'){
+          return Response.json({code:'FailedToAddSupplyOrder'},{status:409});
         }
         if(url.endsWith('/api/v3/orders/new')){
           assert.equal(new URL(url).hostname,'marketplace-api-sandbox.wildberries.ru');
@@ -366,6 +424,31 @@ for(const slug of ['wb-orders-ts','wb-sync-stocks-ts','wb-b2b-supply-ts','wb-sup
     wbRequiresKiz=false;
     assert.equal((await invoke(staff,deduction)).status,200);
     assert.equal(deductions,2);
+    wbStatus='declined_by_client';
+    const alreadyCanceled=await invoke(staff,deduction);
+    assert.equal(alreadyCanceled.status,409);
+    assert.equal((await alreadyCanceled.json()).code,'ORDER_CANCELED');
+    assert.equal(deductions,2);
+    wbStatus=null;
+    deductError='Недостаточно товара A';
+    const shortage=await invoke(staff,deduction);
+    assert.equal((await shortage.json()).error,deductError);
+    assert.equal(cancellationUpdates.length,0);
+    deductError=null;
+    remoteStatus={id:1,supplierStatus:'new',wbStatus:'declined_by_client'};
+    const remoteCanceled=await invoke(staff,{action:'assemble',orderId:1});
+    assert.equal(remoteCanceled.status,409);
+    assert.equal((await remoteCanceled.json()).code,'ORDER_CANCELED');
+    assert.equal(cancellationUpdates.length,1);
+    assert.equal(wbStatus,'declined_by_client');
+    assert.equal(pushes,1);
+    wbStatus=null;
+    orderReserved=true;
+    const checked=await invoke(staff,{action:'check_order_cancellation',orderId:1});
+    assert.equal((await checked.json()).code,'ORDER_CANCELED');
+    assert.equal(pushes,2);
+    wbStatus=null;
+    orderReserved=false;
     const early = await invoke(staff,{action:'attach_kiz',orderId:1,kizCode:'synthetic'});
     assert.notEqual(early.status,200);
     assert.equal(sentKiz,undefined);
