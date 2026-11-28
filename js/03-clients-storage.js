@@ -212,15 +212,33 @@ function disconnectWb(clientId){
     if(error){ console.error(error); toast('Не удалось сохранить в базе'); }
   });
 }
+function savedWbWarehouseIds(client){
+  const ids = client.wbWarehouseIds?.length ? client.wbWarehouseIds : [client.wbWarehouseId];
+  return [...new Set(ids.filter(Boolean).map(String))];
+}
+function renderSavedWbWarehouses(client){
+  const ids = savedWbWarehouseIds(client);
+  const main = String(client.wbWarehouseId || '');
+  const names = new Map((client.wbWarehousesList || []).map(w=>[String(w.id),w.name]));
+  const label = id=>names.get(id) ? `${escapeHtml(id)} — ${escapeHtml(names.get(id))}` : escapeHtml(id);
+  return `<div id="wbSavedWarehouses-${client.id}" style="margin-bottom:12px">
+    <div style="font-size:12px;font-weight:700;margin-bottom:5px">Выбранные склады WB</div>
+    ${ids.length ? `<ul style="margin:0;padding-left:20px;font-size:13px;line-height:1.6">
+      ${[...ids.filter(id=>id===main),...ids.filter(id=>id!==main)].map(id=>`<li>${label(id)} · ${id===main?'Основной':'Дополнительный'}</li>`).join('')}
+    </ul>` : '<div style="font-size:12px;color:var(--ink-soft)">Склады не выбраны</div>'}
+  </div>`;
+}
+
 async function saveWbWarehouseId(clientId){
   const c=clients.find(x=>x.id===clientId); const val=document.getElementById('wbWarehouseId-'+clientId).value.trim();
-  const picker=document.getElementById('wbWarehouseMultiPicker-'+clientId); const selected=picker?Array.from(picker.selectedOptions).map(o=>String(o.value)):(c.wbWarehouseIds||[]);
+  const picker=document.getElementById('wbWarehouseMultiPicker-'+clientId); const selected=picker?Array.from(picker.selectedOptions).map(o=>String(o.value)):savedWbWarehouseIds(c);
   const ids=Array.from(new Set([...(selected||[]),...(val?[val]:[])]));
   if(!val){toast('Выберите основной склад WB');return;} if(!ids.includes(val)){toast('Основной склад должен входить в список выбранных');return;}
   const threshold=Math.max(0,Math.floor(Number((document.getElementById('wbStockThreshold-'+clientId)||{}).value??c.wbStockSwitchThreshold??3)));
-  c.wbWarehouseId=val;c.wbWarehouseIds=ids;c.wbStockSwitchThreshold=threshold;c.wbAutoSync=false;
   const {error}=await sb.from('clients').update({wb_warehouse_id:val,wb_warehouse_ids:ids,wb_stock_switch_threshold:threshold,wb_auto_sync:false}).eq('id',clientId);
-  if(error){console.error(error);toast('Не удалось сохранить настройки складов WB');return;} toast('Склады WB и порог переключения сохранены. Автосинхронизация выключена — включите её, когда будете готовы');renderClients();
+  if(error){console.error(error);toast('Не удалось сохранить настройки складов WB');return;}
+  c.wbWarehouseId=val;c.wbWarehouseIds=ids;c.wbStockSwitchThreshold=threshold;c.wbAutoSync=false;
+  toast('Склады WB и порог переключения сохранены. Автосинхронизация выключена — включите её, когда будете готовы');renderClients();
 }
 function connectOzon(clientId){
   const client = clients.find(c=>c.id===clientId);
@@ -729,6 +747,11 @@ function renderClientDetail(body){
     </div>
   `;
 
+  const selectedWbIds = savedWbWarehouseIds(c);
+  const wbWarehouseOptions = new Map((c.wbWarehousesList || []).map(w=>[String(w.id),w.name]));
+  for(const id of selectedWbIds){
+    if(!wbWarehouseOptions.has(id)) wbWarehouseOptions.set(id,'сохранённый склад');
+  }
   body.innerHTML = `
     <button class="btn btn-ghost" style="margin-bottom:16px" onclick="backToClients()">← Все клиенты</button>
 
@@ -940,12 +963,13 @@ function renderClientDetail(body){
         <button class="btn btn-ghost" onclick="saveWbWarehouseId('${c.id}')">Сохранить склады и порог</button>
         <button class="btn btn-ghost" onclick="listWbWarehouses('${c.id}')">📋 Получить список складов</button>
       </div>
-      <p style="font-size:11px;color:var(--ink-faint);margin:0 0 8px">При остатке ≤ порога весь остаток публикуется только на основном складе, на дополнительных — 0.</p>
+      ${renderSavedWbWarehouses(c)}
+      <p style="font-size:11px;color:var(--ink-faint);margin:0 0 8px">При остатке не выше порога пополняется только основной склад. Остаток на дополнительных складах может только уменьшаться.</p>
       ${(c.wbWarehousesList && c.wbWarehousesList.length) ? `
         <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg);border-radius:8px">
           <div style="font-size:12px;font-weight:600;margin-bottom:6px">Выберите склады, на которых ваш фулфилмент принимает FBS-заказы (можно несколько):</div>
-          <select class="search" id="wbWarehouseMultiPicker-${c.id}" multiple size="${Math.min(6,Math.max(2,c.wbWarehousesList.length))}" style="width:100%;min-height:90px">
-            ${c.wbWarehousesList.map(w=>`<option value="${w.id}" ${(c.wbWarehouseIds||[c.wbWarehouseId]).map(String).includes(String(w.id))?'selected':''}>${w.id} — ${escapeHtml(w.name)}</option>`).join('')}
+          <select class="search" id="wbWarehouseMultiPicker-${c.id}" multiple size="${Math.min(6,Math.max(2,wbWarehouseOptions.size))}" style="width:100%;min-height:90px">
+            ${Array.from(wbWarehouseOptions, ([id,name])=>`<option value="${escapeHtml(id)}" ${selectedWbIds.includes(id)?'selected':''}>${escapeHtml(id)} — ${escapeHtml(name)}</option>`).join('')}
           </select><div style="font-size:11px;color:var(--ink-faint);margin-top:5px">Для выбора нескольких складов используйте Ctrl (Windows) или ⌘ (Mac). Основной склад укажите в поле выше.</div>
         </div>
       ` : ''}
